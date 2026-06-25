@@ -1,0 +1,15 @@
+<configuration>
+    <!-- Регистрируем кастомный тег %mdcColor -->
+    <conversionRule conversionWord="mdcColor" converterClass="org.fmalyshev.MdcColorConverter" />
+
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <!-- %mdcColor включает нужный цвет, а \u001B[0m в конце его сбрасывает -->
+            <pattern>%d{HH:mm:ss} %mdcColor[%thread] %-5level %logger{15} - %msg%n%black{}</pattern>
+        </encoder>
+    </appender>
+
+    <root level="DEBUG">
+        <appender-ref ref="STDOUT" />
+    </root>
+</configuration>

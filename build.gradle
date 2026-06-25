@@ -1,0 +1,43 @@
+plugins {
+    id 'java'
+}
+
+group = 'org.fmalyshev'
+version = '1.0-SNAPSHOT'
+
+repositories {
+    mavenCentral()
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}
+
+dependencies {
+    implementation 'org.jspecify:jspecify:1.0.0'
+    // Conscrypt for TLS 1.3 and modern crypto
+    implementation 'org.conscrypt:conscrypt-openjdk-uber:2.5.2'
+
+    // Slf4j API and Logback implementation
+    implementation 'org.slf4j:slf4j-api:2.0.9'
+    implementation 'ch.qos.logback:logback-classic:1.4.11'
+    implementation 'org.jctools:jctools-core:4.0.5'
+    implementation 'commons-codec:commons-codec:1.22.0'
+    implementation 'tech.kwik:qpack:2.1'
+
+        // Testing dependencies
+    testImplementation 'org.junit.jupiter:junit-jupiter-api:5.10.0'
+    testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.10.0'
+    testImplementation 'org.mockito:mockito-core:5.5.0'
+    testImplementation 'org.mockito:mockito-inline:5.2.0'
+    testImplementation 'org.mockito:mockito-junit-jupiter:5.5.0'
+    testImplementation platform('org.junit:junit-bom:5.10.0')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+test {
+    useJUnitPlatform()
+}

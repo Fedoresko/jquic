@@ -1,0 +1,13 @@
+<Configuration status="WARN">
+    <Appenders>
+        <Console name="Console" target="SYSTEM_OUT">
+            <!-- %highlight handles levels; %style applies explicit color -->
+            <PatternLayout pattern="%d{HH:mm:ss.SSS} [%style{%t}{bright,magenta}] %highlight{%-5level} %style{%c{1}.%M(%L)}{cyan} - %msg%n"/>
+        </Console>
+    </Appenders>
+    <Loggers>
+        <Root level="info">
+            <AppRef ref="Console"/>
+        </Root>
+    </Loggers>
+</Configuration>

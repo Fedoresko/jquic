@@ -1,0 +1,153 @@
+package org.fmalyshev.quic.streamapi.impl;
+
+import org.fmalyshev.quic.streamapi.QuicStreamResponse;
+
+/**
+ * Tracks the state and metadata of a single QUIC stream.
+ */
+public class StreamState {
+    /**
+     * Stream lifecycle states (RFC 9000 Section 3)
+     */
+    public enum State {
+        IDLE,           // Stream not yet created
+        OPEN,           // Stream open for sending/receiving
+        HALF_CLOSED_LOCAL,   // Local side sent FIN
+        HALF_CLOSED_REMOTE,  // Remote side sent FIN
+        CLOSED,         // Stream fully closed
+        RESET_SENT,     // RESET_STREAM sent
+        RESET_RECEIVED  // RESET_STREAM received
+    }
+
+    private final long streamId;
+    private final boolean isServerInitiated;
+    private final QuicStreamResponse.StreamType streamType;
+    private State state;
+
+    // Flow control
+    private long maxStreamData;        // Maximum data we can send (peer's limit)
+    private long remoteMaxStreamData;  // Maximum data remote can send (our limit)
+    private long sentBytes;            // Total bytes sent (cumulative)
+    private long receivedBytes;        // Total bytes received (cumulative)
+    private long inFlightBytes;        // Bytes sent but not yet acknowledged
+
+    // Error codes
+    private Long resetErrorCode;
+    private Long stopSendingErrorCode;
+
+    public StreamState(long streamId, boolean isServerInitiated, QuicStreamResponse.StreamType streamType, 
+                      long initialMaxStreamData) {
+        this.streamId = streamId;
+        this.isServerInitiated = isServerInitiated;
+        this.streamType = streamType;
+        this.state = State.OPEN;
+        this.maxStreamData = initialMaxStreamData;
+        this.remoteMaxStreamData = initialMaxStreamData;
+        this.sentBytes = 0;
+        this.receivedBytes = 0;
+        this.inFlightBytes = 0;
+    }
+
+    public long getStreamId() {
+        return streamId;
+    }
+
+    public boolean isServerInitiated() {
+        return isServerInitiated;
+    }
+
+    public QuicStreamResponse.StreamType getStreamType() {
+        return streamType;
+    }
+
+    public State getState() {
+        return state;
+    }
+
+    public void setState(State state) {
+        this.state = state;
+    }
+
+    public boolean isBidirectional() {
+        return streamType == QuicStreamResponse.StreamType.Bidirectional;
+    }
+
+    public boolean canSend() {
+        return state == State.OPEN || state == State.HALF_CLOSED_REMOTE;
+    }
+
+    public boolean canReceive() {
+        return state == State.OPEN || state == State.HALF_CLOSED_LOCAL;
+    }
+
+    public long getMaxStreamData() {
+        return maxStreamData;
+    }
+
+    public void setMaxStreamData(long maxStreamData) {
+        this.maxStreamData = maxStreamData;
+    }
+
+    public long getRemoteMaxStreamData() {
+        return remoteMaxStreamData;
+    }
+
+    public void setRemoteMaxStreamData(long remoteMaxStreamData) {
+        this.remoteMaxStreamData = remoteMaxStreamData;
+    }
+
+    public long getSentBytes() {
+        return sentBytes;
+    }
+
+    public void addSentBytes(long bytes) {
+        this.sentBytes += bytes;
+        this.inFlightBytes += bytes;
+    }
+
+    public long getReceivedBytes() {
+        return receivedBytes;
+    }
+
+    public void addReceivedBytes(long bytes) {
+        this.receivedBytes += bytes;
+    }
+
+    public long getInFlightBytes() {
+        return inFlightBytes;
+    }
+
+    public void onBytesAcknowledged(long bytes) {
+        this.inFlightBytes = Math.max(0, this.inFlightBytes - bytes);
+    }
+
+    public boolean isFlowControlBlocked() {
+        // Check if sending more data would exceed peer's limit
+        return inFlightBytes >= maxStreamData;
+    }
+
+    public boolean canSendBytes(long bytes) {
+        // Check if we can send 'bytes' without exceeding peer's limit
+        return (inFlightBytes + bytes) <= maxStreamData;
+    }
+
+    public long getAvailableWindow() {
+        return Math.max(0, maxStreamData - sentBytes);
+    }
+
+    public Long getResetErrorCode() {
+        return resetErrorCode;
+    }
+
+    public void setResetErrorCode(Long resetErrorCode) {
+        this.resetErrorCode = resetErrorCode;
+    }
+
+    public Long getStopSendingErrorCode() {
+        return stopSendingErrorCode;
+    }
+
+    public void setStopSendingErrorCode(Long stopSendingErrorCode) {
+        this.stopSendingErrorCode = stopSendingErrorCode;
+    }
+}

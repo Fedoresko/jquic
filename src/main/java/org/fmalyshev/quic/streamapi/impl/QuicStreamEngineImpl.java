@@ -1,0 +1,132 @@
+package org.fmalyshev.quic.streamapi.impl;
+
+import org.fmalyshev.quic.QuicConnection;
+import org.fmalyshev.quic.streamapi.StreamFrameListener;
+import org.fmalyshev.quic.streamapi.QuicApplicationProtocol;
+import org.fmalyshev.quic.streamapi.QuicStreamEngine;
+import org.jspecify.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.concurrent.ConcurrentHashMap;
+
+/**
+ * Internal implementation of QUIC stream engine for connection management.
+ * This class is used by SelectorThread to manage QUIC connections and route frames.
+ * Uses consistent hashing to route frames to workers without concurrent lookups.
+ * All methods in this class are called from selector threads (not worker threads).
+ */
+public class QuicStreamEngineImpl implements QuicStreamEngine {
+    private static final Logger logger = LoggerFactory.getLogger(QuicStreamEngineImpl.class);
+
+    private final StreamWorkerPool workerPool;
+    private StreamFrameListener[] workerListeners;
+    private final int workerCount;
+    private final ConcurrentHashMap<Long, StreamManager> connectionManagers = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, QuicApplicationProtocol> protocols = new ConcurrentHashMap<>();
+
+    /**
+     * Creates a new QuicStreamEngineInternal.
+     * Package-private constructor - only QuicStreamEngine should create this.
+     *
+     * @param workerCount  Number of worker threads for processing stream events
+     */
+    public QuicStreamEngineImpl(int workerCount) {
+        this.workerCount = workerCount;
+        this.workerPool = new StreamWorkerPool(workerCount);
+    }
+
+    /**
+     * Starts the internal engine (worker pool).
+     */
+    public void start() {
+        workerPool.start();
+        this.workerListeners = workerPool.getListeners();
+        logger.info("QuicStreamEngineInternal started");
+    }
+
+    /**
+     * Stops the internal engine.
+     */
+    public void shutdown() {
+        workerPool.shutdown();
+        connectionManagers.clear();
+        logger.info("QuicStreamEngineInternal shut down");
+    }
+
+    /**
+     * Creates a new connection and associates it with a protocol.
+     * Called by SelectorThread when a new connection is established.
+     *
+     * @param connectionId Connection ID
+     * @param connection   QuicConnection instance
+     * @param protocolName Application protocol name
+     */
+    public void createConnection(long connectionId, QuicConnection connection, String protocolName) {
+        QuicApplicationProtocol protocol = protocols.get(protocolName);
+        if (protocol == null) {
+            logger.error("Protocol {} not registered", protocolName);
+            return;
+        }
+
+        // Create connection handler
+        var handler = protocol.getConnectionHandler().apply(connectionId);
+
+        // Create stream manager - always server-side (isServer = true)
+        StreamManager manager = new StreamManager(
+                connection,
+                handler,
+                protocol
+        );
+
+        connectionManagers.put(connectionId, manager);
+        workerPool.assignConnection(connectionId, manager);
+
+        // Register the appropriate worker listener based on consistent hashing
+        int workerIndex = getWorkerIndex(connectionId);
+        connection.setStreamFrameListener(workerListeners[workerIndex]);
+
+        logger.info("Created connection {} with protocol {} (worker {})", connectionId, protocolName, workerIndex);
+    }
+
+    /**
+     * Computes worker index for a connection using consistent hashing.
+     */
+    private int getWorkerIndex(long connectionId) {
+        return (int) ((connectionId & 0x7FFFFFFFL) % workerCount);
+    }
+
+    /**
+     * Removes a connection.
+     * Called by SelectorThread when a connection is closed.
+     *
+     * @param connectionId Connection ID to remove
+     * @param errorCode    Optional error code
+     * @param reason       Optional reason
+     */
+    public void removeConnection(long connectionId, @Nullable Long errorCode, @Nullable String reason) {
+        StreamManager manager = connectionManagers.remove(connectionId);
+
+        if (manager != null) {
+            workerPool.removeConnection(connectionId);
+
+            // Notify protocols - this runs on selector thread, which is acceptable
+            // as it's just a notification callback
+            for (QuicApplicationProtocol protocol : protocols.values()) {
+                protocol.onConnectionClose(connectionId, errorCode, reason);
+            }
+
+            logger.info("Removed connection {}", connectionId);
+        }
+    }
+
+    @Override
+    public void registerProtocol(QuicApplicationProtocol protocol) {
+        protocols.put(protocol.getProtocolName(), protocol);
+    }
+
+    @Override
+    public void unregisterProtocol(String protocolName) {
+        protocols.remove(protocolName);
+    }
+}
