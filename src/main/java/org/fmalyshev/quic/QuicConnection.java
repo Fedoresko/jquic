@@ -3,7 +3,8 @@ package org.fmalyshev.quic;
 import ch.qos.logback.core.pattern.color.ANSIConstants;
 import org.fmalyshev.LogTool;
 import org.fmalyshev.quic.streamapi.StreamFrameListener;
-import org.fmalyshev.quic.streamapi.impl.QuicStreamEngineImpl;
+import org.fmalyshev.quic.streamapi.frames.*;
+import org.fmalyshev.quic.streamapi.impl.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -16,7 +17,6 @@ import java.security.SecureRandom;
 import java.util.*;
 import java.util.function.Consumer;
 
-import static org.fmalyshev.quic.QuicCrypto.GCM_TAG_LENGTH;
 import static org.fmalyshev.quic.QuicCrypto.rotateApplicationKeys;
 import static org.fmalyshev.quic.streamapi.impl.StreamFrameProcessor.*;
 
@@ -353,7 +353,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
             if (isNewConnection) {
                 sendStatelessReset(packetLen);
             } else {
-                sendConnectionClosePacket(ERR_PROTOCOL_VIOLATION);
+                sendConnectionCloseAndUpdateState(ERR_PROTOCOL_VIOLATION, "Initial packet crypto validation failed.");
             }
             return null;
         }
@@ -470,7 +470,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
                 parseConnectionCloseFrame(frames, frameType);
             } else {
                 logger.warn("Got unsupported handshake frame type: 0x{}, closing connection", String.format("%02x", frameType));
-                sendConnectionCloseAndUpdateState();
+                sendConnectionCloseAndUpdateState(ERR_TLS_HANDSHAKE_FAILURE, "Unsupported handshake frame type");
                 break;
             }
         }
@@ -952,14 +952,14 @@ public class QuicConnection implements TimeoutHeap.Entry {
             // RFC 9000 Section 10.2.3: Send CONNECTION_CLOSE with CRYPTO_ERROR
             // Error code = 0x0100 + TLS alert value (using handshake_failure = 40)
             logger.error("Failed to process ClientHello for CID: {}, sending CONNECTION_CLOSE", connectionId, e);
-            sendConnectionCloseAndUpdateState();
+            sendConnectionCloseAndUpdateState(ERR_PROTOCOL_VIOLATION, "ClientHello validation failed");
         }
     }
 
-    private void sendConnectionCloseAndUpdateState() {
+    public void sendConnectionCloseAndUpdateState(long errorCode, String reason) {
         try {
             setState(State.CLOSING);
-            sendConnectionClosePacket(ERR_TLS_HANDSHAKE_FAILURE);
+            sendConnectionClosePacket(errorCode, reason);
             logger.info("Sent CONNECTION_CLOSE for CID: {}, transitioning to CLOSING", connectionId);
         } catch (Exception encryptEx) {
             logger.error("Failed to encrypt CONNECTION_CLOSE packet", encryptEx);
@@ -967,8 +967,8 @@ public class QuicConnection implements TimeoutHeap.Entry {
         }
     }
 
-    private void sendConnectionClosePacket(long errorCode) {
-        ByteBuffer closeFrame = QuicFrameBuilder.createConnectionCloseFrame(errorCode, "ClientHello processing failed");
+    private void sendConnectionClosePacket(long errorCode, String reason) {
+        ByteBuffer closeFrame = QuicFrameBuilder.createConnectionCloseFrame(errorCode, reason);
 
         logger.debug("Sending CONNECTION_CLOSE Initial packet");
         sendInitialPacket(closeFrame);

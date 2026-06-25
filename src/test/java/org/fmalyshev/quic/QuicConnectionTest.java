@@ -1,7 +1,6 @@
 package org.fmalyshev.quic;
 
 import org.fmalyshev.quic.streamapi.StreamFrameListener;
-import org.fmalyshev.quic.streamapi.impl.StreamFrameProcessor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -216,7 +215,7 @@ class QuicConnectionTest {
             setupEstablishedConnection();
 
             // Capture delivered stream data
-            AtomicReference<StreamFrameProcessor.StreamFrame> receivedData = new AtomicReference<>();
+            AtomicReference<StreamFrameListener.StreamFrame> receivedData = new AtomicReference<>();
 
             connection.setStreamFrameListener(createStreamFrameListener(receivedData::set));
 
@@ -283,11 +282,11 @@ class QuicConnectionTest {
         }
     }
 
-    private StreamFrameListener createStreamFrameListener(Consumer<StreamFrameProcessor.StreamFrame> onStreamFrame) {
+    private StreamFrameListener createStreamFrameListener(Consumer<StreamFrameListener.StreamFrame> onStreamFrame) {
         return new StreamFrameListener() {
 
             @Override
-            public void onStreamFrame(long connectionId, StreamFrameProcessor.StreamFrame frame) {
+            public void onStreamFrame(long connectionId, StreamFrame frame) {
                 onStreamFrame.accept(frame);
             }
 

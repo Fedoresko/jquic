@@ -20,9 +20,10 @@ public interface QuicStreamResponse {
     /**
      * Opens a new stream of the specified type.
      * @param streamType - type of the stream (unidirectional or bidirectional)
+     * @return - streamId of created stream
      * @throws QuicStreamException
      */
-    void openStream(StreamType streamType) throws QuicStreamException;
+    long openStream(StreamType streamType) throws QuicStreamException;
 
     /**
      * Request stream termination by sending STOP_SENDING frame.

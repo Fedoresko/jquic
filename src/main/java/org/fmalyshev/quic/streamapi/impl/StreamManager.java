@@ -1,10 +1,8 @@
 package org.fmalyshev.quic.streamapi.impl;
 
 import org.fmalyshev.quic.QuicConnection;
-import org.fmalyshev.quic.streamapi.QuicApplicationProtocol;
-import org.fmalyshev.quic.streamapi.QuicApplicationProtocolConnectionHandler;
-import org.fmalyshev.quic.streamapi.QuicStreamException;
-import org.fmalyshev.quic.streamapi.QuicStreamResponse;
+import org.fmalyshev.quic.streamapi.*;
+import org.fmalyshev.quic.streamapi.frames.*;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -65,6 +63,10 @@ public class StreamManager {
      * This is always server-initiated (stream IDs are odd).
      */
     public long openStream(QuicStreamResponse.StreamType streamType) throws QuicStreamException {
+        if (connection.getState() != QuicConnection.State.ESTABLISHED) {
+            throw new QuicStreamException("Connection is in wrong state " + connection.getState());
+        }
+
         long streamId;
         if (streamType == QuicStreamResponse.StreamType.Bidirectional) {
             streamId = nextServerBidiStreamId;
@@ -102,7 +104,7 @@ public class StreamManager {
     /**
      * Processes a frame. Called by worker thread only.
      */
-    public boolean processFrame(StreamFrameProcessor.StreamFrame frame) throws IOException, QuicStreamException {
+    public boolean processFrame(StreamFrameListener.StreamFrame frame) throws IOException, QuicStreamException {
         FrameRecord record;
         while ((record = outbox.poll()) != null) {
             if (!trySendData(record.streamId, record.fin, record.data, streams.get(record.streamId))) {
@@ -113,26 +115,26 @@ public class StreamManager {
         }
 
         // Route based on frame type and decode using StreamFrameProcessor
-        if (frame instanceof StreamFrameProcessor.StreamFrameData) {
-            handleFrame((StreamFrameProcessor.StreamFrameData) frame);
-        } else if (frame instanceof StreamFrameProcessor.ResetStreamFrameData) {
-            handleFrame((StreamFrameProcessor.ResetStreamFrameData) frame);
-        } else if (frame instanceof StreamFrameProcessor.StopSendingFrameData) {
-            handleFrame((StreamFrameProcessor.StopSendingFrameData) frame);
-        } else if (frame instanceof StreamFrameProcessor.MaxStreamDataFrameData) {
-            handleFrame((StreamFrameProcessor.MaxStreamDataFrameData) frame);
-        } else if (frame instanceof StreamFrameProcessor.MaxStreamsFrameData) {
-            handleFrame((StreamFrameProcessor.MaxStreamsFrameData) frame);
-        } else if (frame instanceof StreamFrameProcessor.StreamDataBlockedFrameData) {
-            handleFrame((StreamFrameProcessor.StreamDataBlockedFrameData) frame);
-        } else if (frame instanceof StreamFrameProcessor.StreamsBlockedFrameData) {
-            handleFrame((StreamFrameProcessor.StreamsBlockedFrameData) frame);
+        if (frame instanceof StreamFrameData) {
+            handleFrame((StreamFrameData) frame);
+        } else if (frame instanceof ResetStreamFrameData) {
+            handleFrame((ResetStreamFrameData) frame);
+        } else if (frame instanceof StopSendingFrameData) {
+            handleFrame((StopSendingFrameData) frame);
+        } else if (frame instanceof MaxStreamDataFrameData) {
+            handleFrame((MaxStreamDataFrameData) frame);
+        } else if (frame instanceof MaxStreamsFrameData) {
+            handleFrame((MaxStreamsFrameData) frame);
+        } else if (frame instanceof StreamDataBlockedFrameData) {
+            handleFrame((StreamDataBlockedFrameData) frame);
+        } else if (frame instanceof StreamsBlockedFrameData) {
+            handleFrame((StreamsBlockedFrameData) frame);
         }
 
         return true;
     }
 
-    private void handleFrame(StreamFrameProcessor.StreamFrameData frame) throws IOException {
+    private void handleFrame(StreamFrameData frame) throws IOException {
         long streamId = frame.streamId;
         long offset = frame.offset;
         ByteBuffer data = frame.data;
@@ -166,7 +168,7 @@ public class StreamManager {
 
         // Notify handler for new stream
         if (isNewStream) {
-            QuicStreamResponseImpl response = new QuicStreamResponseImpl(this);
+            QuicStreamResponseImpl response = new QuicStreamResponseImpl();
             handler.onNewStreamAllocated(streamId, response, state.isServerInitiated(), state.getStreamType());
         }
 
@@ -192,10 +194,9 @@ public class StreamManager {
         }
     }
 
-    private void handleFrame(StreamFrameProcessor.ResetStreamFrameData frame) throws IOException {
+    private void handleFrame(ResetStreamFrameData frame) throws IOException {
         long streamId = frame.streamId;
         long errorCode = frame.errorCode;
-        long finalSize = frame.finalSize;
 
         StreamState state = streams.get(streamId);
         if (state == null) {
@@ -212,7 +213,7 @@ public class StreamManager {
         logger.info("Stream {} reset by peer with error code {}", streamId, errorCode);
     }
 
-    private void handleFrame(StreamFrameProcessor.StopSendingFrameData frame) {
+    private void handleFrame(StopSendingFrameData frame) {
         long streamId = frame.streamId;
         long errorCode = frame.errorCode;
 
@@ -230,7 +231,7 @@ public class StreamManager {
         logger.info("Received STOP_SENDING for stream {} with error code {}", streamId, errorCode);
     }
 
-    private void handleFrame(StreamFrameProcessor.MaxStreamDataFrameData frame) {
+    private void handleFrame(MaxStreamDataFrameData frame) {
         long streamId = frame.streamId;
         long maximumData = frame.maximumData;
 
@@ -241,13 +242,13 @@ public class StreamManager {
         }
     }
 
-    private void handleFrame(StreamFrameProcessor.MaxStreamsFrameData frame) {
+    private void handleFrame(MaxStreamsFrameData frame) {
         long maximumStreams = frame.maximumStreams;
         logger.debug("Updated MAX_STREAMS ({}) to {}", 
                     frame.bidirectional ? "bidi" : "uni", maximumStreams);
     }
 
-    private void handleFrame(StreamFrameProcessor.StreamDataBlockedFrameData frame) {
+    private void handleFrame(StreamDataBlockedFrameData frame) {
         long streamId = frame.streamId;
         long limit = frame.limit;
         logger.debug("Peer is blocked on stream {} at limit {}", streamId, limit);
@@ -255,7 +256,7 @@ public class StreamManager {
         sendMaxStreamDataFrame(streamId, limit * 2);
     }
 
-    private void handleFrame(StreamFrameProcessor.StreamsBlockedFrameData frame) {
+    private void handleFrame(StreamsBlockedFrameData frame) {
         long limit = frame.limit;
         logger.debug("Peer is blocked on {} streams at limit {}", 
                     frame.bidirectional ? "bidi" : "uni", limit);
@@ -264,10 +265,12 @@ public class StreamManager {
     /**
      * Sends data on a stream immediately.
      * Called from worker thread (via QuicStreamResponse).
-     * 
-     * @return true if data was sent, false if blocked by flow control (backpressure)
      */
     public void sendData(long streamId, Consumer<ByteBuffer> writer, boolean fin) throws QuicStreamException {
+        if (connection.getState() != QuicConnection.State.ESTABLISHED) {
+            throw new QuicStreamException("Connection is in wrong state " + connection.getState());
+        }
+
         StreamState state = streams.get(streamId);
         if (state == null) {
             throw new QuicStreamException("Stream " + streamId + " does not exist");
@@ -276,7 +279,7 @@ public class StreamManager {
             throw new QuicStreamException("Stream " + streamId + " cannot send data in state " + state.getState());
         }
 
-        ByteBuffer data = ByteBuffer.allocate(1024);
+        ByteBuffer data = ByteBuffer.allocateDirect(2048);
         data.position(STREAM_FRAME_HEADER_MAX_LEN);
         ByteBuffer slice = data.slice();
         writer.accept(slice);
@@ -350,6 +353,10 @@ public class StreamManager {
      * Closes a stream by sending STOP_SENDING.
      */
     public void closeStream(long streamId, long errorCode) throws QuicStreamException {
+        if (connection.getState() != QuicConnection.State.ESTABLISHED) {
+            throw new QuicStreamException("Connection is in wrong state " + connection.getState());
+        }
+
         StreamState state = streams.get(streamId);
         if (state == null) {
             throw new QuicStreamException("Stream " + streamId + " does not exist");
@@ -367,7 +374,7 @@ public class StreamManager {
 
         StreamBuffer.StreamData data = buffer.readAvailableData();
         if (data != null) {
-            QuicStreamResponseImpl response = new QuicStreamResponseImpl(this);
+            QuicStreamResponseImpl response = new QuicStreamResponseImpl();
             handler.onStreamDataReceived(streamId, response, data.getData(), data.isLast(), errorCode);
         }
     }
@@ -466,31 +473,25 @@ public class StreamManager {
     /**
      * Implementation of QuicStreamResponse for this manager.
      */
-    private static class QuicStreamResponseImpl implements QuicStreamResponse {
-        private final StreamManager manager;
-
-        public QuicStreamResponseImpl(StreamManager manager) {
-            this.manager = manager;
-        }
-
+    private class QuicStreamResponseImpl implements QuicStreamResponse {
         @Override
         public void closeConnection(long errorCode, String reason) throws QuicStreamException {
-            // TODO: Implement connection close via QuicConnection
+            connection.sendConnectionCloseAndUpdateState(errorCode, reason);
         }
 
         @Override
-        public void openStream(StreamType streamType) throws QuicStreamException {
-            manager.openStream(streamType);
+        public long openStream(StreamType streamType) throws QuicStreamException {
+            return StreamManager.this.openStream(streamType);
         }
 
         @Override
         public void closeStream(long streamId, long errorCode) throws QuicStreamException {
-            manager.closeStream(streamId, errorCode);
+            StreamManager.this.closeStream(streamId, errorCode);
         }
 
         @Override
         public void sendData(long streamId, Consumer<ByteBuffer> writer, boolean fin) throws QuicStreamException {
-            manager.sendData(streamId, writer, fin);
+            StreamManager.this.sendData(streamId, writer, fin);
         }
     }
 }

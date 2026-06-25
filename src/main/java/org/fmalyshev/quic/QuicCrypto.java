@@ -1,6 +1,7 @@
 package org.fmalyshev.quic;
 
 import org.conscrypt.Conscrypt;
+import org.fmalyshev.quic.streamapi.QuicApplicationProtocol;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -457,7 +458,6 @@ public class QuicCrypto {
                             buf.get(protoBytes);
                             if (alpn == null) { // take the first (highest-priority)
                                 alpn = new String(protoBytes, java.nio.charset.StandardCharsets.UTF_8);
-                                logger.debug("ClientHello ALPN: {}", alpn);
                             }
                         }
                         break;
@@ -1303,10 +1303,16 @@ public class QuicCrypto {
         // ── ALPN extension (0x0010, RFC 7301) ────────────────────────────────────
         // Only include if a protocol was negotiated.
         msg.put((byte) 0x00).put((byte) 0x10);  // extension type: ALPN
-        msg.put((byte) 0x00).put((byte) 0x05);  // extension data length = 5
-        msg.put((byte) 0x00).put((byte) 0x03);  // ProtocolNameList length = 3
-        msg.put((byte) 0x02);                   // protocol name length = 2
-        msg.put((byte) 0x68).put((byte) 0x33);  // "h3"
+        int totalLen = QuicEngine.getStreamEngine().getProtocols()
+                .stream().map(QuicApplicationProtocol::getProtocolName)
+                .mapToInt(String::length).sum();
+        totalLen += QuicEngine.getStreamEngine().getProtocols().size();
+        msg.putShort((short) (totalLen + 2));  // extension data length
+        msg.putShort((short) totalLen);  // ProtocolNameList length
+        for (QuicApplicationProtocol protocol : QuicEngine.getStreamEngine().getProtocols()) {
+            msg.put((byte) protocol.getProtocolName().length());
+            msg.put(protocol.getProtocolName().getBytes());
+        }
 
         // ── QUIC transport parameters extension (0x0039, RFC 9001 §8.2) ──────────
         msg.putShort((short) 0x0039);            // extension type: quic_transport_parameters
@@ -1327,16 +1333,6 @@ public class QuicCrypto {
         QuicVarint.write(msg, 8);
         msg.putLong(cid);
 
-//        // initial_max_streams_bidi (param id 0x08)
-//        QuicVarint.write(msg, 0x08);
-//        QuicVarint.write(msg, 8);
-//        msg.putLong(100);
-//
-//        // initial_max_streams_uni  (param id 0x09)
-//        QuicVarint.write(msg, 0x09);
-//        QuicVarint.write(msg, 8);
-//        msg.putLong(100);
-//
         // initial_max_data  (param id 0x04)
         QuicVarint.write(msg, 0x04);
         QuicVarint.write(msg, QuicVarint.sizeOf(10485760));
@@ -1367,11 +1363,10 @@ public class QuicCrypto {
         QuicVarint.write(msg, QuicVarint.sizeOf(100));
         QuicVarint.write(msg,100);
 
-//
-//        // max_udp_payload_size
-//        QuicVarint.write(msg, 0x03);
-//        QuicVarint.write(msg, QuicVarint.sizeOf(metadata.clientMetadata.maxUdpPayloadSize));
-//        QuicVarint.write(msg, metadata.clientMetadata.maxUdpPayloadSize);
+        // max_udp_payload_size
+        QuicVarint.write(msg, 0x03);
+        QuicVarint.write(msg, QuicVarint.sizeOf(metadata.clientMetadata.maxUdpPayloadSize));
+        QuicVarint.write(msg, metadata.clientMetadata.maxUdpPayloadSize);
 
 
         // max_idle_timeout (param id 0x01)

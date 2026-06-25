@@ -5,7 +5,6 @@ import org.jctools.queues.SpscArrayQueue;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.nio.ByteBuffer;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -115,7 +114,7 @@ public class StreamWorkerPool {
             final StreamWorker worker = workers[i];
             listeners[i] = new StreamFrameListener() {
                 @Override
-                public void onStreamFrame(long connectionId, StreamFrameProcessor.StreamFrame frame) {
+                public void onStreamFrame(long connectionId, StreamFrame frame) {
                     worker.enqueueFrame(connectionId, frame);
                 }
 
@@ -140,9 +139,9 @@ public class StreamWorkerPool {
      */
     public static class FrameTask {
         public final long connectionId;
-        StreamFrameProcessor.StreamFrame frameData;
+        StreamFrameListener.StreamFrame frameData;
 
-        public FrameTask(long connectionId, StreamFrameProcessor.StreamFrame frameData) {
+        public FrameTask(long connectionId, StreamFrameListener.StreamFrame frameData) {
             this.connectionId = connectionId;
             this.frameData = frameData;
         }
@@ -212,7 +211,7 @@ public class StreamWorkerPool {
          * 
          * @param connectionId Connection ID
          */
-        public void enqueueFrame(long connectionId, StreamFrameProcessor.StreamFrame frame) {
+        public void enqueueFrame(long connectionId, StreamFrameListener.StreamFrame frame) {
             // Rough packet size measurement for speed (frame overhead ~20 bytes)
             int roughPacketSize = frame.size();
 

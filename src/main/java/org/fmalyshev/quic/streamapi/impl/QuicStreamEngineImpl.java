@@ -8,6 +8,8 @@ import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -128,5 +130,10 @@ public class QuicStreamEngineImpl implements QuicStreamEngine {
     @Override
     public void unregisterProtocol(String protocolName) {
         protocols.remove(protocolName);
+    }
+
+    @Override
+    public List<QuicApplicationProtocol> getProtocols() {
+        return protocols.values().stream().toList();
     }
 }

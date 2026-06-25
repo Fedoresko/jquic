@@ -1,9 +1,5 @@
 package org.fmalyshev.quic.streamapi;
 
-import org.fmalyshev.quic.streamapi.impl.StreamFrameProcessor;
-
-import java.nio.ByteBuffer;
-
 /**
  * Listener interface for receiving stream-related frames from QUIC connection.
  * Called from selector thread and should enqueue events for worker processing.
@@ -15,7 +11,7 @@ public interface StreamFrameListener {
      *
      * @param connectionId The connection ID
      */
-    void onStreamFrame(long connectionId, StreamFrameProcessor.StreamFrame frame);
+    void onStreamFrame(long connectionId, StreamFrame frame);
 
     /**
      * Called when packets are acknowledged to update stream flow control.
@@ -24,4 +20,8 @@ public interface StreamFrameListener {
      * @param connectionId       The connection ID
      */
     void onAckReceived(long connectionId, long streamId, long dataLength);
+
+    interface StreamFrame {
+        int size();
+    }
 }
