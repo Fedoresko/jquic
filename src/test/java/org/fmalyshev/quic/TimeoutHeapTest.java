@@ -14,11 +14,11 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class TimeoutHeapTest {
 
-    private TimeoutHeap timeoutHeap;
+    private TimeoutHeap<QuicConnection> timeoutHeap;
 
     @BeforeEach
     void setUp() {
-        timeoutHeap = new TimeoutHeap();
+        timeoutHeap = new TimeoutHeap<>(QuicConnection.class);
     }
 
     @Test

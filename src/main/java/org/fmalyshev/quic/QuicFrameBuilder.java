@@ -93,13 +93,11 @@ public class QuicFrameBuilder {
         return frame;
     }
 
-    public static ByteBuffer createHandshakeDoneFrame() {
-        ByteBuffer frame = ByteBuffer.allocate(4);
+    public static ByteBuffer createHandshakeDoneFrame(ByteBuffer frame) {
         frame.put((byte) 0x1e);
         frame.put((byte) 0x0);
         frame.put((byte) 0x0);
         frame.put((byte) 0x0);
-        frame.flip();
         return frame;
     }
 }

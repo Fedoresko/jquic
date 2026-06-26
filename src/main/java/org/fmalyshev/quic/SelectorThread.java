@@ -179,9 +179,12 @@ class SelectorThread implements Runnable {
                 }
 
                 if (connection == null) {
-                    log.warn(logColor(), "Selector-{}: No connection found for CID: {}, discarding packet", threadId, cid);
-                    //sendStatelessReset(sender, datagram.remaining());
-                    skipPacket(datagram);
+                    log.warn(logColor(), "Selector-{}: No connection found for CID: {}, discarding datagram", threadId, cid);
+                    break;
+                }
+
+                if (!connection.getRemoteAddress().equals(sender)) {
+                    log.warn(logColor(), "Selector-{} CID: {}, different remote address, discarding datagram", threadId, cid);
                     break;
                 }
 

@@ -9,6 +9,7 @@ import java.nio.ByteBuffer;
 import java.security.KeyPairGenerator;
 import java.security.KeyPair;
 import java.security.SecureRandom;
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -48,17 +49,17 @@ class QuicConnectionCryptoIntegrationTest {
         cryptoFrame.flip();
 
         ByteBuffer encryptedPacket = QuicPacketBuilder.buildInitialPacket(
-            TEST_CONNECTION_ID,
+            destinationCid,
             0xFEDCBA9876543210L,
             0,
             cryptoFrame,
-            clientKeys.key,
-                clientKeys.iv,
-            clientKeys.headerProtection
+            clientKeys
         );
 
         QuicConnection connection = new QuicConnection(TEST_CONNECTION_ID, TEST_ADDRESS);
-        List<ByteBuffer> responses = connection.processInitialAndRespond(encryptedPacket.duplicate());
+        connection.processInitialAndRespond(encryptedPacket.duplicate());
+        List<ByteBuffer> responses = getOutboundPackets(connection);
+
 
         // Decryption succeeded and ClientHello was processed → HANDSHAKE
         assertFalse(responses.isEmpty(), "Initial response (ServerHello) should be generated");
@@ -77,24 +78,22 @@ class QuicConnectionCryptoIntegrationTest {
         QuicCrypto.PacketProtectionKeys[] keys = QuicCrypto.deriveInitialKeys(destinationCid);
         QuicCrypto.PacketProtectionKeys clientKeys = keys[0];
 
-        ByteBuffer plaintext = ByteBuffer.allocate(100);
-        plaintext.put((byte) 0x06); // CRYPTO frame
-        plaintext.put((byte) 0x00);
-        plaintext.put((byte) 32);
-        plaintext.put(new byte[32]);
-        while (plaintext.position() < 84) {
-            plaintext.put((byte) 0x00);
-        }
+        // Build a real TLS 1.3 ClientHello so the CRYPTO frame is structurally valid;
+        // the GCM tag will be tampered below — the payload itself must be parseable.
+        ByteBuffer clientHello = buildMinimalClientHello();
+        ByteBuffer plaintext = ByteBuffer.allocate(1 + 1 + 2 + clientHello.remaining());
+        plaintext.put((byte) 0x06);                          // CRYPTO frame type
+        QuicVarint.write(plaintext, 0);                      // offset
+        QuicVarint.write(plaintext, clientHello.remaining()); // length
+        plaintext.put(clientHello);
         plaintext.flip();
 
         ByteBuffer encryptedPacket = QuicPacketBuilder.buildInitialPacket(
-            TEST_CONNECTION_ID,
+            destinationCid,
             0xFEDCBA9876543210L,
             0,
             plaintext,
-            clientKeys.key,
-                clientKeys.iv,
-            clientKeys.headerProtection
+            clientKeys
         );
 
         // Step 2: Tamper with the GCM tag (last 16 bytes)
@@ -106,7 +105,9 @@ class QuicConnectionCryptoIntegrationTest {
 
         // Step 3: Try to process tampered packet
         QuicConnection connection = new QuicConnection(TEST_CONNECTION_ID, TEST_ADDRESS);
-        List<ByteBuffer> responses = connection.processInitialAndRespond(tamperedPacket);
+        connection.processInitialAndRespond(tamperedPacket);
+        List<ByteBuffer> responses = getOutboundPackets(connection);
+
 
         // Should be rejected due to invalid GCM tag
         assertTrue(responses.isEmpty(), "Should reject packet with invalid GCM tag");
@@ -136,12 +137,26 @@ class QuicConnectionCryptoIntegrationTest {
 
                 QuicCrypto.TlsMetadata meta1Rtt = make1RttMetadata(real1RttKey);
                 ByteBuffer encryptedPacket = QuicPacketBuilder.build1RttPacket(
-                    TEST_CONNECTION_ID, 5, plaintext, real1RttKey,
-                    meta1Rtt.client1RttIv, null);
+                    destinationCidBytes(TEST_CONNECTION_ID), 5, plaintext,
+                    meta1Rtt.clientApplicationKeys, (byte) 0);
 
-        List<ByteBuffer> responses = connection.process1RttPacket(encryptedPacket.duplicate());
+        connection.process1RttPacket(encryptedPacket.duplicate());
+        List<ByteBuffer> responses = getOutboundPackets(connection);
 
         assertNotNull(responses, "Should process packet with valid GCM tag");
+    }
+
+    public static List<ByteBuffer> getOutboundPackets(QuicConnection connection) {
+        List<ByteBuffer> responses = new ArrayList<>();
+        for (ByteBuffer res = connection.pollOutbound(); res != null; res = connection.pollOutbound()) {
+            responses.add(res);
+        }
+        return responses;
+    }
+
+
+    public static byte[] destinationCidBytes(long testConnectionId) {
+        return ByteBuffer.allocate(8).putLong(testConnectionId).array();
     }
 
     @Test
@@ -164,10 +179,10 @@ class QuicConnectionCryptoIntegrationTest {
         while (plaintext.hasRemaining()) plaintext.put((byte) 0x00);
         plaintext.flip();
 
-                        byte[] hpKey = QuicCrypto.deriveHeaderProtectionKey(real1RttKey);
+                        QuicCrypto.TlsMetadata meta1RttInvalid = make1RttMetadata(real1RttKey);
                         ByteBuffer encryptedPacket = QuicPacketBuilder.build1RttPacket(
-            TEST_CONNECTION_ID, 5, plaintext, real1RttKey,
-            make1RttMetadata(real1RttKey).client1RttIv, null);
+                ByteBuffer.allocate(8).putLong(TEST_CONNECTION_ID).array(),
+                5, plaintext, meta1RttInvalid.clientApplicationKeys, (byte) 0);
 
         // Tamper with the last byte of the GCM authentication tag
         ByteBuffer tamperedPacket = ByteBuffer.wrap(encryptedPacket.array().clone());
@@ -175,7 +190,8 @@ class QuicConnectionCryptoIntegrationTest {
         tamperedPacket.put(last, (byte) (tamperedPacket.get(last) ^ 0xFF));
         tamperedPacket.rewind();
 
-        List<ByteBuffer> responses = connection.process1RttPacket(tamperedPacket);
+        connection.process1RttPacket(tamperedPacket);
+        List<ByteBuffer> responses = getOutboundPackets(connection);
 
         assertEquals(0, responses.size(), "Should reject packet with invalid GCM tag");
     }
@@ -207,10 +223,11 @@ class QuicConnectionCryptoIntegrationTest {
         cryptoFrame.flip();
 
         ByteBuffer initialPacket = QuicPacketBuilder.buildInitialPacket(
-            TEST_CONNECTION_ID, TEST_CONNECTION_ID, 0, cryptoFrame,
-            initKeys[0].key, initKeys[0].iv, initKeys[0].headerProtection);
+            dcid, TEST_CONNECTION_ID, 0, cryptoFrame, initKeys[0]);
 
-        List<ByteBuffer> serverHelloPackets = connection.processInitialAndRespond(initialPacket);
+        connection.processInitialAndRespond(initialPacket);
+        List<ByteBuffer> serverHelloPackets = getOutboundPackets(connection);
+
 
         assertFalse(serverHelloPackets.isEmpty(), "Server should respond with ServerHello");
         assertEquals(QuicConnection.State.HANDSHAKE, connection.getState(),
@@ -219,8 +236,8 @@ class QuicConnectionCryptoIntegrationTest {
         // TlsMetadata must now be populated with Handshake secrets
         QuicCrypto.TlsMetadata meta = connection.getTlsMetadata();
         assertNotNull(meta, "TlsMetadata should be set");
-        assertNotNull(meta.clientHandshakeSecret, "Handshake secret must be derived");
-        assertNotNull(meta.serverHandshakeSecret, "Server handshake secret must be derived");
+        assertNotNull(meta.clientHandshakeKeys, "Handshake keys must be derived");
+        assertNotNull(meta.serverHandshakeKeys, "Server handshake keys must be derived");
         assertFalse(meta.hasApplicationKeys(),
             "1-RTT keys must NOT be available before client Finished");
 
@@ -252,12 +269,13 @@ class QuicConnectionCryptoIntegrationTest {
         finishedCryptoFrame.put(finishedMsg);
         finishedCryptoFrame.flip();
 
-        ByteBuffer handshakePacket = QuicPacketBuilder.buildHandshakePacket(
-            TEST_CONNECTION_ID, TEST_CONNECTION_ID, 0,
-            finishedCryptoFrame, meta.clientHandshakeSecret,
-            meta.clientHandshakeIv, meta.clientHandshakeHpKey);
+                        byte[] dcidBytes = ByteBuffer.allocate(8).putLong(TEST_CONNECTION_ID).array();
+                        ByteBuffer handshakePacket = QuicPacketBuilder.buildHandshakePacket(
+            dcidBytes, TEST_CONNECTION_ID, 0,
+            finishedCryptoFrame, meta.clientHandshakeKeys);
 
-        List<ByteBuffer> handshakeResponses = connection.processHandshakePacket(handshakePacket);
+        connection.processHandshakePacket(handshakePacket);
+        List<ByteBuffer> handshakeResponses = getOutboundPackets(connection);
 
         assertFalse(handshakeResponses.isEmpty(),
             "Server should respond to client Finished");
@@ -267,9 +285,9 @@ class QuicConnectionCryptoIntegrationTest {
         // 1-RTT keys must now be available
         assertTrue(meta.hasApplicationKeys(),
             "1-RTT keys must be derived after client Finished");
-        assertNotNull(meta.client1RttSecret, "client1RttSecret must be set");
-        assertNotNull(meta.server1RttSecret, "server1RttSecret must be set");
-        assertNotNull(meta.client1RttHpKey,  "client1RttHpKey must be set");
+        assertNotNull(meta.clientApplicationKeys, "clientApplicationKeys must be set");
+        assertNotNull(meta.serverApplicationKeys, "serverApplicationKeys must be set");
+        assertNotNull(meta.clientApplicationKeys.headerProtection, "client1RttHpKey must be set");
 
         // Transcript hash must have advanced (server messages + client Finished added)
         byte[] transcriptAfterHandshake = meta.transcriptHash();
@@ -281,11 +299,13 @@ class QuicConnectionCryptoIntegrationTest {
         pingFrame.put((byte) 0x01); // PING
         pingFrame.flip();
 
-        ByteBuffer rttPacket = QuicPacketBuilder.build1RttPacket(
-            TEST_CONNECTION_ID, 0, pingFrame, meta.client1RttSecret,
-            meta.client1RttIv, null);
+                        byte[] rttDcid = new byte[8];
+                        ByteBuffer.wrap(rttDcid).putLong(TEST_CONNECTION_ID);
+                        ByteBuffer rttPacket = QuicPacketBuilder.build1RttPacket(
+            rttDcid, 0, pingFrame, meta.clientApplicationKeys, (byte) 0);
 
-        List<ByteBuffer> rttResponses = connection.process1RttPacket(rttPacket);
+        connection.process1RttPacket(rttPacket);
+        List<ByteBuffer> rttResponses = getOutboundPackets(connection);
 
         assertNotNull(rttResponses, "Should process 1-RTT packet without error");
         // PING is ack-eliciting, so an ACK should be generated
@@ -316,7 +336,8 @@ class QuicConnectionCryptoIntegrationTest {
         truncatedPacket.flip();
 
         QuicConnection connection = new QuicConnection(TEST_CONNECTION_ID, TEST_ADDRESS);
-        List<ByteBuffer> responses = connection.processInitialAndRespond(truncatedPacket);
+        connection.processInitialAndRespond(truncatedPacket);
+        List<ByteBuffer> responses = getOutboundPackets(connection);
 
         assertTrue(responses.isEmpty(), "Should reject truncated packet");
         assertEquals(QuicConnection.State.INITIAL, connection.getState());
@@ -413,7 +434,7 @@ class QuicConnectionCryptoIntegrationTest {
         javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
         // Derive finished_key via the same HKDF path used in QuicCrypto.verifyClientFinished
         // We replicate the derivation here to stay self-contained.
-        byte[] clientSecretBytes = meta.clientHandshakeSecret.getEncoded();
+        byte[] clientSecretBytes = meta.serverHandshakeKeys.key.getEncoded();
         byte[] finishedKey = hkdfExpandLabel(clientSecretBytes, "tls13 finished", new byte[0], 32);
         mac.init(new javax.crypto.spec.SecretKeySpec(finishedKey, "HmacSHA256"));
         return mac.doFinal(meta.transcriptHash());
@@ -455,19 +476,17 @@ class QuicConnectionCryptoIntegrationTest {
     private QuicCrypto.TlsMetadata make1RttMetadata(SecretKey real1RttKey) throws Exception {
         byte[] hpKey = QuicCrypto.deriveHeaderProtectionKey(real1RttKey);
         byte[] iv    = deriveIv(real1RttKey.getEncoded());
-        QuicCrypto.TlsMetadata m = new QuicCrypto.TlsMetadata(new byte[32]);
+        QuicCrypto.TlsMetadata m = new QuicCrypto.TlsMetadata();
         m.clientRandom            = new byte[32];
         m.serverRandom            = new byte[32];
-        m.clientHandshakeSecret   = real1RttKey;
-        m.serverHandshakeSecret   = real1RttKey;
         m.selectedCipherSuite     = "TLS_AES_128_GCM_SHA256";
         m.alpn                    = "h3";
         m.negotiatedIdleTimeoutMs = 10_000;
-        m.clientHandshakeHpKey    = new byte[16];
-        m.serverHandshakeHpKey    = new byte[16];
-        m.clientHandshakeIv       = new byte[12];
-        m.serverHandshakeIv       = new byte[12];
-        m.setApplicationKeys(real1RttKey, real1RttKey, hpKey, hpKey, iv, iv);
+        m.clientHandshakeKeys = new QuicCrypto.PacketProtectionKeys(real1RttKey, new byte[12], new byte[16]);
+        m.serverHandshakeKeys = new QuicCrypto.PacketProtectionKeys(real1RttKey, new byte[12], new byte[16]);
+        m.setApplicationKeys(
+                new QuicCrypto.PacketProtectionKeys(real1RttKey, iv, hpKey),
+                new QuicCrypto.PacketProtectionKeys(real1RttKey, iv, hpKey));
         return m;
     }
 

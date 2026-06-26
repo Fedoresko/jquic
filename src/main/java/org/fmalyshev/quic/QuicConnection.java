@@ -8,6 +8,9 @@ import org.fmalyshev.quic.streamapi.impl.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.lang.reflect.Array;
+import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
 import java.net.SocketAddress;
 import java.nio.Buffer;
 import java.nio.ByteBuffer;
@@ -17,6 +20,7 @@ import java.security.SecureRandom;
 import java.util.*;
 import java.util.function.Consumer;
 
+import static org.fmalyshev.quic.QuicCrypto.getKeystoreManager;
 import static org.fmalyshev.quic.QuicCrypto.rotateApplicationKeys;
 import static org.fmalyshev.quic.streamapi.impl.StreamFrameProcessor.*;
 
@@ -29,7 +33,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
     public static final int ERR_PROTOCOL_VIOLATION = 10;
     public static final int ERR_TLS_HANDSHAKE_FAILURE = 0x0100 + 40;
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
-    private static final int STATELESS_RESET_TOKEN_LENGTH = 16; // RFC 9000: 16 bytes
+    public static final int STATELESS_RESET_TOKEN_LENGTH = 16; // RFC 9000: 16 bytes
     private static final int MIN_STATELESS_RESET_LENGTH = 21; // 1 byte fixed bit + 4 bytes unpredictable + 16 bytes token
 
     /**
@@ -447,10 +451,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
             } else if (frameType == 0x06) { // CRYPTO frame (contains client Finished)
                 needAck = true;
                 updateTimeout();
-
-
-
-                    // RFC 9000 Section 19.6: CRYPTO frame format
+                // RFC 9000 Section 19.6: CRYPTO frame format
                 // type(0x06) | offset(varint) | length(varint) | data(*)
                 long offset = QuicVarint.read(frames);
                 long length = QuicVarint.read(frames);
@@ -939,6 +940,8 @@ public class QuicConnection implements TimeoutHeap.Entry {
                 logger.warn("No ALPN negotiated for CID: {}", connectionId);
             }
 
+            copyNewFields(tlsMetadata, derivedMetadata);
+
             logger.debug("TLS keys derived, cipher: {}", derivedMetadata.selectedCipherSuite);
         }  catch (QuicCrypto.CryptoException e) {
             if (e.getDemandedGroupId() != null) {
@@ -953,6 +956,21 @@ public class QuicConnection implements TimeoutHeap.Entry {
             // Error code = 0x0100 + TLS alert value (using handshake_failure = 40)
             logger.error("Failed to process ClientHello for CID: {}, sending CONNECTION_CLOSE", connectionId, e);
             sendConnectionCloseAndUpdateState(ERR_PROTOCOL_VIOLATION, "ClientHello validation failed");
+        }
+    }
+
+    private static void copyNewFields(QuicCrypto.TlsMetadata tlsMetadata, QuicCrypto.TlsMetadata derivedMetadata) {
+        for (Field field : QuicCrypto.TlsMetadata.class.getDeclaredFields()) {
+            if (field.canAccess(derivedMetadata) && !Modifier.isFinal(field.getModifiers())) {
+                try {
+                    Object val = field.get(derivedMetadata);
+                    if (val != null) {
+                        field.set(tlsMetadata, val);
+                    }
+                } catch (IllegalAccessException e) {
+                    throw new RuntimeException(e);
+                }
+            }
         }
     }
 
@@ -1136,7 +1154,10 @@ public class QuicConnection implements TimeoutHeap.Entry {
      */
     private void sendHandshakeDonePacket() throws Exception {
         // Create HANDSHAKE_DONE frame (type 0x1e)
-        ByteBuffer frame = QuicFrameBuilder.createHandshakeDoneFrame();
+        ByteBuffer frame =  ByteBuffer.allocateDirect(1000);
+        QuicFrameBuilder.createHandshakeDoneFrame(frame);
+        frame.put((byte) 0x01); // PING
+        frame.flip();
 
         logger.debug("Sending HANDSHAKE_DONE frame in 1-RTT packet");
         sendApplicationPacket(frame);
@@ -1320,7 +1341,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
             // Add 16-byte Stateless Reset Token at the end
             // In a real implementation, this should be a pseudorandom function of the CID
             // For now, we use random bytes (stateless - doesn't require storing state)
-            byte[] token = new byte[STATELESS_RESET_TOKEN_LENGTH];
+            byte[] token = QuicCrypto.generateStatelessResetToken(ByteBuffer.allocate(8).putLong(connectionId).array());
             SECURE_RANDOM.nextBytes(token);
             resetPacket.put(token);
 

@@ -1,6 +1,7 @@
 package org.fmalyshev.quic;
 
 import org.fmalyshev.quic.streamapi.StreamFrameListener;
+import org.fmalyshev.quic.streamapi.frames.StreamFrameData;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -18,6 +19,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
+import static org.fmalyshev.quic.QuicConnectionCryptoIntegrationTest.getOutboundPackets;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -55,7 +57,8 @@ class QuicConnectionTest {
 
             // Step 1: Process Initial packet (ClientHello)
             ByteBuffer initialPacket = createMockInitialPacket();
-            List<ByteBuffer> initialResponses = connection.processInitialAndRespond(initialPacket);
+            connection.processInitialAndRespond(initialPacket);
+            List<ByteBuffer> initialResponses = getOutboundPackets(connection);
 
             assertFalse(initialResponses.isEmpty(), "Initial response should be generated");
             assertEquals(QuicConnection.State.HANDSHAKE, connection.getState(),
@@ -63,7 +66,8 @@ class QuicConnectionTest {
 
             // Step 2: Process Handshake packet (client Finished)
             ByteBuffer handshakePacket = createMockHandshakePacket();
-            List<ByteBuffer> handshakeResponses = connection.processHandshakePacket(handshakePacket);
+            connection.processHandshakePacket(handshakePacket);
+            List<ByteBuffer> handshakeResponses = getOutboundPackets(connection);
 
             assertNotNull(handshakeResponses, "Handshake response should be generated");
             assertEquals(2, handshakeResponses.size(),
@@ -73,8 +77,8 @@ class QuicConnectionTest {
 
             // Verify that client Finished message was verified
             cryptoMock.verify(() -> QuicCrypto.verifyClientFinished(
-                    any(byte[].class),           // finishedData - the CRYPTO frame content
-                    any(SecretKey.class),        // clientHandshakeSecret
+                    any(),           // finishedData - the CRYPTO frame content
+                    any(),        // clientHandshakeSecret
                     any(byte[].class)            // transcriptHash (empty in simplified mode)
             ), times(1));
         }
@@ -101,7 +105,7 @@ class QuicConnectionTest {
                     });
 
             // Mock processClientHello to throw exception
-            cryptoMock.when(() -> QuicCrypto.processClientHello(any(ByteBuffer.class)))
+            cryptoMock.when(() -> QuicCrypto.processClientHello(any(), any(ByteBuffer.class)))
                     .thenThrow(new QuicCrypto.CryptoException("Invalid ClientHello"));
 
             // Mock encryptPacket for CONNECTION_CLOSE
@@ -119,7 +123,8 @@ class QuicConnectionTest {
 
             // Process Initial packet with invalid ClientHello
             ByteBuffer initialPacket = createMockInitialPacket();
-            List<ByteBuffer> responses = connection.processInitialAndRespond(initialPacket);
+            connection.processInitialAndRespond(initialPacket);
+            List<ByteBuffer> responses = getOutboundPackets(connection);
 
             // Verify CONNECTION_CLOSE was sent
             assertFalse(responses.isEmpty(), "CONNECTION_CLOSE response should be generated");
@@ -127,7 +132,7 @@ class QuicConnectionTest {
                     "Connection should transition to CLOSING state");
 
             // Verify processClientHello was called and failed
-            cryptoMock.verify(() -> QuicCrypto.processClientHello(any(ByteBuffer.class)), times(1));
+            cryptoMock.verify(() -> QuicCrypto.processClientHello(any(), any(ByteBuffer.class)), times(1));
 
             // Verify encryptPacket was called to send CONNECTION_CLOSE
             cryptoMock.verify(() -> QuicCrypto.encryptPacket(any(), any(), anyLong(), any(), any()), times(1));
@@ -144,7 +149,8 @@ class QuicConnectionTest {
 
             // Try to process Initial packet in HANDSHAKE state
             ByteBuffer initialPacket = createMockInitialPacket();
-            List<ByteBuffer> responses = connection.processInitialAndRespond(initialPacket);
+            connection.processInitialAndRespond(initialPacket);
+            List<ByteBuffer> responses = getOutboundPackets(connection);
 
             assertTrue(responses.isEmpty(), "Initial packet should be rejected in HANDSHAKE state");
             assertEquals(QuicConnection.State.HANDSHAKE, connection.getState(),
@@ -162,7 +168,8 @@ class QuicConnectionTest {
             // Don't setup metadata - connection will reject due to wrong state
 
             ByteBuffer handshakePacket = createMockHandshakePacket();
-            List<ByteBuffer> responses = connection.processHandshakePacket(handshakePacket);
+            connection.processHandshakePacket(handshakePacket);
+            List<ByteBuffer> responses = getOutboundPackets(connection);
 
             assertTrue(responses.isEmpty(), "Handshake packet should be rejected in INITIAL state");
             assertEquals(QuicConnection.State.INITIAL, connection.getState(),
@@ -181,12 +188,13 @@ class QuicConnectionTest {
 
             // Override verifyClientFinished to return false (verification failed)
             // This overrides the default mock from mockQuicCrypto() which returns true
-            cryptoMock.when(() -> QuicCrypto.verifyClientFinished(any(byte[].class), any(SecretKey.class), any(byte[].class)))
+            cryptoMock.when(() -> QuicCrypto.verifyClientFinished(any(), any(), any(byte[].class)))
                     .thenReturn(false);
 
             // Process Handshake packet with invalid Finished message
             ByteBuffer handshakePacket = createMockHandshakePacket();
-            List<ByteBuffer> responses = connection.processHandshakePacket(handshakePacket);
+            connection.processHandshakePacket(handshakePacket);
+            List<ByteBuffer> responses = getOutboundPackets(connection);
 
             // Verify packet was silently discarded
             assertTrue(responses.isEmpty(), "No response should be generated for invalid Finished");
@@ -195,8 +203,8 @@ class QuicConnectionTest {
 
             // Verify that verifyClientFinished was called
             cryptoMock.verify(() -> QuicCrypto.verifyClientFinished(
-                    any(byte[].class),
-                    any(SecretKey.class),
+                    any(),
+                    any(),
                     any(byte[].class)
             ), times(1));
         }
@@ -221,18 +229,14 @@ class QuicConnectionTest {
 
             // Create 1-RTT packet with STREAM frame
             ByteBuffer packet = createMock1RttPacketWithStreamData(4L, "Hello QUIC".getBytes());
-            ByteBuffer ackResponse = connection.process1RttPacket(packet).get(0);
+            connection.process1RttPacket(packet);
+            ByteBuffer ackResponse = connection.pollOutbound();
+
 
             // Verify stream data was delivered
             assertNotNull(receivedData.get(), "Stream data should be captured");
-            // framePayload is positioned after the frame type byte, so it starts with:
-            // stream_id (1 byte varint), offset (1 byte varint), length (1 byte varint), then data
-            ByteBuffer framePayload = receivedData.get().rewind();
-            framePayload.get(); // skip frame_id
-            framePayload.get(); // skip stream_id
-            framePayload.get(); // skip offset
-            int dataLength = framePayload.get() & 0xFF; // read length
-            byte[] dataBytes = new byte[dataLength];
+            ByteBuffer framePayload = ((StreamFrameData)receivedData.get()).data;
+            byte[] dataBytes = new byte[framePayload.remaining()];
             framePayload.get(dataBytes);
             assertEquals("Hello QUIC", new String(dataBytes));
 
@@ -251,9 +255,10 @@ class QuicConnectionTest {
             setupMockTlsMetadata();
 
             ByteBuffer packet = createMock1RttPacketWithStreamData(0L, "test".getBytes());
-            List<ByteBuffer> packetResults = connection.process1RttPacket(packet);
+            connection.process1RttPacket(packet);
+            List<ByteBuffer> responses = getOutboundPackets(connection);
 
-            assertEquals(0, packetResults.size(), "1-RTT packet should be rejected in HANDSHAKE state");
+            assertEquals(0, responses.size(), "1-RTT packet should be rejected in HANDSHAKE state");
         }
     }
 
@@ -271,7 +276,8 @@ class QuicConnectionTest {
 
             // Send CONNECTION_CLOSE frame
             ByteBuffer closePacket = createMock1RttPacketWithConnectionClose();
-            ByteBuffer ackResponse = connection.process1RttPacket(closePacket).get(0);
+            connection.process1RttPacket(closePacket);
+            ByteBuffer ackResponse = connection.pollOutbound();
 
             // Verify state transition
             assertEquals(QuicConnection.State.CLOSING, connection.getState(),
@@ -330,9 +336,10 @@ class QuicConnectionTest {
             setupMockTlsMetadata();
 
             ByteBuffer packet = createMock1RttPacketWithStreamData(0L, "test".getBytes());
-            List<ByteBuffer> packetResults = connection.process1RttPacket(packet);
+            connection.process1RttPacket(packet);
+            List<ByteBuffer> responses = getOutboundPackets(connection);
 
-            assertEquals(0, packetResults.size(), "1-RTT packet should be rejected in CLOSED state");
+            assertEquals(0, responses.size(), "1-RTT packet should be rejected in CLOSED state");
         }
     }
 
@@ -377,9 +384,10 @@ class QuicConnectionTest {
 
             // Send packet with only PADDING (non-ack-eliciting)
             ByteBuffer packet = createMock1RttPacket(0, new byte[]{0x00}); // PADDING frame
-            List<ByteBuffer> byteBuffers = connection.process1RttPacket(packet);
+            connection.process1RttPacket(packet);
+            List<ByteBuffer> responses = getOutboundPackets(connection);
 
-            assertEquals(0, byteBuffers.size(), "ACK should not be generated for PADDING-only packet");
+            assertEquals(0, responses.size(), "ACK should not be generated for PADDING-only packet");
         }
     }
 
@@ -393,7 +401,8 @@ class QuicConnectionTest {
 
             // Send packet with STREAM frame (ack-eliciting)
             ByteBuffer packet = createMock1RttPacketWithStreamData(0L, "data".getBytes());
-            ByteBuffer ackResponse = connection.process1RttPacket(packet).get(0);
+            connection.process1RttPacket(packet);
+            ByteBuffer ackResponse = getOutboundPackets(connection).get(0);
 
             assertNotNull(ackResponse, "ACK should be generated for STREAM frame");
         }
@@ -424,7 +433,8 @@ class QuicConnectionTest {
             List<PacketNumberSpace.AckRange> ackRanges = new ArrayList<>();
             ackRanges.add(new PacketNumberSpace.AckRange(2, 4)); // Packets 2-4
 
-            java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = initialSpace.onAckReceived(4, ackRanges, 0, null);
+            initialSpace.onAckReceived(4, ackRanges, 0, null);
+            java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = initialSpace.detectLostPackets();
 
             // Verify packet 0 was declared lost (4 - 3 = 1, so packets < 1 are lost)
             assertFalse(lostPackets.isEmpty(), "Should detect lost packets");
@@ -465,7 +475,8 @@ class QuicConnectionTest {
 
             List<PacketNumberSpace.AckRange> ackRanges = new ArrayList<>();
             ackRanges.add(new PacketNumberSpace.AckRange(2, 4));
-            java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = initialSpace.onAckReceived(4, ackRanges, 0, null);
+            initialSpace.onAckReceived(4, ackRanges, 0, null);
+            java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = initialSpace.detectLostPackets();
 
             // Retrieve SentPacket for retransmission
             assertTrue(lostPackets.containsKey(0L), "Packet 0 should be in lost packets");
@@ -507,7 +518,8 @@ class QuicConnectionTest {
             List<PacketNumberSpace.AckRange> ackRanges = new ArrayList<>();
             ackRanges.add(new PacketNumberSpace.AckRange(5, 5));
 
-            java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = initialSpace.onAckReceived(5, ackRanges, 0, null);
+            initialSpace.onAckReceived(5, ackRanges, 0, null);
+            java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = initialSpace.detectLostPackets();
 
             // Packets 0, 1 should be declared lost (5 - 3 = 2, so packets < 2 are lost)
             assertTrue(lostPackets.size() >= 2, "Should detect at least 2 lost packets");
@@ -549,7 +561,9 @@ class QuicConnectionTest {
             // This should trigger retransmission of packet 0 (more than 3 below largest acked)
             ByteBuffer handshakePacket = createMockHandshakePacketWithAck(3, new long[]{2, 3}, (byte) initialSpace.allocatePacketNumber());
 
-            List<ByteBuffer> responses = connection.processHandshakePacket(handshakePacket);
+            connection.processHandshakePacket(handshakePacket);
+            List<ByteBuffer> responses = getOutboundPackets(connection);
+
 
             // Response should include retransmissions (if any were triggered)
             // Note: The exact behavior depends on loss detection thresholds
@@ -575,7 +589,8 @@ class QuicConnectionTest {
             // ACK all packets
             List<PacketNumberSpace.AckRange> ackRanges = new ArrayList<>();
             ackRanges.add(new PacketNumberSpace.AckRange(0, 2));
-            java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = appSpace.onAckReceived(2, ackRanges, 0, null);
+            appSpace.onAckReceived(2, ackRanges, 0, null);
+            java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = appSpace.detectLostPackets();
 
             // No packets should be declared lost
             assertTrue(lostPackets.isEmpty(), "No packets should be lost when all are acked");
@@ -607,7 +622,8 @@ class QuicConnectionTest {
             // This creates a gap that should trigger retransmission of packet 0
             ByteBuffer ackPacket = createMock1RttPacketWithSelectiveAck(4, new long[]{2, 3, 4}, appSpace.allocatePacketNumber());
 
-            List<ByteBuffer> responses = connection.process1RttPacket(ackPacket);
+            connection.process1RttPacket(ackPacket);
+            List<ByteBuffer> responses = getOutboundPackets(connection);
 
             // Should return retransmissions for lost packets
             assertNotNull(responses, "Should return response list");
@@ -641,9 +657,10 @@ class QuicConnectionTest {
             ByteBuffer handshakePacket = createMockHandshakePacketWithAck(4, new long[]{2, 3, 4}, (byte) initialSpace.allocatePacketNumber());
 
             // Process the ACK - should trigger retransmission of packet 0 with NEW packet number
-            List<ByteBuffer> responses = connection.processHandshakePacket(handshakePacket);
+            connection.processHandshakePacket(handshakePacket);
+            List<ByteBuffer> responses = getOutboundPackets(connection);
 
-            // Verify retransmissions were generated
+                    // Verify retransmissions were generated
             assertFalse(responses.isEmpty(), "Should generate retransmission packets");
 
             // Verify packet number space has been incremented (new packets were allocated)
@@ -684,7 +701,8 @@ class QuicConnectionTest {
 
             // Trigger retransmission by ACKing packets 2-4 (packet 0 will be lost)
             ByteBuffer ackPacket = createMock1RttPacketWithSelectiveAck(4, new long[]{2, 3, 4}, nextPnBeforeRetransmit);
-            List<ByteBuffer> responses = connection.process1RttPacket(ackPacket);
+            connection.process1RttPacket(ackPacket);
+            List<ByteBuffer> responses = getOutboundPackets(connection);
 
             // Verify retransmissions were created
             assertFalse(responses.isEmpty(), "Should generate retransmission packets");
@@ -728,7 +746,8 @@ class QuicConnectionTest {
 
             // ACK only packet 5, causing packets 0, 1 to be declared lost (5 - 3 = 2)
             ByteBuffer ackPacket = createMock1RttPacketWithSelectiveAck(5, new long[]{5}, nextPnBefore);
-            List<ByteBuffer> responses = connection.process1RttPacket(ackPacket);
+            connection.process1RttPacket(ackPacket);
+            List<ByteBuffer> responses = getOutboundPackets(connection);
 
             // Should have at least 2 retransmissions (packets 0 and 1)
             assertTrue(responses.size() >= 2, 
@@ -763,17 +782,17 @@ class QuicConnectionTest {
         SecretKey client1RttSecret = new SecretKeySpec(new byte[16], "AES");
         SecretKey server1RttSecret = new SecretKeySpec(new byte[16], "AES");
 
-        QuicCrypto.TlsMetadata mockMetadata = new QuicCrypto.TlsMetadata(new byte[32]);
-        mockMetadata.clientRandom           = new byte[32];
-        mockMetadata.serverRandom           = new byte[32];
-        mockMetadata.clientHandshakeSecret  = clientHandshakeSecret;
-        mockMetadata.serverHandshakeSecret  = serverHandshakeSecret;
-        mockMetadata.selectedCipherSuite    = "TLS_AES_128_GCM_SHA256";
-        mockMetadata.alpn                   = "h3";
+        QuicCrypto.TlsMetadata mockMetadata = new QuicCrypto.TlsMetadata();
+        mockMetadata.clientRandom            = new byte[32];
+        mockMetadata.serverRandom            = new byte[32];
+        mockMetadata.selectedCipherSuite     = "TLS_AES_128_GCM_SHA256";
+        mockMetadata.alpn                    = "h3";
         mockMetadata.negotiatedIdleTimeoutMs = 10_000;
-        mockMetadata.clientHandshakeHpKey   = new byte[16];
-        mockMetadata.serverHandshakeHpKey   = new byte[16];
-        mockMetadata.setApplicationKeys(client1RttSecret, server1RttSecret, new byte[16], new byte[16], new byte[16], new byte[16]);
+        mockMetadata.clientHandshakeKeys = new QuicCrypto.PacketProtectionKeys(clientHandshakeSecret, new byte[12], new byte[16]);
+        mockMetadata.serverHandshakeKeys = new QuicCrypto.PacketProtectionKeys(serverHandshakeSecret, new byte[12], new byte[16]);
+        mockMetadata.setApplicationKeys(
+                new QuicCrypto.PacketProtectionKeys(client1RttSecret, new byte[12], new byte[16]),
+                new QuicCrypto.PacketProtectionKeys(server1RttSecret, new byte[12], new byte[16]));
 
         connection.setTlsMetadata(mockMetadata);
     }
@@ -953,23 +972,21 @@ class QuicConnectionTest {
         SecretKey client1RttSecret = new SecretKeySpec(new byte[16], "AES");
         SecretKey server1RttSecret = new SecretKeySpec(new byte[16], "AES");
 
-        QuicCrypto.TlsMetadata mockMetadata = new QuicCrypto.TlsMetadata(new byte[32]);
+        QuicCrypto.TlsMetadata mockMetadata = new QuicCrypto.TlsMetadata();
         mockMetadata.clientRandom            = new byte[32];
         mockMetadata.serverRandom            = new byte[32];
-        mockMetadata.clientHandshakeSecret   = clientHandshakeSecret;
-        mockMetadata.serverHandshakeSecret   = serverHandshakeSecret;
         mockMetadata.selectedCipherSuite     = "TLS_AES_128_GCM_SHA256";
         mockMetadata.alpn                    = "h3";
         mockMetadata.negotiatedIdleTimeoutMs = 10_000;
-        mockMetadata.clientHandshakeHpKey    = new byte[16];
-        mockMetadata.serverHandshakeHpKey    = new byte[16];
         mockMetadata.serverEphemeralPublicKey = new byte[32];
-        mockMetadata.setApplicationKeys(client1RttSecret, server1RttSecret, new byte[16], new byte[16], new byte[16], new byte[16]);
+        mockMetadata.clientHandshakeKeys = new QuicCrypto.PacketProtectionKeys(clientHandshakeSecret, new byte[12], new byte[16]);
+        mockMetadata.serverHandshakeKeys = new QuicCrypto.PacketProtectionKeys(serverHandshakeSecret, new byte[12], new byte[16]);
+        mockMetadata.setApplicationKeys(
+                new QuicCrypto.PacketProtectionKeys(client1RttSecret, new byte[12], new byte[16]),
+                new QuicCrypto.PacketProtectionKeys(server1RttSecret, new byte[12], new byte[16]));
 
-        mock.when(() -> QuicCrypto.processClientHello(any(ByteBuffer.class)))
+        mock.when(() -> QuicCrypto.processClientHello(any(), any(ByteBuffer.class)))
                 .thenReturn(mockMetadata);
-
-        mock.when(() -> QuicCrypto.decryptHandshakePacket(any(), any(), any())).thenCallRealMethod();
 
         // Mock decryption - simply copy input to output (simulating pass-through decryption)
         mock.when(() -> QuicCrypto.decryptAead(any(), any(), any(), anyLong(), any(), any()))
@@ -1002,7 +1019,7 @@ class QuicConnectionTest {
                 .thenReturn(ByteBuffer.allocate(64));
 
         // Mock client Finished verification - return true for valid Finished message
-        mock.when(() -> QuicCrypto.verifyClientFinished(any(byte[].class), any(SecretKey.class), any(byte[].class)))
+        mock.when(() -> QuicCrypto.verifyClientFinished(any(), any(), any(byte[].class)))
                 .thenReturn(true);
 
         return mock;

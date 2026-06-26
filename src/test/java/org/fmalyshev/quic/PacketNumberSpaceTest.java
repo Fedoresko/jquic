@@ -65,7 +65,8 @@ class PacketNumberSpaceTest {
         List<PacketNumberSpace.AckRange> ackRanges = Arrays.asList(
             new PacketNumberSpace.AckRange(0, 1)
         );
-        java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = space.onAckReceived(1, ackRanges, 0, null);
+        space.onAckReceived(1, ackRanges, 0, null);
+        java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = space.detectLostPackets();
 
         // Only packet 2 should remain
         assertEquals(1, space.getUnackedPacketCount());
@@ -87,7 +88,8 @@ class PacketNumberSpaceTest {
         List<PacketNumberSpace.AckRange> ackRanges = Arrays.asList(
             new PacketNumberSpace.AckRange(0, 0)
         );
-        java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = space.onAckReceived(0, ackRanges, 0, null);
+        space.onAckReceived(0, ackRanges, 0, null);
+        java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = space.detectLostPackets();
 
         // RTT should be updated
         long rtt = space.getLatestRtt();
@@ -112,7 +114,8 @@ class PacketNumberSpaceTest {
         List<PacketNumberSpace.AckRange> ackRanges = Arrays.asList(
             new PacketNumberSpace.AckRange(10, 10)
         );
-        java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = space.onAckReceived(10, ackRanges, 0, null);
+        space.onAckReceived(10, ackRanges, 0, null);
+        java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = space.detectLostPackets();
 
         // Packets 0-6 should be declared lost (more than 3 below largest acked)
         assertTrue(lostPackets.containsKey(0L), "Packet 0 should be lost");
@@ -151,7 +154,8 @@ class PacketNumberSpaceTest {
         List<PacketNumberSpace.AckRange> ackRanges2 = Arrays.asList(
             new PacketNumberSpace.AckRange(2, 2)
         );
-        java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = space.onAckReceived(2, ackRanges2, 0, null);
+        space.onAckReceived(2, ackRanges2, 0, null);
+        java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = space.detectLostPackets();
 
         // Packet 0 should be lost due to time threshold
         assertTrue(lostPackets.containsKey(0L), "Packet 0 should be lost due to time threshold");
@@ -241,7 +245,8 @@ class PacketNumberSpaceTest {
             List<PacketNumberSpace.AckRange> ackRanges = Arrays.asList(
                 new PacketNumberSpace.AckRange(i, i)
             );
-            java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = space.onAckReceived(i, ackRanges, 0, null);
+            space.onAckReceived(i, ackRanges, 0, null);
+            java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = space.detectLostPackets();
             assertTrue(lostPackets.isEmpty(), "No packets should be lost during RTT tracking");
         }
 
@@ -271,7 +276,8 @@ class PacketNumberSpaceTest {
         List<PacketNumberSpace.AckRange> ackRanges = Arrays.asList(
             new PacketNumberSpace.AckRange(0, 0)
         );
-        java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = space.onAckReceived(0, ackRanges, 0, null);
+        space.onAckReceived(0, ackRanges, 0, null);
+        java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = space.detectLostPackets();
 
         // RTT should still be initial value since packet wasn't ack-eliciting
         assertEquals(333, space.getSmoothedRtt());

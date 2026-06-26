@@ -16,6 +16,7 @@ import java.nio.channels.DatagramChannel;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+import static org.fmalyshev.quic.QuicConnectionCryptoIntegrationTest.destinationCidBytes;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.mock;
 
@@ -78,7 +79,7 @@ class SelectorThreadTest {
         Thread.sleep(20);
 
         // Create 1-RTT packet with PING frame (ack-eliciting) using real encryption
-        ByteBuffer packet = createEncrypted1RttPacketWithPing(TEST_CID, tlsMetadata.client1RttSecret);
+        ByteBuffer packet = createEncrypted1RttPacketWithPing(TEST_CID, tlsMetadata.clientApplicationKeys.key);
 
         // Process packet via SelectorThread
         Method processPacketMethod = SelectorThread.class.getDeclaredMethod(
@@ -154,7 +155,7 @@ class SelectorThreadTest {
         Thread.sleep(60);
 
         // Send packet to refresh timeout using real encryption
-        ByteBuffer packet = createEncrypted1RttPacketWithPing(TEST_CID, tlsMetadata.client1RttSecret);
+        ByteBuffer packet = createEncrypted1RttPacketWithPing(TEST_CID, tlsMetadata.clientApplicationKeys.key);
         Method processPacketMethod = SelectorThread.class.getDeclaredMethod(
             "processPacket", ByteBuffer.class, SocketAddress.class, String.class);
         processPacketMethod.setAccessible(true);
@@ -189,7 +190,7 @@ class SelectorThreadTest {
         assertEquals(1, activeConnections.size(), "Should have 1 active connection");
 
         // Send CONNECTION_CLOSE packet using real encryption
-        ByteBuffer packet = createEncrypted1RttPacketWithConnectionClose(TEST_CID, tlsMetadata.client1RttSecret);
+        ByteBuffer packet = createEncrypted1RttPacketWithConnectionClose(TEST_CID, tlsMetadata.clientApplicationKeys.key);
 
         Method processPacketMethod = SelectorThread.class.getDeclaredMethod(
             "processPacket", ByteBuffer.class, SocketAddress.class, String.class);
@@ -229,14 +230,14 @@ class SelectorThreadTest {
             "processPacket", ByteBuffer.class, SocketAddress.class, String.class);
         processPacketMethod.setAccessible(true);
 
-        ByteBuffer packet2 = createEncrypted1RttPacketWithPing(2002L, metadata2.client1RttSecret);
+        ByteBuffer packet2 = createEncrypted1RttPacketWithPing(2002L, metadata2.clientApplicationKeys.key);
         processPacketMethod.invoke(selectorThread, packet2, TEST_ADDRESS, "test");
 
         // Wait another 40ms
         Thread.sleep(40);
 
         // Send packet to conn3 (refreshes its timeout) using real encryption
-        ByteBuffer packet3 = createEncrypted1RttPacketWithPing(2003L, metadata3.client1RttSecret);
+        ByteBuffer packet3 = createEncrypted1RttPacketWithPing(2003L, metadata3.clientApplicationKeys.key);
         processPacketMethod.invoke(selectorThread, packet3, TEST_ADDRESS, "test");
 
         // Wait 30ms more (total ~110ms, conn1 should timeout)
@@ -281,19 +282,16 @@ class SelectorThreadTest {
         byte[] client1RttIv = QuicCrypto.deriveIv(client1RttSecret.getEncoded());
         byte[] server1RttIv = QuicCrypto.deriveIv(server1RttSecret.getEncoded());
 
-        QuicCrypto.TlsMetadata metadata = new QuicCrypto.TlsMetadata(new byte[32]);
+        QuicCrypto.TlsMetadata metadata = new QuicCrypto.TlsMetadata();
         metadata.clientRandom            = new byte[32];
         metadata.serverRandom            = new byte[32];
-        metadata.clientHandshakeSecret   = clientHandshakeSecret;
-        metadata.serverHandshakeSecret   = serverHandshakeSecret;
         metadata.selectedCipherSuite     = "TLS_AES_128_GCM_SHA256";
         metadata.alpn                    = "h3";
         metadata.negotiatedIdleTimeoutMs = 100;
-        metadata.clientHandshakeHpKey    = new byte[16];
-        metadata.serverHandshakeHpKey    = new byte[16];
-        metadata.clientHandshakeIv       = new byte[16];
-        metadata.serverHandshakeIv       = new byte[16];
-        metadata.setApplicationKeys(client1RttSecret, server1RttSecret, client1RttHpKey, server1RttHpKey, client1RttIv, server1RttIv);
+        metadata.serverHandshakeKeys = new QuicCrypto.PacketProtectionKeys(serverHandshakeSecret, new byte[16], new byte[16]);
+        metadata.clientHandshakeKeys = new QuicCrypto.PacketProtectionKeys(clientHandshakeSecret, new byte[16], new byte[16]);
+        metadata.setApplicationKeys(new QuicCrypto.PacketProtectionKeys(client1RttSecret, client1RttIv, client1RttHpKey),
+                new QuicCrypto.PacketProtectionKeys(server1RttSecret, server1RttIv, server1RttHpKey));
 
         connection.setTlsMetadata(metadata);
         return metadata;
@@ -313,8 +311,8 @@ class SelectorThreadTest {
         // Derive actual IV via the metadata that was set up for this connection
         QuicConnection conn = activeConnections.get(cid);
         byte[] baseIv = (conn != null && conn.getTlsMetadata() != null)
-                ? conn.getTlsMetadata().client1RttIv : new byte[12];
-        return QuicPacketBuilder.build1RttPacket(cid, 0, pingFrame, encryptionKey, baseIv, null);
+                ? conn.getTlsMetadata().clientApplicationKeys.iv : new byte[12];
+        return QuicPacketBuilder.build1RttPacket( destinationCidBytes(cid), 0, pingFrame, new QuicCrypto.PacketProtectionKeys(encryptionKey, baseIv, null), (byte) 0);
     }
 
     /**
@@ -332,7 +330,7 @@ class SelectorThreadTest {
         // Use QuicPacketBuilder to create properly encrypted packet
         QuicConnection conn = activeConnections.get(cid);
         byte[] baseIv = (conn != null && conn.getTlsMetadata() != null)
-                ? conn.getTlsMetadata().client1RttIv : new byte[12];
-        return QuicPacketBuilder.build1RttPacket(cid, 0, closeFrame, encryptionKey, baseIv, null);
+                ? conn.getTlsMetadata().clientApplicationKeys.iv : new byte[12];
+        return QuicPacketBuilder.build1RttPacket( destinationCidBytes(cid), 0, closeFrame, new QuicCrypto.PacketProtectionKeys(encryptionKey, baseIv, null), (byte) 0);
     }
 }

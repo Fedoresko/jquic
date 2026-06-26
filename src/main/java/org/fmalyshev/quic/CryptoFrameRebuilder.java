@@ -24,7 +24,6 @@ public class CryptoFrameRebuilder {
 
     /**
      * Initializes the absolute memory boundaries for the completed frame.
-     * Drains any out-of-order pieces already collected into the final buffer.
      *
      * @param expectedLength The exact total size of the reassembled stream payload
      */
@@ -44,12 +43,12 @@ public class CryptoFrameRebuilder {
     }
 
     /**
-     * Add part of frame
+     * Add part of frame, if it overlaps existing parts, fill the gaps.
      * @param offset - offset in frame
      * @param length - length of part
      * @param data - part data
      * @return returns true if frame is complete
-     * @throws IllegalStateException if part overlaps previous parts or overflows bounds
+     * @throws IllegalStateException
      */
     public boolean addPart(int offset, int length, ByteBuffer data) throws IllegalStateException {
         int endOffset = offset + length;
@@ -58,13 +57,7 @@ public class CryptoFrameRebuilder {
         if (offset < 0 || length <= 0) {
             throw new IllegalStateException("Frame segment boundaries must be positive");
         }
-//        if (expectedLength != -1 && endOffset > expectedLength) {
 
-//            endOffset = expectedLength;
-//            length = endOffset - offset;
-//            data.limit(expectedLength - offset);
-//            throw new IllegalStateException("Segment overflows the configured expected frame allocation");
-//        }
         if (data.remaining() < length) {
             throw new IllegalStateException("Provided ByteBuffer has fewer remaining bytes than specified length");
         }
@@ -164,37 +157,10 @@ public class CryptoFrameRebuilder {
     }
 
     /**
-     * Adds a fragment and fires {@code onComplete} once the frame is fully reassembled.
-     *
-     * <p>The optional {@code lengthDetector} is invoked after the fragment is stored whenever
-     * {@code expectedLength} is still unknown. The detector may call {@link #setExpectedLength}
-     * on {@code this} to establish the total size (e.g. by peeking at the first 4 bytes for a
-     * TLS record header). Pass {@code null} when the caller manages the expected length itself
-     * (e.g. for QUIC STREAM frames where the FIN flag makes the total size explicit).
-     *
-     * @param offset         Byte offset of this fragment within the logical frame.
-     * @param length         Byte length of this fragment.
-     * @param data           Buffer positioned at the fragment data.
-     * @param onComplete     Callback fired exactly once with the fully-reassembled buffer.
-     * @param lengthDetector Optional callback to detect and set {@code expectedLength}; may be {@code null}.
-     * @return {@code true} if the frame is now complete (onComplete has been called).
+     * Returns at most continuous {@numBytes} from the begging of frame.
+     * @param numBytes - max bytes requested
+     * @return continuous bytes buffer from the start of frame (presently known), not more than {@numBytes}
      */
-    public boolean addPart(int offset, int length, ByteBuffer data,
-                           java.util.function.Consumer<ByteBuffer> onComplete,
-                           java.util.function.Consumer<CryptoFrameRebuilder> lengthDetector) {
-        boolean complete = addPart(offset, length, data);
-
-        if (!complete && expectedLength == -1 && lengthDetector != null) {
-            lengthDetector.accept(this);
-            complete = isComplete();
-        }
-
-        if (complete) {
-            onComplete.accept(rebuild());
-        }
-        return complete;
-    }
-
     public ByteBuffer peekEarlyHead(int numBytes) {
         ByteBuffer temp = ByteBuffer.allocate(numBytes);
         int read = 0;

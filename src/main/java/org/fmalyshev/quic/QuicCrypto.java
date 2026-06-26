@@ -15,6 +15,8 @@ import java.nio.ByteBuffer;
 import java.security.*;
 import java.util.*;
 
+import static org.fmalyshev.quic.QuicConnection.STATELESS_RESET_TOKEN_LENGTH;
+
 /**
  * Handles QUIC cryptographic operations based on TLS 1.3.
  * Uses Conscrypt for modern crypto and direct ByteBuffer operations for efficiency.
@@ -1114,6 +1116,8 @@ public class QuicCrypto {
         return wrap.flip();
     }
 
+
+
     /**
      * Builds the raw TLS 1.3 HelloRetryRequest (HRR) wire message and wraps it
      * in a QUIC CRYPTO frame (RFC 9000 §19.6).
@@ -1789,17 +1793,9 @@ public class QuicCrypto {
     }
 
     public static int getCryptoFrameLength(ByteBuffer buffer) {
-        byte msgType = buffer.get();
-
-//        if (msgType != 0x14) {
-//            throw new CryptoException("Invalid Finished message type: 0x" + String.format("%02x", msgType));
-//        }
-
+        buffer.get();
         // Read 3-byte length (network order)
-        int length = ((buffer.get() & 0xFF) << 16) |
-                    ((buffer.get() & 0xFF) << 8) |
-                    (buffer.get() & 0xFF);
-        return length;
+        return ((buffer.get() & 0xFF) << 16) | ((buffer.get() & 0xFF) << 8) | buffer.get() & 0xFF;
     }
 
 
@@ -1826,6 +1822,27 @@ public class QuicCrypto {
         public CryptoException(String message, Throwable cause) {
             super(message, cause);
             demandedGroupId = null;
+        }
+    }
+
+
+
+    public static byte[] generateStatelessResetToken(byte[] connectionId) {
+        try {
+            // 1. Initialize HMAC-SHA256 with the server's master secret key
+            SecretKeySpec secretKeySpec = new SecretKeySpec(getKeystoreManager().getPrivateKey().getEncoded(), "HmacSHA256");
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(secretKeySpec);
+
+            // 2. Compute the hash using the specific Connection ID as input
+            byte[] fullHmac = mac.doFinal(connectionId);
+
+            // 3. Truncate the 32-byte SHA256 output down to exactly 16 bytes (RFC 9000 requirement)
+            return Arrays.copyOf(fullHmac, STATELESS_RESET_TOKEN_LENGTH);
+
+        } catch (NoSuchAlgorithmException | InvalidKeyException e) {
+            // RuntimeException wrap to keep interface clean since HmacSHA256 is guaranteed in the JVM
+            throw new IllegalStateException("Failed to compute Stateless Reset Token", e);
         }
     }
 }
