@@ -14,6 +14,7 @@ import javax.crypto.spec.SecretKeySpec;
 import java.nio.ByteBuffer;
 import java.security.*;
 import java.util.*;
+import java.util.stream.Collectors;
 
 import static org.fmalyshev.quic.QuicConnection.STATELESS_RESET_TOKEN_LENGTH;
 
@@ -133,18 +134,23 @@ public class QuicCrypto {
         /** Handshake secret bytes retained for Master Secret derivation in stage 2. */
         byte[] handshakeSecretBytes;
 
-        public PacketProtectionKeys clientInitialKeys;
-        public PacketProtectionKeys serverInitialKeys;
-        public PacketProtectionKeys clientHandshakeKeys;
+        public PacketProtectionKeysWithHP clientInitialKeys;
+        public PacketProtectionKeysWithHP serverInitialKeys;
+        public PacketProtectionKeysWithHP clientHandshakeKeys;
         public byte [] clientHandshakeTrafficSecret;
-        public PacketProtectionKeys serverHandshakeKeys;
+        public PacketProtectionKeysWithHP serverHandshakeKeys;
         public byte [] serverHandshakeTrafficSecret;
         public PacketProtectionKeys clientApplicationKeys;
         public PacketProtectionKeys serverApplicationKeys;
+        public PacketProtectionKeys prevClientApplicationKeys;
+        public PacketProtectionKeys prevServerApplicationKeys;
         public byte [] clientApplicationTrafficSecret;
         public byte [] serverApplicationTrafficSecret;
+        public byte[] clientApplicationHeaderProtection;
+        public byte[] serverApplicationHeaderProtection;
 
         public byte currentPhase;
+        public long lastPhaseSwitchPacketNumber = -1;
 
         public ParsedClientHello clientMetadata;
 
@@ -238,19 +244,21 @@ public class QuicCrypto {
     }
 
     /**
+     * Packet protection keys with the header protection key for a specific encryption level.
+     */
+    public record PacketProtectionKeysWithHP (
+        SecretKey key,           // Encryption/decryption key
+        byte[] iv,               // Initialization vector
+        byte[] headerProtection  // Header protection key
+    ) {};
+
+    /**
      * Packet protection keys for a specific encryption level.
      */
-    public static class PacketProtectionKeys {
-        public SecretKey key;           // Encryption/decryption key
-        public byte[] iv;               // Initialization vector
-        public byte[] headerProtection; // Header protection key
-
-        public PacketProtectionKeys(SecretKey key, byte[] iv, byte[] headerProtection) {
-            this.key = key;
-            this.iv = iv;
-            this.headerProtection = headerProtection;
-        }
-    }
+    public record PacketProtectionKeys (
+        SecretKey key,          // Encryption/decryption key
+        byte[] iv               // Initialization vector
+    ) {};
 
     /**
      * Result of decrypting a QUIC packet.
@@ -259,11 +267,11 @@ public class QuicCrypto {
         public final ByteBuffer plaintext;
         public final TlsMetadata tlsMetadata;
         public final boolean isHandshakeComplete;
-        public final PacketProtectionKeys clientKeys;
-        public final PacketProtectionKeys serverKeys;
+        public final PacketProtectionKeysWithHP clientKeys;
+        public final PacketProtectionKeysWithHP serverKeys;
 
         public DecryptionResult(ByteBuffer plaintext, TlsMetadata tlsMetadata, boolean isHandshakeComplete,
-                               PacketProtectionKeys clientKeys, PacketProtectionKeys serverKeys) {
+                                PacketProtectionKeysWithHP clientKeys, PacketProtectionKeysWithHP serverKeys) {
             this.plaintext = plaintext;
             this.tlsMetadata = tlsMetadata;
             this.isHandshakeComplete = isHandshakeComplete;
@@ -537,7 +545,7 @@ public class QuicCrypto {
      * Derives Initial packet protection keys from destination connection ID.
      * Does not decrypt - only derives keys for header protection removal.
      */
-    public static PacketProtectionKeys[] deriveInitialKeys(byte[] destinationCid) throws CryptoException {
+    public static PacketProtectionKeysWithHP[] deriveInitialKeys(byte[] destinationCid) throws CryptoException {
         try {
             // Derive Initial secrets using HKDF with DCID
             byte[] initialSecret = hkdfExtract(QUIC_VERSION_1_SALT, destinationCid);
@@ -554,10 +562,10 @@ public class QuicCrypto {
             byte[] serverIv = deriveIv(serverInitialSecret);
             byte[] serverHp = deriveHp(serverInitialSecret);
 
-            PacketProtectionKeys clientKeys = new PacketProtectionKeys(clientKey, clientIv, clientHp);
-            PacketProtectionKeys serverKeys = new PacketProtectionKeys(serverKey, serverIv, serverHp);
+            PacketProtectionKeysWithHP clientKeys = new PacketProtectionKeysWithHP(clientKey, clientIv, clientHp);
+            PacketProtectionKeysWithHP serverKeys = new PacketProtectionKeysWithHP(serverKey, serverIv, serverHp);
 
-            return new PacketProtectionKeys[] { clientKeys, serverKeys };
+            return new PacketProtectionKeysWithHP[] { clientKeys, serverKeys };
 
         } catch (GeneralSecurityException e) {
             throw new CryptoException("Failed to derive Initial keys", e);
@@ -603,6 +611,9 @@ public class QuicCrypto {
             for (int i = 0; i < 8; i++) {
                 iv[GCM_NONCE_LENGTH - 1 - i] ^= (byte) (packetNumber >> (i * 8));
             }
+
+            logger.debug("Encrypting packet {} with IV: {}", packetNumber, HexFormat.of().formatHex(iv));
+            logger.debug("Encrypting packet {} with Key: {}", packetNumber, HexFormat.of().formatHex(secret.getEncoded()));
 
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding", "Conscrypt");
             cipher.init(Cipher.ENCRYPT_MODE, secret, new GCMParameterSpec(GCM_TAG_LENGTH * 8, iv));
@@ -693,12 +704,15 @@ public class QuicCrypto {
             metadata.serverRandom = serverRandom;
 
             // ── Step 6: X25519 ECDHE — compute the shared secret.
+            logger.info("Client supported groups {}.", parsed.supportedGroups.stream().map(String::valueOf).collect(Collectors.joining(", ")));
+            logger.info("Client key shared {}.", parsed.clientKeys.keySet().stream().map(String::valueOf).collect(Collectors.joining(", ")));
             TlsGroupMapping.SelectionResult selectionResult = TlsGroupMapping.selectGroup(parsed.supportedGroups, parsed.clientKeys.keySet());
             if (selectionResult == null) {
                 throw new CryptoException("There is no suitable KPG algorithm in clients supported_groups.", (short) 0x001D);
             } else if (selectionResult.requiresHelloRetryRequest) {
                 throw new CryptoException("Client keys not supported, demand another.", selectionResult.chosenGroupId);
             } else {
+                logger.info("Negotiated KPG algorithm for group {}.", selectionResult.chosenGroupId);
                 KpgResult kpgResult = generateKeysAndDeriveSharedSecret(TlsGroupMapping.resolve(selectionResult.chosenGroupId), parsed.clientKeys.get(selectionResult.chosenGroupId));
                 metadata.serverEphemeralPublicKey = kpgResult.serverPublicKeyRaw;
                 metadata.selectedKeyScheme = selectionResult.chosenGroupId;
@@ -737,9 +751,9 @@ public class QuicCrypto {
 
         System.out.println("serverHandshakeTrafficSecret: " + HexFormat.of().formatHex(serverHandshakeTrafficSecret) );
 
-        metadata.serverHandshakeKeys = new QuicCrypto.PacketProtectionKeys(deriveKey(serverHandshakeTrafficSecret),
+        metadata.serverHandshakeKeys = new PacketProtectionKeysWithHP(deriveKey(serverHandshakeTrafficSecret),
                 deriveIv(serverHandshakeTrafficSecret), deriveHp(serverHandshakeTrafficSecret));
-        metadata.clientHandshakeKeys = new QuicCrypto.PacketProtectionKeys(deriveKey(clientHandshakeTrafficSecret),
+        metadata.clientHandshakeKeys = new PacketProtectionKeysWithHP(deriveKey(clientHandshakeTrafficSecret),
                 deriveIv(clientHandshakeTrafficSecret), deriveHp(clientHandshakeTrafficSecret));
 
     }
@@ -1008,9 +1022,16 @@ public class QuicCrypto {
             logger.warn("App client sec {}", HexFormat.of().formatHex(clientApplicationSecret.getEncoded()));
             logger.warn("App client IV {}", HexFormat.of().formatHex(clientApplicationIv));
             logger.warn("App client HP {}", HexFormat.of().formatHex(clientApplicationHpKey));
+            logger.warn("App sever sec {}", HexFormat.of().formatHex(serverApplicationSecret.getEncoded()));
+            logger.warn("App sever IV {}", HexFormat.of().formatHex(serverApplicationIv));
+            logger.warn("App sever HP {}", HexFormat.of().formatHex(serverApplicationHpKey));
 
-            metadata.setApplicationKeys(new PacketProtectionKeys(clientApplicationSecret, clientApplicationIv, clientApplicationHpKey),
-                    new PacketProtectionKeys(serverApplicationSecret, serverApplicationIv, serverApplicationHpKey));
+            metadata.serverApplicationHeaderProtection = serverApplicationHpKey;
+            metadata.clientApplicationHeaderProtection = clientApplicationHpKey;
+
+            metadata.setApplicationKeys(new PacketProtectionKeys(clientApplicationSecret, clientApplicationIv),
+                    new PacketProtectionKeys(serverApplicationSecret, serverApplicationIv));
+
 
             logger.debug("Derived 1-RTT application keys from transcript hash (stage 2 complete)");
 
@@ -1021,16 +1042,24 @@ public class QuicCrypto {
 
     public static void rotateApplicationKeys(TlsMetadata metadata) throws CryptoException {
         try {
+            metadata.prevClientApplicationKeys = metadata.clientApplicationKeys;
+            metadata.prevServerApplicationKeys = metadata.serverApplicationKeys;
+
             metadata.clientApplicationTrafficSecret = hkdfExpandLabel(
                     metadata.clientApplicationTrafficSecret, "quic ku", new byte[0], 32);
             metadata.serverApplicationTrafficSecret = hkdfExpandLabel(
                     metadata.serverApplicationTrafficSecret, "quic ku", new byte[0], 32);
 
-            metadata.clientApplicationKeys.key = deriveKey(metadata.clientApplicationTrafficSecret);
-            metadata.serverApplicationKeys.key = deriveKey(metadata.serverApplicationTrafficSecret);
-
-            metadata.clientApplicationKeys.iv = deriveIv(metadata.clientApplicationTrafficSecret);
-            metadata.serverApplicationKeys.iv = deriveIv(metadata.serverApplicationTrafficSecret);
+            metadata.setApplicationKeys(
+                    new PacketProtectionKeys(
+                            deriveKey(metadata.clientApplicationTrafficSecret),
+                            deriveIv(metadata.clientApplicationTrafficSecret)
+                    ),
+                    new PacketProtectionKeys(
+                            deriveKey(metadata.serverApplicationTrafficSecret),
+                            deriveIv(metadata.serverApplicationTrafficSecret)
+                    )
+            );
 
             logger.warn("App client sec {}", HexFormat.of().formatHex(metadata.clientApplicationKeys.key.getEncoded()));
             logger.warn("App client IV {}", HexFormat.of().formatHex(metadata.clientApplicationKeys.iv));
@@ -1422,7 +1451,6 @@ public class QuicCrypto {
     public static ByteBuffer createServerFinished(TlsMetadata metadata) throws CryptoException {
         try {
             byte[] finishedKey = hkdfExpandLabel(metadata.serverHandshakeTrafficSecret, "finished", new byte[0], 32);
-
             byte[] transcriptHash = metadata.transcriptHash();
 
             Mac mac = Mac.getInstance("HmacSHA256", "Conscrypt");
@@ -1637,7 +1665,7 @@ public class QuicCrypto {
 
     // ========== QUIC-specific key derivation ==========
 
-    private static SecretKey deriveKey(byte[] secret) throws GeneralSecurityException {
+    static SecretKey deriveKey(byte[] secret) throws GeneralSecurityException {
         byte[] key = hkdfExpandLabel(secret, "quic key", new byte[0], AES_128_KEY_LENGTH);
         return new SecretKeySpec(key, "AES");
     }
@@ -1646,7 +1674,7 @@ public class QuicCrypto {
         return hkdfExpandLabel(secret, "quic iv", new byte[0], GCM_NONCE_LENGTH);
     }
 
-    private static byte[] deriveHp(byte[] secret) throws GeneralSecurityException {
+    static byte[] deriveHp(byte[] secret) throws GeneralSecurityException {
         return hkdfExpandLabel(secret, "quic hp", new byte[0], AES_128_KEY_LENGTH);
     }
 
@@ -1788,7 +1816,7 @@ public class QuicCrypto {
 
             return result == 0;
         } catch (GeneralSecurityException e) {
-            throw new CryptoException("Failed to verify Finished message", e);
+            return false;
         }
     }
 

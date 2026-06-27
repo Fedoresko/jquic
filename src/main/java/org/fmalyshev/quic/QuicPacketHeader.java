@@ -44,7 +44,7 @@ public class QuicPacketHeader {
 
         flags = packetType.isLongHeader() ?
                 buildLongHeaderFlags(packetType, packetNumber.pnLength) :
-                buildShortHeaderFlags(0, keyPhase, packetNumber.pnLength);
+                buildShortHeaderFlags((byte)0, keyPhase, packetNumber.pnLength);
 
         this.packetNumber = packetNumber.packetNumber;
         this.pnLength = packetNumber.pnLength;
@@ -218,7 +218,7 @@ public class QuicPacketHeader {
         byte [] rawData = new byte[headerLen];
         packet.duplicate().position(startPosition).get(rawData);
 
-        return new QuicPacketHeader(packetNumber, 0, destinationCid, null, PacketType.ONE_RTT, null, -1, (byte) (packetNumber.flags & 0x04), rawData);
+        return new QuicPacketHeader(packetNumber, 0, destinationCid, null, PacketType.ONE_RTT, null, -1, (byte) (packetNumber.flags >> 2 & 0x01), rawData);
     }
 
     public record PacketNumber(int pnLength, long packetNumber, byte flags) {}
@@ -368,16 +368,16 @@ public class QuicPacketHeader {
         return (byte) flags;
     }
 
-    private static byte buildShortHeaderFlags(int spinBit, byte keyPhase, int pnLength) {
+    private static byte buildShortHeaderFlags(byte spinBit, byte keyPhase, int pnLength) {
         // Bit 0: Header Form is 0 (Short Header)
         // Bit 1: Fixed Bit must be 1 (0x40)
         int flags = 0x40;
 
         // Bit 2: Set the Spin Bit (shifted left by 5 bits)
-        flags |= (spinBit << 5);
+        flags |= (spinBit  << 5);
 
         // Bit 5: Set the Key Phase bit (shifted left by 2 bits)
-        flags |= (keyPhase << 2);
+        flags |= (keyPhase  << 2);
 
         // Bits 6-7: Packet Number Length (Mapped from actual 1-4 bytes to 0-3 index)
         int pnLengthBits = pnLength - 1;

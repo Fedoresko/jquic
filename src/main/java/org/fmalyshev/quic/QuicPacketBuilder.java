@@ -3,6 +3,7 @@ package org.fmalyshev.quic;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.crypto.SecretKey;
 import java.nio.ByteBuffer;
 import java.util.HexFormat;
 
@@ -44,7 +45,7 @@ public class QuicPacketBuilder {
      * @throws QuicCrypto.CryptoException if encryption fails
      */
     public static ByteBuffer buildInitialPacket(byte [] destinationCid, long sourceCid,
-                                                long packetNumber, ByteBuffer plaintext, QuicCrypto.PacketProtectionKeys keys) throws QuicCrypto.CryptoException {
+                                                long packetNumber, ByteBuffer plaintext, QuicCrypto.PacketProtectionKeysWithHP keys) throws QuicCrypto.CryptoException {
 
         int encryptedPayloadSize = plaintext.remaining() + GCM_TAG_LENGTH;
         int pnLen = encodedPnLength(packetNumber);
@@ -53,21 +54,22 @@ public class QuicPacketBuilder {
         
         QuicPacketHeader header = new QuicPacketHeader(new QuicPacketHeader.PacketNumber(pnLen, packetNumber, (byte) 0),
                 QUIC_VERSION_1, destinationCid, scid, QuicPacketHeader.PacketType.INITIAL,
-                new byte[0], encryptedPayloadSize + pnLen, (byte) 0
+                new byte[0], encryptedPayloadSize + pnLen, (byte)0
         );
 
-        return encryptAndProtectQuicPacket(plaintext, keys, header);
+        return encryptAndProtectQuicPacket(plaintext, keys.key(), keys.iv(), header, keys.headerProtection());
     }
 
-    private static ByteBuffer encryptAndProtectQuicPacket(ByteBuffer plaintext, QuicCrypto.PacketProtectionKeys keys, QuicPacketHeader header) throws QuicCrypto.CryptoException {
-        ByteBuffer encryptedPayload = QuicCrypto.encryptPacket(plaintext, keys.key, header.packetNumber, header.rawData, keys.iv);
+    private static ByteBuffer encryptAndProtectQuicPacket(ByteBuffer plaintext, SecretKey key, byte[] iv, QuicPacketHeader header, byte[] hp_key) throws QuicCrypto.CryptoException {
+        log.debug("Protect packet {} with hp_key {}", header.packetNumber, HexFormat.of().formatHex(hp_key));
+        ByteBuffer encryptedPayload = QuicCrypto.encryptPacket(plaintext, key, header.packetNumber, header.rawData, iv);
 
         ByteBuffer packet = ByteBuffer.allocate(header.headerLength + encryptedPayload.remaining());
         packet.put(header.rawData);
         packet.put(encryptedPayload);
         packet.flip();
 
-        applyHeaderProtection(packet, header.headerLength, header.pnLength, keys.headerProtection);
+        applyHeaderProtection(packet, header.headerLength, header.pnLength, hp_key);
         return packet;
     }
 
@@ -83,16 +85,16 @@ public class QuicPacketBuilder {
      * @throws QuicCrypto.CryptoException if encryption fails
      */
     public static ByteBuffer buildHandshakePacket(byte [] destinationCid, long sourceCid,
-                                                  long packetNumber, ByteBuffer payload, QuicCrypto.PacketProtectionKeys keys)
+                                                  long packetNumber, ByteBuffer payload, QuicCrypto.PacketProtectionKeysWithHP keys)
             throws QuicCrypto.CryptoException {
         int encryptedPayloadSize = payload.remaining() + GCM_TAG_LENGTH; // + GCM tag
         int pnLen = encodedPnLength(packetNumber);
 
         QuicPacketHeader header = new QuicPacketHeader(new QuicPacketHeader.PacketNumber(pnLen, packetNumber, (byte) 0),
             QUIC_VERSION_1, destinationCid, ByteBuffer.allocate(8).putLong(sourceCid).array(),
-            QuicPacketHeader.PacketType.HANDSHAKE, new byte[0], encryptedPayloadSize + pnLen, (byte) 0);
+            QuicPacketHeader.PacketType.HANDSHAKE, new byte[0], encryptedPayloadSize + pnLen, (byte)0 );
 
-        ByteBuffer byteBuffer = encryptAndProtectQuicPacket(payload, keys, header);
+        ByteBuffer byteBuffer = encryptAndProtectQuicPacket(payload, keys.key(), keys.iv(), header, keys.headerProtection());
         log.info("ADD: {}", HexFormat.of().formatHex(header.rawData));
         log.info("ENCRYPTED: {}", HexFormat.of().formatHex(byteBuffer.array()));
         return byteBuffer;
@@ -110,14 +112,14 @@ public class QuicPacketBuilder {
      * @throws QuicCrypto.CryptoException if encryption fails
      */
     public static ByteBuffer build1RttPacket(byte [] destinationCid, long packetNumber,
-                                             ByteBuffer plaintext, QuicCrypto.PacketProtectionKeys keys, byte keyPhase) throws QuicCrypto.CryptoException {
+                                             ByteBuffer plaintext, QuicCrypto.PacketProtectionKeys keys, byte [] hp_key, byte keyPhase) throws QuicCrypto.CryptoException {
         int pnLen = encodedPnLength(packetNumber);
 
         QuicPacketHeader header = new QuicPacketHeader(new QuicPacketHeader.PacketNumber(pnLen, packetNumber, (byte) 0),
                 QUIC_VERSION_1, destinationCid, null,
                 QuicPacketHeader.PacketType.ONE_RTT, null, -1, keyPhase);
 
-        return encryptAndProtectQuicPacket(plaintext, keys, header);
+        return encryptAndProtectQuicPacket(plaintext, keys.key(), keys.iv(), header, hp_key);
     }
 
     /**

@@ -8,7 +8,7 @@ import org.fmalyshev.quic.streamapi.impl.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.lang.reflect.Array;
+import javax.crypto.SecretKey;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.net.SocketAddress;
@@ -20,7 +20,6 @@ import java.security.SecureRandom;
 import java.util.*;
 import java.util.function.Consumer;
 
-import static org.fmalyshev.quic.QuicCrypto.getKeystoreManager;
 import static org.fmalyshev.quic.QuicCrypto.rotateApplicationKeys;
 import static org.fmalyshev.quic.streamapi.impl.StreamFrameProcessor.*;
 
@@ -94,7 +93,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
     private final Deque<ByteBuffer> outboundQueue = new ArrayDeque<>();
 
     private CryptoFrameRebuilder cryptoFrameRebuilder;
-    private byte[] clientCid;
+    byte[] clientCid;
 
     /**
      * Sends a frame immediately over the connection.
@@ -317,7 +316,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
             tlsMetadata.originalDCid = destinationCid;
             isNewConnection = true;
             try {
-                QuicCrypto.PacketProtectionKeys[] keys = QuicCrypto.deriveInitialKeys(
+                QuicCrypto.PacketProtectionKeysWithHP[] keys = QuicCrypto.deriveInitialKeys(
                         destinationCid);
                 tlsMetadata.clientInitialKeys = keys[0];
                 tlsMetadata.serverInitialKeys = keys[1];
@@ -329,7 +328,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
         }
 
         // Parse masked header (packet number still protected)
-        QuicPacketHeader header = QuicPacketHeader.parse(packet, tlsMetadata.clientInitialKeys.headerProtection);
+        QuicPacketHeader header = QuicPacketHeader.parse(packet, tlsMetadata.clientInitialKeys.headerProtection());
         if (header == null) {
             // RFC 9000: Silently discard malformed packets
             logger.warn("Failed to parse Initial packet header for CID: {}, discarding", connectionId);
@@ -357,13 +356,21 @@ public class QuicConnection implements TimeoutHeap.Entry {
             if (isNewConnection) {
                 sendStatelessReset(packetLen);
             } else {
-                sendConnectionCloseAndUpdateState(ERR_PROTOCOL_VIOLATION, "Initial packet crypto validation failed.");
+                sendConnectionCloseAndUpdateState(QuicTransportError.PROTOCOL_VIOLATION, "Initial packet crypto validation failed.");
             }
             return null;
         }
     }
 
+    private ByteBuffer decryptAeadInPlace(ByteBuffer packet, QuicPacketHeader header, int length, QuicCrypto.PacketProtectionKeysWithHP keys) throws GeneralSecurityException {
+        return decryptAeadInPlace(packet, header, length, keys.key(), keys.iv());
+    }
+
     private ByteBuffer decryptAeadInPlace(ByteBuffer packet, QuicPacketHeader header, int length, QuicCrypto.PacketProtectionKeys keys) throws GeneralSecurityException {
+        return decryptAeadInPlace(packet, header, length, keys.key(), keys.iv());
+    }
+
+    private ByteBuffer decryptAeadInPlace(ByteBuffer packet, QuicPacketHeader header, int length, SecretKey key, byte [] iv) throws GeneralSecurityException {
         ByteBuffer plaintext;
         int startLimit = packet.limit();
         int startPos = packet.position();
@@ -372,7 +379,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
         plaintext = packet.duplicate();
         // RFC 9001 Section 5.3: decryptAead verifies the GCM tag
         try {
-            QuicCrypto.decryptAead(packet, keys.key, keys.iv,
+            QuicCrypto.decryptAead(packet, key, iv,
                     header.packetNumber, plaintext, header.rawData);
 //            logger.debug("Decrypted Initial packet, packet number: {}, GCM tag verified", header.packetNumber);
         } finally {
@@ -412,7 +419,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
 
         // Parse and decrypt packet — use the HP key pre-derived in TlsMetadata
         // (RFC 9001 Section 5.4: Handshake level hp_key derived via "quic hp")
-        QuicPacketHeader header = QuicPacketHeader.parse(packet, tlsMetadata.clientHandshakeKeys.headerProtection);
+        QuicPacketHeader header = QuicPacketHeader.parse(packet, tlsMetadata.clientHandshakeKeys.headerProtection());
         if (header == null) {
             // RFC 9000: Silently discard malformed packets
             logger.warn("Failed to parse Handshake packet header for CID: {}, discarding", connectionId);
@@ -476,7 +483,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
             }
         }
 
-        if (needAck) {
+        if (needAck && state != State.CLOSING) {
            sendHandshakeAck();
         }
     }
@@ -496,7 +503,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
                 if (!verified) {
                     logger.warn("Client Finished verification failed for CID: {}, discarding packet",
                             connectionId);
-                    // RFC 9000: Silently discard invalid packets - do NOT set receivedFinished
+                    sendConnectionCloseAndUpdateState(QuicTransportError.TLS_ERROR_DECRYPT_ERROR, "Client Finished verification failed");
                     return;
                 }
 
@@ -561,29 +568,25 @@ public class QuicConnection implements TimeoutHeap.Entry {
             return;
         }
 
-        if (tlsMetadata == null || tlsMetadata.clientApplicationKeys.key == null) {
+        if (tlsMetadata == null || tlsMetadata.clientApplicationKeys.key() == null) {
             // RFC 9000: Silently discard packets when 1-RTT keys are not available
             logger.warn("No 1-RTT keys available for CID: {}, discarding packet", connectionId);
             packet.position(packet.limit());
             return;
         }
 
-        byte [] tt = new byte[packet.remaining()];
-        packet.mark();
-        packet.get(tt);
-        packet.reset();
-        logger.info("Row data: {}", HexFormat.of().formatHex(tt));
-
         // Parse short header — use the HP key pre-derived in TlsMetadata
         // (RFC 9001 Section 5.4: 1-RTT level hp_key derived via "quic hp")
-        QuicPacketHeader header = QuicPacketHeader.parse(packet, tlsMetadata.clientApplicationKeys.headerProtection);
+        QuicPacketHeader header = QuicPacketHeader.parse(packet, tlsMetadata.clientApplicationHeaderProtection);
         logger.debug("Processing 1-RTT packet: CID={}, packetNumber={}, ", header.destinationCid, header.packetNumber);
 
         // Rotate secrets based on the Key Phase flag.
-        byte phase = (byte) (header.flags & 0x04);
-        if (phase != tlsMetadata.currentPhase) {
+        byte phase = (byte) (header.flags >> 2 & 0x01);
+        boolean differentKeyPhase = phase != tlsMetadata.currentPhase;
+        if (differentKeyPhase && header.packetNumber > tlsMetadata.lastPhaseSwitchPacketNumber) {
             try {
                 rotateApplicationKeys(tlsMetadata);
+                tlsMetadata.lastPhaseSwitchPacketNumber = header.packetNumber;
             } catch (QuicCrypto.CryptoException e) {
                 logger.error("Could not rotate secrets", e);
                 packet.position(packet.limit());
@@ -597,7 +600,11 @@ public class QuicConnection implements TimeoutHeap.Entry {
         ByteBuffer plaintext;
 
         try {
-            plaintext = decryptAeadInPlace(packet, header, packet.remaining(), tlsMetadata.clientApplicationKeys);
+            if (differentKeyPhase && header.packetNumber < tlsMetadata.lastPhaseSwitchPacketNumber) {
+                plaintext = decryptAeadInPlace(packet, header, packet.remaining(), tlsMetadata.prevClientApplicationKeys);
+            } else {
+                plaintext = decryptAeadInPlace(packet, header, packet.remaining(), tlsMetadata.clientApplicationKeys);
+            }
         } catch (Exception e) {
             logger.warn("1-RTT packet decryption/authentication failed for CID: {}, discarding: {}", connectionId, e.getMessage());
             packet.position(packet.limit());
@@ -849,7 +856,9 @@ public class QuicConnection implements TimeoutHeap.Entry {
                 } else {
                     try {
                         rebuildCryptoFrame(offset, length, frames, this::extractTlsMeta);
-                    } catch (IllegalStateException e) {
+                    } catch (IllegalStateException | IllegalArgumentException e) {
+                        setState(State.CLOSING);
+                        sendConnectionCloseAndUpdateState(ERR_PROTOCOL_VIOLATION, "malformed crypto frame");
                         logger.warn("Got inconsistent frame: {}", e.getMessage());
                     }
                 }
@@ -974,6 +983,10 @@ public class QuicConnection implements TimeoutHeap.Entry {
         }
     }
 
+    public void sendConnectionCloseAndUpdateState(QuicTransportError e, String reason) {
+        sendConnectionCloseAndUpdateState(e.code(), reason);
+    }
+
     public void sendConnectionCloseAndUpdateState(long errorCode, String reason) {
         try {
             setState(State.CLOSING);
@@ -1031,6 +1044,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
                         packetNumber,
                         payload.duplicate(),          // Plaintext payload
                         tlsMetadata.serverApplicationKeys,
+                        tlsMetadata.serverApplicationHeaderProtection,
                         tlsMetadata.currentPhase
                 );
             };
@@ -1131,6 +1145,9 @@ public class QuicConnection implements TimeoutHeap.Entry {
                     handshakeData.limit(Math.min(oldLimit, handshakeData.position() + (int) tlsMetadata.clientMetadata.maxUdpPayloadSize - 16)));
 
             handshakeData.limit(oldLimit);
+
+            ByteBuffer ping = ByteBuffer.allocate(1).put((byte) 0x01);//PING
+            payload = merge(List.of(ping, payload));
 
             logger.debug("Sending Handshake Crypto frame");
             sendHandshakePacket(payload);

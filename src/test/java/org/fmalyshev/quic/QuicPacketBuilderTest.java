@@ -23,7 +23,7 @@ class QuicPacketBuilderTest {
         int payloadSize = payload.remaining();
 
         // Act
-        ByteBuffer packet = QuicPacketBuilder.buildInitialPacket(destinationCidBytes(destinationCid), sourceCid, packetNumber, payload, new QuicCrypto.PacketProtectionKeys(null,null,null));
+        ByteBuffer packet = QuicPacketBuilder.buildInitialPacket(destinationCidBytes(destinationCid), sourceCid, packetNumber, payload, new QuicCrypto.PacketProtectionKeysWithHP(null,null,null));
 
         // Assert
         assertNotNull(packet);
@@ -88,7 +88,7 @@ class QuicPacketBuilderTest {
         ByteBuffer payload = ByteBuffer.wrap(new byte[100]);
 
         // Act
-        ByteBuffer packet = QuicPacketBuilder.buildHandshakePacket(destinationCidBytes(destinationCid), sourceCid, packetNumber, payload, new QuicCrypto.PacketProtectionKeys(null, null, null));
+        ByteBuffer packet = QuicPacketBuilder.buildHandshakePacket(destinationCidBytes(destinationCid), sourceCid, packetNumber, payload, new QuicCrypto.PacketProtectionKeysWithHP(null, null, null));
 
         // Assert
         assertNotNull(packet);
@@ -137,7 +137,7 @@ class QuicPacketBuilderTest {
         int originalPayloadSize = payload.remaining();
 
         // Act
-        ByteBuffer packet = QuicPacketBuilder.build1RttPacket(destinationCidBytes(destinationCid), packetNumber, payload, new QuicCrypto.PacketProtectionKeys(null, null, null), (byte) 0);
+        ByteBuffer packet = QuicPacketBuilder.build1RttPacket(destinationCidBytes(destinationCid), packetNumber, payload, new QuicCrypto.PacketProtectionKeys(null, null), null, (byte) 0);
 
         // Assert
         assertNotNull(packet);
@@ -181,7 +181,7 @@ class QuicPacketBuilderTest {
         ByteBuffer payload = ByteBuffer.wrap(testData);
 
         // Act
-        ByteBuffer packet = QuicPacketBuilder.buildInitialPacket(destinationCidBytes(0x1234L), 0x5678L, 0, payload, new QuicCrypto.PacketProtectionKeys(null, null, null));
+        ByteBuffer packet = QuicPacketBuilder.buildInitialPacket(destinationCidBytes(0x1234L), 0x5678L, 0, payload, new QuicCrypto.PacketProtectionKeysWithHP(null, null, null));
 
         // Assert - skip header and verify payload
         skipInitialHeader(packet);
@@ -197,7 +197,7 @@ class QuicPacketBuilderTest {
         ByteBuffer emptyPayload = ByteBuffer.allocate(0);
 
         // Act
-        ByteBuffer packet = QuicPacketBuilder.build1RttPacket(destinationCidBytes(0x1234L), 0, emptyPayload, new QuicCrypto.PacketProtectionKeys(null, null, null), (byte) 0);
+        ByteBuffer packet = QuicPacketBuilder.build1RttPacket(destinationCidBytes(0x1234L), 0, emptyPayload, new QuicCrypto.PacketProtectionKeys( null, null), null, (byte) 0);
 
         // Assert - short header: 1 (flags) + 8 (CID) + 1 (PN) + 16 (GCM tag) = 26 bytes
         assertEquals(10 + GCM_TAG_LENGTH, packet.remaining(), 
@@ -209,7 +209,7 @@ class QuicPacketBuilderTest {
         // Test that packet numbers are correctly encoded for different values
         for (int pn = 0; pn < 256; pn += 17) {
             ByteBuffer payload = ByteBuffer.wrap(new byte[10]);
-            ByteBuffer packet = QuicPacketBuilder.build1RttPacket(destinationCidBytes(0x1234L), pn, payload, new QuicCrypto.PacketProtectionKeys(null, null, null), (byte) 0);
+            ByteBuffer packet = QuicPacketBuilder.build1RttPacket(destinationCidBytes(0x1234L), pn, payload, new QuicCrypto.PacketProtectionKeys( null, null), null, (byte) 0);
 
             packet.get(); // Skip flags
             packet.getLong(); // Skip CID
@@ -229,7 +229,7 @@ class QuicPacketBuilderTest {
         ByteBuffer payload = ByteBuffer.wrap(new byte[50]);
 
         // Act
-        ByteBuffer packet = QuicPacketBuilder.buildInitialPacket(destinationCidBytes(0x1111L), 0x2222L, 0, payload, new QuicCrypto.PacketProtectionKeys(null, null, null));
+        ByteBuffer packet = QuicPacketBuilder.buildInitialPacket(destinationCidBytes(0x1111L), 0x2222L, 0, payload, new QuicCrypto.PacketProtectionKeysWithHP(null, null, null));
 
         // Assert - skip to token length field
         packet.position(1 + 4 + 1 + 8 + 1 + 8); // flags + version + dcid_len + dcid + scid_len + scid
@@ -245,7 +245,7 @@ class QuicPacketBuilderTest {
         ByteBuffer payload = ByteBuffer.wrap(payloadData);
 
         // Act
-        ByteBuffer packet = QuicPacketBuilder.buildHandshakePacket(destinationCidBytes(0x1111L), 0x2222L, 5, payload, new QuicCrypto.PacketProtectionKeys(null, null, null));
+        ByteBuffer packet = QuicPacketBuilder.buildHandshakePacket(destinationCidBytes(0x1111L), 0x2222L, 5, payload, new QuicCrypto.PacketProtectionKeysWithHP(null, null, null));
 
         // Assert - skip to length field
         packet.position(1 + 4 + 1 + 8 + 1 + 8); // flags + version + dcid_len + dcid + scid_len + scid

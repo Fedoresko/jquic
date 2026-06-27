@@ -14,6 +14,9 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.AbstractMap;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
@@ -212,6 +215,46 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
         }
     }
 
+
+//    static class Entry implements Map.Entry<String, String> {
+//        private Entry(String key, String value) {
+//            this.key = key;
+//            this.value = value;
+//        }
+//
+//        public static Entry of(String key, String value) {
+//            return new Entry(key, value);
+//        }
+//
+//        private final String key;
+//        private final String value;
+//
+//        @Override
+//        public String getKey() {
+//            return key;
+//        }
+//
+//        @Override
+//        public String getValue() {
+//            return value;
+//        }
+//
+//        @Override
+//        public String setValue(String value) {
+//            return "";
+//        }
+//
+//        @Override
+//        public boolean equals(Object o) {
+//            return false;
+//        }
+//
+//        @Override
+//        public int hashCode() {
+//            return 0;
+//        }
+//    }
+
     /**
      * Encodes HTTP/3 response to raw bytes.
      * Uses QPACK header compression when {@code useQpack} is enabled,
@@ -220,11 +263,14 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
     private ByteBuffer putResponse(ByteBuffer buffer, Http3Response response) {
         byte[] body        = response.getBody();
 
-        Map<String, String> headers = Map.of(":status", String.valueOf(response.getStatusCode()),
-                "content-type", response.getContentType(),
-                "content-length", String.valueOf(body.length));
+        List<Map.Entry<String, String>> headers = new ArrayList<>(List.of(
+                new AbstractMap.SimpleEntry<>(":status", String.valueOf(response.getStatusCode())),
+                new AbstractMap.SimpleEntry<>("content-type", response.getContentType()),
+                new AbstractMap.SimpleEntry<>("content-length", String.valueOf(body.length))));
 
-        ByteBuffer headerBlock = qpackEncoder.compressHeaders(headers.entrySet().stream().toList()).position(0);
+        headers.addAll(response.getHeaders());
+
+        ByteBuffer headerBlock = qpackEncoder.compressHeaders(headers).position(0);
 
         // HTTP/3 framing: each frame = type (varint) + length (varint) + payload
         putHttp3Frame(buffer,0x01, headerBlock);

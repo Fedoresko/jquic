@@ -12,7 +12,7 @@ import java.util.function.Function;
  * HTTP/3 protocol implementation.
  * Implements QUIC application protocol interface for HTTP/3.
  */
-class Http3Protocol implements QuicApplicationProtocol {
+public class Http3Protocol implements QuicApplicationProtocol {
     private static final Logger logger = LoggerFactory.getLogger(Http3Protocol.class);
 
     private static final String PROTOCOL_NAME = "h3";
@@ -23,7 +23,7 @@ class Http3Protocol implements QuicApplicationProtocol {
 
     private final Http3RequestHandler requestHandler;
 
-    Http3Protocol(Http3RequestHandler requestHandler) {
+    public Http3Protocol(Http3RequestHandler requestHandler) {
         this.requestHandler = requestHandler;
     }
 

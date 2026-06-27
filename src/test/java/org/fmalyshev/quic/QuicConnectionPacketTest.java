@@ -49,10 +49,10 @@ class QuicConnectionPacketTest {
         SecretKey mockKey = new SecretKeySpec(new byte[16], "AES");
         byte[] mockIv = new byte[12];
         byte[] mockHeaderProtection = null;
-        QuicCrypto.PacketProtectionKeys mockKeys = new QuicCrypto.PacketProtectionKeys(mockKey, mockIv, mockHeaderProtection);
+        QuicCrypto.PacketProtectionKeysWithHP mockKeys = new QuicCrypto.PacketProtectionKeysWithHP(mockKey, mockIv, mockHeaderProtection);
 
         mockedQuicCrypto.when(() -> QuicCrypto.deriveInitialKeys(any(byte[].class)))
-            .thenReturn(new QuicCrypto.PacketProtectionKeys[]{mockKeys, mockKeys});
+            .thenReturn(new QuicCrypto.PacketProtectionKeysWithHP[]{mockKeys, mockKeys});
 
         // Mock decryption to bypass encryption - just copy input to output
         mockedQuicCrypto.when(() -> QuicCrypto.decryptAead(any(ByteBuffer.class), any(SecretKey.class), 
@@ -79,9 +79,9 @@ class QuicConnectionPacketTest {
         mockMetadata.negotiatedIdleTimeoutMs = 10_000;
         mockMetadata.serverEphemeralPublicKey = new byte[32];
         mockMetadata.clientMetadata = new QuicCrypto.ParsedClientHello("h3", 1000, List.of(), Map.of(), 10000, 1000, List.of());
-        QuicCrypto.PacketProtectionKeys mockKeyss = new QuicCrypto.PacketProtectionKeys(mockKey, new byte[16], null);
+        QuicCrypto.PacketProtectionKeysWithHP mockKeyss = new QuicCrypto.PacketProtectionKeysWithHP(mockKey, new byte[16], null);
 
-        mockMetadata.setApplicationKeys(mockKeyss, mockKeyss);
+        mockMetadata.setApplicationKeys(new QuicCrypto.PacketProtectionKeys(mockKey, new byte[16]), new QuicCrypto.PacketProtectionKeys(mockKey, new byte[16]));
         mockMetadata.serverHandshakeKeys = mockKeyss;
         mockMetadata.clientHandshakeKeys = mockKeyss;
 

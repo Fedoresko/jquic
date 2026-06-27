@@ -12,6 +12,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
+import java.util.AbstractMap;
+import java.util.List;
 
 /**
  * Main entry point for the QUIC/HTTP3 server application.
@@ -73,19 +75,35 @@ public class Main {
             case "/health" -> handleHealth(request);
             case "/hello"  -> handleHello(request);
             case "/echo"   -> handleEcho(request);
+            case "/bootstrap" -> handleBootstrap(request);
             default        -> Http3Response.notFound();
         };
     }
 
+    private static Http3Response handleBootstrap(Http3Request request) {
+        return Http3Response.json(
+                String.format("{\"protocol\":\"h3\",\"host\":\"0.0.0.0\",\"port\":%d,\"timestamp\":\"%s\"}",
+                4433, Instant.now()),
+                List.of(
+                        new AbstractMap.SimpleEntry<>("access-control-allow-origin","*"),
+                        new AbstractMap.SimpleEntry<>("alt-svc","h3=\":4433\"; ma=86400")
+                )
+        );
+    }
+
     /** GET /health – simple liveness probe */
     private static Http3Response handleHealth(Http3Request request) {
-        return Http3Response.ok("OK");
+        return Http3Response.ok("OK", List.of());
     }
 
     /** GET /hello – friendly greeting */
     private static Http3Response handleHello(Http3Request request) {
         String body = "Hello from QUIC/HTTP3 server! Server time: " + Instant.now();
-        return Http3Response.ok(body);
+        return Http3Response.ok(body,
+                List.of(
+                        new AbstractMap.SimpleEntry<>("access-control-allow-origin","*")
+                )
+        );
     }
 
     /** GET /echo – returns request metadata as JSON */

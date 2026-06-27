@@ -47,6 +47,9 @@ public class QuicFrameBuilder {
             previousSmallest = range.smallest;
         }
 
+        while (frame.position() < 20) {
+            frame.put((byte) 0x00); //PADDING
+        }
         frame.flip();
         return frame;
     }

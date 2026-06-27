@@ -23,6 +23,7 @@ class AcceptorThread implements Runnable {
     private static final LogTool log = new LogTool(logger);
     private static final int BUFFER_SIZE = 2048;
     public static final int INITIAL_CONNECTIONS_MAP_SIZE = 1000;
+    public static final int MINIMUM_INITIAL_PACKET = 1200;
 
     private final DatagramChannel channel;
     private SelectorThread[] selectors;
@@ -95,7 +96,7 @@ class AcceptorThread implements Runnable {
                             // Forward this packet to the appropriate Selector
                             bufferTransferred = forwardToSelector(owningSelectorId, buffer, sender);
                         } else {
-                            if (packetSummary.type() == QuicPacketHeader.PacketType.INITIAL) {
+                            if (packetSummary.type() == QuicPacketHeader.PacketType.INITIAL && buffer.remaining() >= MINIMUM_INITIAL_PACKET) {
                                 // LONG HEADER: Generate CID and enqueue for handshake processing
                                 long newCid = cidGenerator.getAndIncrement();
                                 log.debug(ANSIConstants.RED_FG, "[Acceptor] First initial packet, allocated CID: {}, enqueueing for handshake", newCid);
@@ -110,9 +111,12 @@ class AcceptorThread implements Runnable {
                                 );
 
                                 bufferTransferred = true;
-                            } else {
+                            } else if (packetSummary.type() != QuicPacketHeader.PacketType.INITIAL) {
                                 skipPacket(buffer);
                                 log.warn(ANSIConstants.RED_FG, "[Acceptor] Non-Initial packed with unknown DCID: {} type {} - no mapping found, dropping packet", dcid, packetSummary.type());
+                            } else {
+                                buffer.position(buffer.limit());
+                                log.warn(ANSIConstants.RED_FG, "[Acceptor] Initial packed with unknown DCID: {} too short {}  dropping packet", dcid, buffer.remaining());
                             }
                         }
                     }
