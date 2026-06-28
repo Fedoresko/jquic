@@ -629,7 +629,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
 
                 needsAck = true; // CONNECTION_CLOSE is ack-eliciting
                 break; // CONNECTION_CLOSE terminates the packet
-            } else if ((frameType & FRAME_TYPE_STREAM) != 0) { // Stream-related frames: STREAM (0x08-0x0f)
+            } else if (frameType >= FRAME_TYPE_STREAM && frameType <= 0x0f) { // Stream-related frames: STREAM (0x08-0x0f)
                 logger.info("Got Stream frame CID {} frame type {}", connectionId, frameType);
 
                 boolean hasOffset = (frameType & 0x04) != 0;

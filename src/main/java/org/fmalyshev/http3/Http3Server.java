@@ -17,23 +17,23 @@ public class Http3Server {
     private boolean started = false;
 
 
-    private final int H3_NO_ERROR = 0x0100;
-    private final int H3_GENERAL_PROTOCOL_ERROR = 0x0101;
-    private final int H3_INTERNAL_ERROR = 0x0102;
-    private final int H3_STREAM_CREATION_ERROR = 0x0103;
-    private final int H3_CLOSED_CRITICAL_STREAM = 0x0104;
-    private final int H3_FRAME_UNEXPECTED = 0x0105;
-    private final int H3_FRAME_ERROR = 0x0106;
-    private final int H3_EXCESSIVE_LOAD = 0x0107;
-    private final int H3_ID_ERROR = 0x0108;
-    private final int H3_SETTINGS_ERROR = 0x0109;
-    private final int H3_MISSING_SETTINGS = 0x010a;
-    private final int H3_REQUEST_REJECTED = 0x010b;
-    private final int H3_REQUEST_CANCELLED = 0x010c;
-    private final int H3_REQUEST_INCOMPLETE = 0x010d;
-    private final int H3_MESSAGE_ERROR = 0x010e;
-    private final int H3_CONNECT_ERROR = 0x010f;
-    private final int H3_VERSION_FALLBACK = 0x0110;
+    public static final int H3_NO_ERROR = 0x0100;
+    public static final int H3_GENERAL_PROTOCOL_ERROR = 0x0101;
+    public static final int H3_INTERNAL_ERROR = 0x0102;
+    public static final int H3_STREAM_CREATION_ERROR = 0x0103;
+    public static final int H3_CLOSED_CRITICAL_STREAM = 0x0104;
+    public static final int H3_FRAME_UNEXPECTED = 0x0105;
+    public static final int H3_FRAME_ERROR = 0x0106;
+    public static final int H3_EXCESSIVE_LOAD = 0x0107;
+    public static final int H3_ID_ERROR = 0x0108;
+    public static final int H3_SETTINGS_ERROR = 0x0109;
+    public static final int H3_MISSING_SETTINGS = 0x010a;
+    public static final int H3_REQUEST_REJECTED = 0x010b;
+    public static final int H3_REQUEST_CANCELLED = 0x010c;
+    public static final int H3_REQUEST_INCOMPLETE = 0x010d;
+    public static final int H3_MESSAGE_ERROR = 0x010e;
+    public static final int H3_CONNECT_ERROR = 0x010f;
+    public static final int H3_VERSION_FALLBACK = 0x0110;
 
 
     /**

@@ -14,10 +14,7 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
-import java.util.AbstractMap;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
@@ -96,22 +93,85 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
 
         switch (context.getRole()) {
             case REQUEST -> {
-                // Client-initiated bidirectional request stream — process as HTTP/3 request.
-                if (isLastData) {
-                    logger.debug("Received complete HTTP/3 request on stream {} (connection {}): {} bytes",
-                            streamId, connectionId, context.getDataLength());
-                    try {
-                        processHttpRequest(streamId, context, response);
-                    } catch (Exception e) {
-                        logger.error("Failed to process HTTP/3 request on stream " + streamId, e);
-                        try {
-                            response.closeStream(streamId, 0x0100); // H3_GENERAL_PROTOCOL_ERROR
-                        } catch (Exception closeEx) {
-                            logger.error("Failed to close stream after error", closeEx);
+                // Client-initiated bidirectional request stream.
+                // Use a state machine to dispatch the request as soon as headers arrive,
+                // then feed body DATA frames incrementally, without waiting for stream FIN.
+                try {
+                    Http3StreamContext.ParsedFrame frame;
+                    while ((frame = context.pollFrame()) != null) {
+                        if (frame.type() == 0x01 /* HEADERS */ &&
+                                context.getRequestState() == Http3StreamContext.RequestProcessingState.INITIAL) {
+                            // Parse and dispatch the request immediately on first HEADERS frame.
+                            Http3Request request = parseRequestQpack(frame.payloadAsBuffer());
+                            context.setRequest(request);
+                            if (request != null) {
+                                if (request.getContentLength() == null) {
+                                    context.setRequestState(Http3StreamContext.RequestProcessingState.WAITING_FOR_FIN);
+                                } else if (request.getContentLength() == 0) {
+                                    logger.debug("Dispatching HTTP/3 request on stream {} (connection {}) after HEADERS frame",
+                                            streamId, connectionId);
+                                    Http3Response httpResponse = requestHandler.handleRequest(request);
+                                    // Send the response immediately — do not wait for stream FIN.
+                                    logger.debug("Sending HTTP/3 response on stream {} (connection {}) immediately after HEADERS",
+                                            streamId, connectionId);
+                                    response.sendData(streamId, buffer -> putResponse(buffer, httpResponse), true);
+                                    context.setRequestState(Http3StreamContext.RequestProcessingState.RESPONSE_SENT);
+                                } else {
+                                    context.setRequestState(Http3StreamContext.RequestProcessingState.WAITING_FOR_BODY);
+                                }
+                            }
+                        } else if (frame.type() == 0x00 /* DATA */ ) {
+                            // DATA frame body chunk — accumulate for response (could be streamed further).
+                            if (context.getRequest() != null &&  context.getRequestState() != Http3StreamContext.RequestProcessingState.RESPONSE_SENT) {
+                                context.getRequest().appendBody(new String(frame.payload()));
+                                context.readBodyBytes += frame.payload().length;
+                                if (context.getRequestState() == Http3StreamContext.RequestProcessingState.WAITING_FOR_BODY) {
+                                    if (context.readBodyBytes == context.getRequest().getContentLength()) {
+                                        Http3Response httpResponse = requestHandler.handleRequest(context.getRequest());
+                                        // Send the response immediately — do not wait for stream FIN.
+                                        logger.debug("Sending HTTP/3 response on stream {} (connection {}) immediately after HEADERS",
+                                                streamId, connectionId);
+                                        response.sendData(streamId, buffer -> putResponse(buffer, httpResponse), true);
+                                        context.setRequestState(Http3StreamContext.RequestProcessingState.RESPONSE_SENT);
+                                    }
+                                }
+                            }
                         }
-                    } finally {
+                        // Other frame types (CANCEL_PUSH, SETTINGS, etc.) are ignored on request streams.
+                    }
+
+                    if (isLastData) {
+                        // RFC 9114 §4.1: validate stream state on FIN before cleaning up.
+                        if (context.hasUnconsumedData()) {
+                            logger.warn("Stream {} FIN with truncated frame data (connection {}) — H3_FRAME_ERROR",
+                                    streamId, connectionId);
+                            response.closeStream(streamId, Http3Server.H3_FRAME_ERROR); // H3_MESSAGE_ERROR
+                        } else if (context.getRequestState() == Http3StreamContext.RequestProcessingState.INITIAL) {
+                            logger.warn("Stream {} FIN received without a HEADERS frame (connection {}) — H3_MESSAGE_ERROR",
+                                    streamId, connectionId);
+                            response.closeStream(streamId, Http3Server.H3_MESSAGE_ERROR); // H3_MESSAGE_ERROR
+                        } else if (context.getRequestState() == Http3StreamContext.RequestProcessingState.WAITING_FOR_FIN) {
+                            Http3Response httpResponse = requestHandler.handleRequest(context.getRequest());
+                            // Send the response immediately — do not wait for stream FIN.
+                            logger.debug("Sending HTTP/3 response on stream {} (connection {}) immediately after HEADERS",
+                                    streamId, connectionId);
+                            response.sendData(streamId, buffer -> putResponse(buffer, httpResponse), true);
+                            context.setRequestState(Http3StreamContext.RequestProcessingState.RESPONSE_SENT);
+                        } else {
+                            // Clean FIN — response was already sent; just remove stream context.
+                            logger.debug("Stream {} FIN received cleanly, removing context (connection {})",
+                                    streamId, connectionId);
+                        }
                         streams.remove(streamId);
                     }
+                } catch (Exception e) {
+                    logger.error("Failed to process HTTP/3 request on stream " + streamId, e);
+                    try {
+                        response.closeStream(streamId, Http3Server.H3_GENERAL_PROTOCOL_ERROR); // H3_GENERAL_PROTOCOL_ERROR
+                    } catch (Exception closeEx) {
+                        logger.error("Failed to close stream after error", closeEx);
+                    }
+                    streams.remove(streamId);
                 }
             }
             case CONTROL -> {
@@ -143,75 +203,25 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
     }
 
     /**
-     * Processes a complete HTTP/3 request and sends response.
-     */
-    private void processHttpRequest(long streamId, Http3StreamContext context, QuicStreamResponse response) {
-        // Parse HTTP/3 request (simplified - in real implementation would use QPACK)
-        Http3Request request = parseRequest(context.getData());
-        // Handle request using user-provided handler
-        Http3Response httpResponse = requestHandler.handleRequest(request);
-
-        // Send response
-        try {
-            response.sendData(streamId, buffer -> putResponse(buffer, httpResponse), true);
-        } catch (Exception e) {
-            logger.error("Failed to send HTTP/3 response on stream " + streamId, e);
-        }
-    }
-
-    /**
-     * Parses HTTP/3 request from raw bytes.
-     * Uses QPACK decoding when {@code useQpack} is enabled,
-     * otherwise falls back to the simplified plain-text format.
-     */
-    private Http3Request parseRequest(ByteBuffer data) {
-        Http3Request req = new Http3Request(connectionId, null, null);
-        while (data.hasRemaining()) {
-            long frameType = QuicVarint.read(data);
-            long frameLength = QuicVarint.read(data);
-            int oldLim = data.limit();
-
-            data.limit(data.position() + (int) frameLength);
-            if (frameType == 1) {
-                req = parseRequestQpack(data);
-            } else {
-                // Simplified: assume plain text format "METHOD PATH\r\n"
-                String requestLine = new String(data.array(), data.position(), data.remaining(), StandardCharsets.UTF_8);
-                req.data += requestLine;
-            }
-            data.limit(oldLim);
-        }
-        return req;
-    }
-
-    /**
      * Parses an HTTP/3 request that uses QPACK-encoded headers (RFC 9204).
      *
      * <p>The incoming {@code data} is expected to be the payload of an HTTP/3
      * HEADERS frame (frame type 0x01), i.e. a QPACK header block.
      */
     private Http3Request parseRequestQpack(ByteBuffer data) {
-        if (useQpack) {
-            try {
-                Map<String, String> headers = qpackDecoder.decodeStream(new ByteArrayInputStream(data.array(), data.position(), data.remaining())).stream()
-                        .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+        try {
+            Map<String, String> headers = qpackDecoder.decodeStream(new ByteArrayInputStream(data.array(), data.position(), data.remaining())).stream()
+                    .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
 
-                String method = headers.getOrDefault(":method", "GET");
-                String path = headers.getOrDefault(":path", "/");
-                data.position(data.limit());
-                return new Http3Request(connectionId, method, path);
-            } catch (IOException e) {
-                logger.warn("QPACK decoding failed on stream (connection {})",
-                        connectionId, e.getMessage());
-                return null;
-            }
-        } else {
-            String requestLine = new String(data.array(), data.position(), data.remaining(), StandardCharsets.UTF_8).split("\r\n")[0];
-            String[] parts = requestLine.split(" ");
-            String method = parts.length > 0 ? parts[0] : "GET";
-            String path = parts.length > 1 ? parts[1] : "/";
+            String method = headers.getOrDefault(":method", "GET");
+            String path = headers.getOrDefault(":path", "/");
+            Long contentLength = Optional.ofNullable(headers.getOrDefault(":content-length", null)).map(Long::valueOf).orElse(null);
             data.position(data.limit());
-            return new Http3Request(connectionId, method, path);
+            return new Http3Request(connectionId, method, path, contentLength);
+        } catch (IOException e) {
+            logger.warn("QPACK decoding failed on stream (connection {})",
+                    connectionId, e.getMessage());
+            return null;
         }
     }
 
@@ -301,6 +311,36 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
      * Context for a single HTTP/3 stream.
      */
     private static class Http3StreamContext {
+
+        /**
+         * State machine for processing an HTTP/3 request stream.
+         *
+         * <ul>
+         *   <li>{@code WAITING_FOR_BODY} – .</li>
+         *   <li>{@code HEADERS_DISPATCHED} – HEADERS were parsed and the request was handed to the
+         *       handler; DATA frames (body chunks) may still arrive.</li>
+         *   <li>{@code RESPONSE_SENT} – response has been written to the stream; waiting for FIN to clean up.</li>
+         * </ul>
+         */
+        enum RequestProcessingState {
+            INITIAL,
+            WAITING_FOR_BODY,
+            WAITING_FOR_FIN,
+            RESPONSE_SENT
+        }
+
+        /**
+         * A fully-buffered HTTP/3 frame (type + payload).
+         *
+         * @param type    HTTP/3 frame type varint value.
+         * @param payload raw payload bytes.
+         */
+        record ParsedFrame(long type, byte[] payload) {
+            ByteBuffer payloadAsBuffer() {
+                return ByteBuffer.wrap(payload);
+            }
+        }
+
         private final long streamId;
         private final QuicStreamResponse response;
         private final QuicStreamResponse.StreamType streamType;
@@ -308,6 +348,15 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
 
         /** HTTP/3-level role of this stream (determined from the QUIC stream type or the stream-type varint). */
         private Http3StreamRole role;
+
+        /** Read cursor: how many bytes from dataBuffer have already been consumed as complete frames. */
+        private int readCursor = 0;
+
+        // ---- request state machine ----
+        private RequestProcessingState requestState = RequestProcessingState.INITIAL;
+        private Http3Request request;
+
+        public int readBodyBytes = 0;
 
         Http3StreamContext(long streamId, QuicStreamResponse response,
                            QuicStreamResponse.StreamType streamType, Http3StreamRole role) {
@@ -319,6 +368,22 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
 
         Http3StreamRole getRole() {
             return role;
+        }
+
+        RequestProcessingState getRequestState() {
+            return requestState;
+        }
+
+        void setRequestState(RequestProcessingState state) {
+            this.requestState = state;
+        }
+
+        Http3Request getRequest() {
+            return request;
+        }
+
+        void setRequest(Http3Request request) {
+            this.request = request;
         }
 
         /**
@@ -354,6 +419,55 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
                 throw new IllegalStateException("Stream buffer overflow");
             }
             dataBuffer.put(data);
+        }
+
+        /**
+         * Tries to parse the next complete HTTP/3 frame from the buffer starting at
+         * {@link #readCursor}. Returns {@code null} if there are not enough bytes yet.
+         * Advances {@link #readCursor} past the consumed frame on success.
+         */
+        @Nullable
+        ParsedFrame pollFrame() {
+            // Create a view of the bytes written so far, starting from readCursor.
+            ByteBuffer view = dataBuffer.duplicate().flip();
+            view.position(readCursor);
+
+            if (!view.hasRemaining()) {
+                return null;
+            }
+
+            // Mark the start so we can reset if we don't have a full frame.
+            view.mark();
+
+            // Need at least 1 byte for the type varint.
+            if (view.remaining() < 1) {
+                return null;
+            }
+            long frameType = QuicVarint.read(view);
+
+            if (!view.hasRemaining()) {
+                return null; // Not enough bytes for the length varint.
+            }
+            long frameLength = QuicVarint.read(view);
+
+            if (view.remaining() < (int) frameLength) {
+                return null; // Payload not fully arrived yet.
+            }
+
+            byte[] payload = new byte[(int) frameLength];
+            view.get(payload);
+
+            readCursor = view.position();
+            return new ParsedFrame(frameType, payload);
+        }
+
+        /**
+         * Returns {@code true} if there are bytes in the buffer that have not yet been
+         * consumed by {@link #pollFrame()} — i.e. the buffer holds a partial (truncated) frame.
+         * Per RFC 9114 §4.1, a FIN while unconsumed bytes remain MUST be a connection error.
+         */
+        boolean hasUnconsumedData() {
+            return readCursor < dataBuffer.position();
         }
 
         ByteBuffer getData() {

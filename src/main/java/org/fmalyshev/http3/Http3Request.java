@@ -7,13 +7,15 @@ public class Http3Request {
     private final long connectionId;
     private final String method;
     private final String path;
+    private final Long contentLength;
 
     public String data = "";
 
-    Http3Request(long connectionId, String method, String path) {
+    Http3Request(long connectionId, String method, String path, Long contentLength) {
         this.connectionId = connectionId;
         this.method = method;
         this.path = path;
+        this.contentLength = contentLength;
     }
 
     /**
@@ -35,6 +37,14 @@ public class Http3Request {
      */
     public String getPath() {
         return path;
+    }
+
+    public Long getContentLength() {
+        return contentLength;
+    }
+
+    public void appendBody(String body) {
+        data += body;
     }
 
     @Override
