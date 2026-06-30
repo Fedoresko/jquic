@@ -3,15 +3,17 @@ package org.fmalyshev.quic;
 import org.fmalyshev.quic.streamapi.QuicStreamEngine;
 import org.fmalyshev.quic.streamapi.impl.QuicStreamEngineImpl;
 import org.jctools.queues.MpscArrayQueue;
-import org.jctools.queues.SpmcArrayQueue;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.net.SocketOption;
+import java.net.StandardSocketOptions;
 import java.nio.ByteBuffer;
 import java.nio.channels.DatagramChannel;
 import java.util.ArrayList;
+import java.util.Set;
 
 public class QuicEngine {
     private static final int PORT = 4433;
@@ -49,15 +51,27 @@ public class QuicEngine {
         DatagramChannel channel = DatagramChannel.open();
         channel.configureBlocking(true);
 
-        // Fully compatible with Java 7/8+ Standard Socket Options
-        channel.setOption(java.net.StandardSocketOptions.SO_REUSEADDR, true);
-        channel.bind(new InetSocketAddress(java.net.InetAddress.getByName("127.0.0.1"), PORT));
+        Set<SocketOption<?>> options = channel.supportedOptions();
+
+        if (options.contains(StandardSocketOptions.SO_REUSEADDR) ) {
+            channel.setOption(StandardSocketOptions.SO_REUSEADDR, true);
+        } else {
+            logger.info("SO_REUSEADDR is not supported by this JVM");
+        }
+
+        if (options.contains(StandardSocketOptions.SO_REUSEPORT) ) {
+            channel.setOption(StandardSocketOptions.SO_REUSEPORT, true);
+        } else {
+            logger.info("SO_REUSEPORT is not supported by this JVM");
+        }
+
+        channel.bind(new InetSocketAddress(PORT));
         return channel;
     }
 
     public static void init() throws Exception {
         // Initialize BPF daemon client (checks availability and caches result)
-        BpfDaemonClient.initialize();
+        BpfRouting.initialize();
 
         QuicCrypto.initKeystore();
 
@@ -81,7 +95,7 @@ public class QuicEngine {
         // 1. Initialize the Master Acceptor Thread
         DatagramChannel acceptorChannel = createSocketWithReusePort();
 
-        BpfDaemonClient.registerAcceptor(acceptorChannel);
+        BpfRouting.registerAcceptor(acceptorChannel);
 
         AcceptorThread acceptor = new AcceptorThread(acceptorChannel, sharedBufferPool, cidToSelectorMap);
 
@@ -92,7 +106,7 @@ public class QuicEngine {
             DatagramChannel selectorChannel = createSocketWithReusePort();
 
             // Register selector socket in the eBPF map
-            BpfDaemonClient.registerSelector(selectorThreadId, selectorChannel);
+            BpfRouting.registerSelector(selectorThreadId+1, selectorChannel);
 
             selectors[selectorThreadId] = new SelectorThread(selectorThreadId, selectorChannel, sharedBufferPool,
                     cidToSelectorMap);

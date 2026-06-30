@@ -274,7 +274,7 @@ class SelectorThread implements Runnable {
 
         // Update eBPF map if available
         try {
-            BpfDaemonClient.updateEbpfMap(threadId, connectionId);
+            BpfRouting.updateRouting(connectionId, threadId+1);
         } catch (Exception e) {
             log.error(logColor(), "Failed to update eBPF map for connection {}", connectionId, e);
         }
@@ -336,7 +336,7 @@ class SelectorThread implements Runnable {
 
             // Remove from eBPF map
             try {
-                BpfDaemonClient.deleteEbpfMap(threadId, connectionId);
+                BpfRouting.evictRoute(connectionId);
                 log.info(logColor(), "Selector-{}: Removed CID: {} from eBPF routing table", 
                           threadId, connectionId);
             } catch (Exception e) {
