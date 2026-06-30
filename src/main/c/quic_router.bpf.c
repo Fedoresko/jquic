@@ -29,7 +29,7 @@ const char hex_chars[] = "0123456789abcdef";
 #define byte_array_to_hex_lookup(bytes, byte_len, hex_string) for (int i = 0; i < (byte_len); i++) { hex_string[i * 2] = hex_chars[(bytes[i] >> 4) & 0x0F]; hex_string[i * 2 + 1] = hex_chars[bytes[i] & 0x0F]; } hex_string[byte_len * 2] = '\0'
 
 // Define a reusable inline helper function at the top of your file
-#define redirect_to_acceptor(ctx) { bpf_sk_select_reuseport(ctx, &sockarray_map, &default_thread_index, 0); if (++cont == 1) return SK_PASS; }
+#define redirect_to_acceptor(ctx) { bpf_sk_select_reuseport(ctx, &sockarray_map, &default_thread_index, 0); return SK_PASS; }
 
 SEC("sk_reuseport")
 int quic_sk_steer(struct sk_reuseport_md *ctx) {
