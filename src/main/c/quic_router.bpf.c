@@ -37,7 +37,7 @@ int quic_sk_steer(struct sk_reuseport_md *ctx) {
     void *data = (void *)(long)ctx->data;
     __u32 default_thread_index = 0;
 
-    if (data + 18 > data_end) redirect_to_acceptor(ctx);
+    if (data + 9 > data_end) redirect_to_acceptor(ctx);
 
     __u8 *quic_payload = (__u8 *) (data + 8);
 
