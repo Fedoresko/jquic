@@ -1,4 +1,8 @@
+#define _GNU_SOURCE
+
 #include <jni.h>
+#include <errno.h>
+#include <sched.h>
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
 #include <sys/socket.h>
@@ -9,19 +13,31 @@ static int my_libbpf_print_fn(enum libbpf_print_level level, const char *format,
     return vfprintf(stderr, format, args);
 }
 
-
-int getMapFd(JNIEnv *env, jstring map_path) {
+static int getMapFd(JNIEnv *env, jstring map_path) {
     const char *path = (*env)->GetStringUTFChars(env, map_path, NULL);
 
     // 1. Open the pinned map via its global path string
     int map_fd = bpf_obj_get(path);
 
-    printf("Got BPF object path \"%s\" res: %d\n", path, map_fd);
     fflush(stdout);
 
     (*env)->ReleaseStringUTFChars(env, map_path, path);
 
     return map_fd;
+}
+
+JNIEXPORT jint JNICALL Java_org_fmalyshev_quic_BpfRouting_setAffinity(JNIEnv* env, jclass cls, jint pid, jlongArray mask) {
+    cpu_set_t set;
+    CPU_ZERO(&set);
+
+    jsize mask_len = (*env)->GetArrayLength(env, mask);
+    if (mask_len > sizeof(set) / sizeof(jlong)) {
+        mask_len = sizeof(set) / sizeof(jlong);
+    }
+
+    (*env)->GetLongArrayRegion(env, mask, 0, mask_len, (jlong*)&set);
+
+    return sched_setaffinity((pid_t)pid, sizeof(set), &set) == 0 ? 0 : errno;
 }
 
 JNIEXPORT jint JNICALL Java_org_fmalyshev_quic_BpfRouting_attachEBpfToSocket(
@@ -34,7 +50,6 @@ JNIEXPORT jint JNICALL Java_org_fmalyshev_quic_BpfRouting_attachEBpfToSocket(
     // Pass the eBPF program descriptor straight to the Linux kernel socket level
     int result = setsockopt(socket_fd, SOL_SOCKET, SO_ATTACH_REUSEPORT_EBPF, &prog_fd, sizeof(prog_fd));
 
-    printf("Attach prog to socket %d res: %d\n", socket_fd, result);
     fflush(stdout);
 
     return (jint)result; // Returns 0 on success, or -1 on failure
@@ -49,7 +64,6 @@ JNIEXPORT jint JNICALL Java_org_fmalyshev_quic_BpfRouting_nativeUpdateBpfMapI(
     __u32 bpf_key = (__u32)key;
     int err = bpf_map_update_elem(map_fd, &bpf_key, &socket_fd, BPF_ANY);
 
-    printf("Update BPF map key %d val %d res: %d\n", key, socket_fd, err);
     fflush(stdout);
 
     return err;
@@ -64,7 +78,6 @@ JNIEXPORT jint JNICALL Java_org_fmalyshev_quic_BpfRouting_nativeUpdateBpfMapL(
     __u64 bpf_key = (__u64)key;
     int err = bpf_map_update_elem(map_fd, &bpf_key, &socket_fd, BPF_ANY);
 
-    printf("Update BPF map key %d val %d res: %d\n", key, socket_fd, err);
     fflush(stdout);
 
     return err;
@@ -77,7 +90,6 @@ JNIEXPORT jint JNICALL Java_org_fmalyshev_quic_BpfRouting_nativeDeleteFromBpfMap
     __u64 bpf_key = (__u64)key;
     int err = bpf_map_delete_elem(map_fd, &bpf_key);
 
-    printf("Remove route map key %d res: %d\n", key, err);
     fflush(stdout);
 
     return err;
@@ -98,7 +110,6 @@ JNIEXPORT jint JNICALL Java_org_fmalyshev_quic_BpfRouting_checkBpfMap(
 
     int map_fd = getMapFd(env, map_path);
 
-    printf("Check BPF map res: %d\n", map_fd);
     fflush(stdout);
 
     if (map_fd >= 0) {

@@ -20,7 +20,7 @@ public class PacketNumberSpace {
     private static final long K_GRANULARITY_MS = 1; // Timer granularity: 1ms
     private static final long K_INITIAL_RTT_MS = 333; // Initial RTT estimate: 333ms
 
-    private final String name; // For logging: "Initial", "Handshake", "Application"
+    private final PacketPhase phase; // For logging: "Initial", "Handshake", "Application"
 
     // Packet number allocation
     private long nextPacketNumber = 0;
@@ -47,8 +47,8 @@ public class PacketNumberSpace {
     // Min-heap ordered by per-packet loss deadline for O(log n) loss detection.
     private final TimeoutHeap<SentPacket> lossHeap = new TimeoutHeap<>(SentPacket.class);
 
-    public PacketNumberSpace(String name) {
-        this.name = name;
+    public PacketNumberSpace(PacketPhase phase) {
+        this.phase = phase;
     }
 
     /**
@@ -67,15 +67,13 @@ public class PacketNumberSpace {
      * 
      * @param packetNumber The packet number
      * @param unencryptedPayload The unencrypted QUIC frames (for retransmission)
-     * @param packetPhase Type of packet (INITIAL, HANDSHAKE, APPLICATION)
      * @param ackEliciting Whether this packet requires an ACK
      */
-    public void onPacketSent(long packetNumber, ByteBuffer unencryptedPayload,
-                             PacketPhase packetPhase, boolean ackEliciting) {
+    public void onPacketSent(long packetNumber, ByteBuffer unencryptedPayload, boolean ackEliciting) {
         long sentTime = System.currentTimeMillis();
         // Duplicate the buffer to preserve it for retransmission
         SentPacket packet = new SentPacket(packetNumber, sentTime, unencryptedPayload.duplicate(),
-                packetPhase, ackEliciting);
+                phase, ackEliciting);
         sentPackets.put(packetNumber, packet);
 
         if (ackEliciting) {
@@ -89,8 +87,8 @@ public class PacketNumberSpace {
         packet.lossDeadline = sentTime + initialLossDelay;
         lossHeap.insertOrUpdate(packet);
 
-        logger.debug("{}: Sent packet {} (ack-eliciting: {}, type: {}, payload: {} bytes)", 
-                    name, packetNumber, ackEliciting, packetPhase, unencryptedPayload.remaining());
+        logger.debug("{}: Sent packet {} (ack-eliciting: {}, payload: {} bytes)",
+                phase, packetNumber, ackEliciting, unencryptedPayload.remaining());
     }
 
     /**
@@ -103,7 +101,7 @@ public class PacketNumberSpace {
             largestReceivedPacketNumber = packetNumber;
         }
 
-        logger.debug("{}: Received packet {}, largest: {}", name, packetNumber, largestReceivedPacketNumber);
+        logger.debug("{}: Received packet {}, largest: {}", phase, packetNumber, largestReceivedPacketNumber);
     }
 
     /**
@@ -134,7 +132,7 @@ public class PacketNumberSpace {
      * @return Map of lost packet numbers to SentPacket metadata (for retransmission with new PN)
      */
     public void onAckReceived(long largestAcked, List<AckRange> ackRanges, long ackDelay, AckCallback ackCallback) {
-        logger.info("{}: ACK received for largest: {}, ranges: {}", name, largestAcked, ackRanges.size());
+        logger.info("{}: ACK received for largest: {}, ranges: {}", phase, largestAcked, ackRanges.size());
 
         // Update largest acked
         if (largestAcked > largestAckedPacketNumber) {
@@ -154,7 +152,7 @@ public class PacketNumberSpace {
         }
 
         if (newlyAcked.isEmpty()) {
-            logger.debug("{}: No newly acked packets", name);
+            logger.debug("{}: No newly acked packets", phase);
             return;
         }
 
@@ -176,7 +174,7 @@ public class PacketNumberSpace {
                 lossHeap.remove(packet);
             }
             sentPackets.remove(pn);
-            logger.debug("{}: Packet {} acked and removed", name, pn);
+            logger.debug("{}: Packet {} acked and removed", phase, pn);
         }
     }
 
@@ -212,8 +210,8 @@ public class PacketNumberSpace {
             smoothedRtt = (7 * smoothedRtt + adjustedRtt) / 8;
         }
 
-        logger.debug("{}: RTT updated - latest: {}ms, smoothed: {}ms, var: {}ms, min: {}ms", 
-                    name, latestRtt, smoothedRtt, rttVar, minRtt);
+        logger.debug("{}: RTT updated - latest: {}ms, smoothed: {}ms, var: {}ms, min: {}ms",
+                phase, latestRtt, smoothedRtt, rttVar, minRtt);
     }
 
     /**
@@ -249,7 +247,7 @@ public class PacketNumberSpace {
             SentPacket packet = entry.getValue();
             lostPackets.put(pn, packet);
             logger.warn("{}: Packet {} declared lost (packet threshold: {} below largest acked {})",
-                    name, pn, largestAckedPacketNumber - pn, largestAckedPacketNumber);
+                    phase, pn, largestAckedPacketNumber - pn, largestAckedPacketNumber);
         }
 
         // --- Time-threshold pass: poll heap entries whose deadline has passed ---
@@ -261,7 +259,7 @@ public class PacketNumberSpace {
             if (packet.packetNumber >= largestAckedPacketNumber) continue;
             lostPackets.put(packet.packetNumber, packet);
             logger.warn("{}: Packet {} declared lost (time threshold: sent {}ms ago, threshold: {}ms)",
-                    name, packet.packetNumber, now - packet.sentTime, lossDelay);
+                    phase, packet.packetNumber, now - packet.sentTime, lossDelay);
         }
 
         // Remove lost packets from tracking (heap entries already removed by poll above;

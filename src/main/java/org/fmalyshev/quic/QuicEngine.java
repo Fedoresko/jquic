@@ -72,7 +72,6 @@ public class QuicEngine {
     public static void init() throws Exception {
         // Initialize BPF daemon client (checks availability and caches result)
         BpfRouting.initialize();
-
         QuicCrypto.initKeystore();
 
         // Create QuicStreamEngineInternal singleton

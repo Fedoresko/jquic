@@ -18,8 +18,8 @@ public class BpfRouting {
     public static final String BPF_MAP_ROUTES = "/sys/fs/bpf/quic_sock_map";
     public static final String BPF_MAP_SOCKARRAY = "/sys/fs/bpf/sockarray_map";
     public static final String BPF_PROG_PATH = "/sys/fs/bpf/quic_steer_prog";
-    private static boolean daemonAvailable = false;
-    private static boolean initialized = false;
+    private static boolean isReady = false;
+    private static boolean initialized;
 
     static {
         try {
@@ -43,13 +43,20 @@ public class BpfRouting {
 
     private static native int attachEBpfToSocket(String progPath, int socketFd);
 
+    private static native int setAffinity(int pid, long[] mask);
+
+    private static void setDedicatedCpu(int pid, int cpu) {
+        long[] mask = new long[cpu / 64 + 1];
+        mask[cpu / 64] = 1L << cpu;
+        setAffinity(pid, mask);
+    }
+
     private static void registerSocketInBpf(int fd, int mapIndex) {
         // 3. Insert Java's own FD directly into the pinned BPF map
         int result = nativeUpdateBpfMapI(BPF_MAP_SOCKARRAY, mapIndex, fd);
         if (result < 0) {
             throw new RuntimeException("Failed to register runtime socket in eBPF map. Error code: " + result);
         }
-        System.out.println("Java Runtime: Successfully registered local FD " + fd + " into eBPF array index " + mapIndex);
     }
 
     private static void updateRouteMapping(long cid, int selectorId) {
@@ -76,10 +83,10 @@ public class BpfRouting {
         if (initialized) {
             logger.info("Initializing BPF routing...");
 
-            daemonAvailable = checkBpfMap(BPF_MAP_ROUTES) == 0 &&
+            isReady = checkBpfMap(BPF_MAP_ROUTES) == 0 &&
                     checkBpfMap(BPF_MAP_SOCKARRAY) == 0;
 
-            logger.info("Available daemon: " + daemonAvailable);
+            logger.info("Available routing: " + isReady);
         }
     }
 
@@ -92,7 +99,7 @@ public class BpfRouting {
      * @throws IOException if communication with daemon fails
      */
     public static void updateRouting(long cid, int selectorId) {
-        if (!daemonAvailable) {
+        if (!isReady) {
             return;
         }
 
@@ -106,7 +113,7 @@ public class BpfRouting {
      * @param cid The connection ID to remove
      */
     public static void evictRoute(long cid) {
-        if (!daemonAvailable) {
+        if (!isReady) {
             return;
         }
 
@@ -122,9 +129,12 @@ public class BpfRouting {
      * @throws IOException if communication with daemon fails
      */
     public static void registerSelector(int index, DatagramChannel selectorChannel) throws Exception {
-        if (!daemonAvailable) {
+        if (!isReady) {
             return;
         }
+
+        int processors = Runtime.getRuntime().availableProcessors();
+        setDedicatedCpu(index, 1 % processors);
 
         int selectorFd = getNativeFd(selectorChannel);
 
@@ -132,7 +142,7 @@ public class BpfRouting {
     }
 
     static void registerAcceptor(DatagramChannel acceptorChannel) throws NoSuchFieldException, IllegalAccessException {
-        if (!daemonAvailable) {
+        if (!isReady) {
             return;
         }
         int acceptorFd = getNativeFd(acceptorChannel);

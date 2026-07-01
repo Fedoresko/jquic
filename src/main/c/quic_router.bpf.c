@@ -71,8 +71,6 @@ int quic_sk_steer(struct sk_reuseport_md *ctx) {
         __u32 *sock_idx = bpf_map_lookup_elem(&quic_sock_map, &cid_key);
         if (sock_idx) {
             selected_socket = *sock_idx;
-        } else {
-            bpf_printk("Selector not found!");
         }
     }
 

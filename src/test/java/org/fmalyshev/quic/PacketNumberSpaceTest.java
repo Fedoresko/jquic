@@ -15,7 +15,7 @@ class PacketNumberSpaceTest {
 
     @Test
     void testAllocatePacketNumber_Sequential() {
-        PacketNumberSpace space = new PacketNumberSpace("Test");
+        PacketNumberSpace space = new PacketNumberSpace(PacketNumberSpace.PacketPhase.INITIAL);
 
         assertEquals(0, space.allocatePacketNumber());
         assertEquals(1, space.allocatePacketNumber());
@@ -25,7 +25,7 @@ class PacketNumberSpaceTest {
 
     @Test
     void testOnPacketReceived_TracksLargest() {
-        PacketNumberSpace space = new PacketNumberSpace("Test");
+        PacketNumberSpace space = new PacketNumberSpace(PacketNumberSpace.PacketPhase.INITIAL);
 
         space.onPacketReceived(5);
         assertEquals(5, space.getLargestReceivedPacketNumber());
@@ -39,11 +39,11 @@ class PacketNumberSpaceTest {
 
     @Test
     void testOnPacketSent_TracksPackets() {
-        PacketNumberSpace space = new PacketNumberSpace("Test");
+        PacketNumberSpace space = new PacketNumberSpace(PacketNumberSpace.PacketPhase.INITIAL);
         ByteBuffer frames = ByteBuffer.wrap(new byte[10]);
 
-        space.onPacketSent(0, frames, PacketNumberSpace.PacketPhase.INITIAL, true);
-        space.onPacketSent(1, frames, PacketNumberSpace.PacketPhase.INITIAL, true);
+        space.onPacketSent(0, frames,  true);
+        space.onPacketSent(1, frames,  true);
 
         assertEquals(2, space.getUnackedPacketCount());
         assertTrue(space.hasUnackedPackets());
@@ -51,13 +51,13 @@ class PacketNumberSpaceTest {
 
     @Test
     void testOnAckReceived_RemovesAckedPackets() {
-        PacketNumberSpace space = new PacketNumberSpace("Test");
+        PacketNumberSpace space = new PacketNumberSpace(PacketNumberSpace.PacketPhase.INITIAL);
         ByteBuffer frames = ByteBuffer.wrap(new byte[10]);
 
         // Send packets 0, 1, 2
-        space.onPacketSent(0, frames, PacketNumberSpace.PacketPhase.INITIAL, true);
-        space.onPacketSent(1, frames, PacketNumberSpace.PacketPhase.INITIAL, true);
-        space.onPacketSent(2, frames, PacketNumberSpace.PacketPhase.INITIAL, true);
+        space.onPacketSent(0, frames,  true);
+        space.onPacketSent(1, frames,  true);
+        space.onPacketSent(2, frames,  true);
 
         assertEquals(3, space.getUnackedPacketCount());
 
@@ -75,11 +75,11 @@ class PacketNumberSpaceTest {
 
     @Test
     void testOnAckReceived_UpdatesRTT() throws InterruptedException {
-        PacketNumberSpace space = new PacketNumberSpace("Test");
+        PacketNumberSpace space = new PacketNumberSpace(PacketNumberSpace.PacketPhase.INITIAL);
         ByteBuffer frames = ByteBuffer.wrap(new byte[10]);
 
         // Send packet 0
-        space.onPacketSent(0, frames, PacketNumberSpace.PacketPhase.INITIAL, true);
+        space.onPacketSent(0, frames,  true);
 
         // Wait a bit to simulate network delay
         Thread.sleep(50);
@@ -100,12 +100,12 @@ class PacketNumberSpaceTest {
 
     @Test
     void testDetectLostPackets_PacketThreshold() throws InterruptedException {
-        PacketNumberSpace space = new PacketNumberSpace("Test");
+        PacketNumberSpace space = new PacketNumberSpace(PacketNumberSpace.PacketPhase.INITIAL);
         ByteBuffer frames = ByteBuffer.wrap(new byte[10]);
 
         // Send packets 0-10
         for (int i = 0; i <= 10; i++) {
-            space.onPacketSent(i, frames, PacketNumberSpace.PacketPhase.INITIAL, true);
+            space.onPacketSent(i, frames,  true);
         }
 
         Thread.sleep(10);
@@ -127,15 +127,15 @@ class PacketNumberSpaceTest {
 
     @Test
     void testDetectLostPackets_TimeThreshold() throws InterruptedException {
-        PacketNumberSpace space = new PacketNumberSpace("Test");
+        PacketNumberSpace space = new PacketNumberSpace(PacketNumberSpace.PacketPhase.INITIAL);
         ByteBuffer frames = ByteBuffer.wrap(new byte[10]);
 
         // Send packet 0
-        space.onPacketSent(0, frames, PacketNumberSpace.PacketPhase.INITIAL, true);
+        space.onPacketSent(0, frames,  true);
 
 
         // Send and ACK packet 1 to establish RTT
-        space.onPacketSent(1, frames, PacketNumberSpace.PacketPhase.INITIAL, true);
+        space.onPacketSent(1, frames,  true);
 
         // Wait for RTT to pass
         Thread.sleep(200);
@@ -147,7 +147,7 @@ class PacketNumberSpaceTest {
 
 
         // Send and ACK packet 2 to trigger loss detection for packet 0
-        space.onPacketSent(2, frames, PacketNumberSpace.PacketPhase.INITIAL, true);
+        space.onPacketSent(2, frames,  true);
 
         // Wait for loss delay threshold (9/8 * RTT)
         Thread.sleep(300);
@@ -163,7 +163,7 @@ class PacketNumberSpaceTest {
 
     @Test
     void testGetAckRanges_SingleRange() {
-        PacketNumberSpace space = new PacketNumberSpace("Test");
+        PacketNumberSpace space = new PacketNumberSpace(PacketNumberSpace.PacketPhase.INITIAL);
 
         // Receive contiguous packets 0-4
         for (long i = 0; i <= 4; i++) {
@@ -179,7 +179,7 @@ class PacketNumberSpaceTest {
 
     @Test
     void testGetAckRanges_MultipleRanges() {
-        PacketNumberSpace space = new PacketNumberSpace("Test");
+        PacketNumberSpace space = new PacketNumberSpace(PacketNumberSpace.PacketPhase.INITIAL);
 
         // Receive packets with gaps: 0-2, 5-7, 10
         space.onPacketReceived(0);
@@ -207,7 +207,7 @@ class PacketNumberSpaceTest {
 
     @Test
     void testGetAckRanges_OutOfOrderReceipt() {
-        PacketNumberSpace space = new PacketNumberSpace("Test");
+        PacketNumberSpace space = new PacketNumberSpace(PacketNumberSpace.PacketPhase.INITIAL);
 
         // Receive packets out of order
         space.onPacketReceived(5);
@@ -226,7 +226,7 @@ class PacketNumberSpaceTest {
 
     @Test
     void testRTT_InitialValue() {
-        PacketNumberSpace space = new PacketNumberSpace("Test");
+        PacketNumberSpace space = new PacketNumberSpace(PacketNumberSpace.PacketPhase.INITIAL);
 
         // Initial RTT should be 333ms per RFC 9002
         assertEquals(333, space.getSmoothedRtt());
@@ -234,12 +234,12 @@ class PacketNumberSpaceTest {
 
     @Test
     void testRTT_MinRttTracking() throws InterruptedException {
-        PacketNumberSpace space = new PacketNumberSpace("Test");
+        PacketNumberSpace space = new PacketNumberSpace(PacketNumberSpace.PacketPhase.INITIAL);
         ByteBuffer frames = ByteBuffer.wrap(new byte[10]);
 
         // Send multiple packets and ACK them with different delays
         for (int i = 0; i < 3; i++) {
-            space.onPacketSent(i, frames, PacketNumberSpace.PacketPhase.INITIAL, true);
+            space.onPacketSent(i, frames,  true);
             Thread.sleep(10 + i * 10); // Increasing delays
 
             List<PacketNumberSpace.AckRange> ackRanges = Arrays.asList(
@@ -258,7 +258,7 @@ class PacketNumberSpaceTest {
 
     @Test
     void testHasUnackedPackets_Empty() {
-        PacketNumberSpace space = new PacketNumberSpace("Test");
+        PacketNumberSpace space = new PacketNumberSpace(PacketNumberSpace.PacketPhase.INITIAL);
 
         assertFalse(space.hasUnackedPackets());
         assertEquals(0, space.getUnackedPacketCount());
@@ -266,11 +266,11 @@ class PacketNumberSpaceTest {
 
     @Test
     void testAckEliciting_NonAckElicitingPackets() {
-        PacketNumberSpace space = new PacketNumberSpace("Test");
+        PacketNumberSpace space = new PacketNumberSpace(PacketNumberSpace.PacketPhase.INITIAL);
         ByteBuffer frames = ByteBuffer.wrap(new byte[10]);
 
         // Send non-ack-eliciting packet (e.g., ACK-only packet)
-        space.onPacketSent(0, frames, PacketNumberSpace.PacketPhase.APPLICATION, false);
+        space.onPacketSent(0, frames, false);
 
         // ACK it
         List<PacketNumberSpace.AckRange> ackRanges = Arrays.asList(

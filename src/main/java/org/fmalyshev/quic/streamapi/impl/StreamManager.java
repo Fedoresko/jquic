@@ -1,6 +1,8 @@
 package org.fmalyshev.quic.streamapi.impl;
 
+import org.fmalyshev.quic.PacketNumberSpace;
 import org.fmalyshev.quic.QuicConnection;
+import org.fmalyshev.quic.QuicVarint;
 import org.fmalyshev.quic.streamapi.*;
 import org.fmalyshev.quic.streamapi.frames.*;
 import org.jspecify.annotations.Nullable;
@@ -12,12 +14,14 @@ import java.nio.ByteBuffer;
 import java.util.*;
 import java.util.function.Consumer;
 
+import static org.fmalyshev.quic.streamapi.impl.StreamFrameProcessor.FRAME_TYPE_STREAM;
+
 /**
  * Manages all streams for a single QUIC connection.
  * Handles stream lifecycle, frame processing, and flow control.
  * Thread-safety: ALL methods are called from worker thread only - no synchronization needed.
  */
-public class StreamManager {
+public class StreamManager implements ConnectionStreamManager {
     public static final int STREAM_FRAME_HEADER_MAX_LEN = 1 + 8 + 8 + 8;
     private static final Logger logger = LoggerFactory.getLogger(StreamManager.class);
 
@@ -27,6 +31,12 @@ public class StreamManager {
     // Stream management
     private final Map<Long, StreamState> streams = new HashMap<>();
     private final Map<Long, StreamBuffer> streamBuffers = new HashMap<>();
+    private final StreamWorker streamWorker;
+
+    @Override
+    public void onStreamFrame(StreamFrame frame) {
+        streamWorker.enqueueFrame(this, frame);
+    }
 
     record FrameRecord (long streamId, boolean fin, ByteBuffer data) {};
     private final Deque<FrameRecord> outbox = new ArrayDeque<>();
@@ -49,13 +59,15 @@ public class StreamManager {
 
     public StreamManager(QuicConnection connection,
                         QuicApplicationProtocolConnectionHandler handler,
-                        QuicApplicationProtocol protocol) {
+                        QuicApplicationProtocol protocol,
+                        StreamWorker streamWorker) {
         this.connection = connection;
         this.handler = handler;
         this.maxBidirectionalStreams = protocol.getMaxBidirectionalStreamsPerConnection();
         this.maxUnidirectionalStreams = protocol.getMaxUnidirectionalStreamsPerConnection();
         this.maxStreamData = protocol.getMaxStreamData();
         this.maxData = protocol.getMaxData();
+        this.streamWorker = streamWorker;
     }
 
     /**
@@ -104,7 +116,7 @@ public class StreamManager {
     /**
      * Processes a frame. Called by worker thread only.
      */
-    public boolean processFrame(StreamFrameListener.StreamFrame frame) throws IOException, QuicStreamException {
+    public boolean processFrame(StreamFrame frame) throws IOException, QuicStreamException {
         FrameRecord record;
         while ((record = outbox.poll()) != null) {
             if (!trySendData(record.streamId, record.fin, record.data, streams.get(record.streamId))) {
@@ -437,23 +449,37 @@ public class StreamManager {
         return maxData;
     }
 
+    public long getConnectionId() {
+        return connection.getConnectionId();
+    }
+
     public void addReceivedBytes(int bytes) {
         totalReceivedBytes += bytes;
     }
 
-    /**
-     * Called when a packet is acknowledged (from worker thread).
-     * Parses STREAM frames from the unencrypted payload and updates flow control.
-     */
-    public void onAckReceived(long streamId, long dataLength) {
-        // Update stream flow control
-        StreamState state = streams.get(streamId);
-        if (state != null) {
-            state.onBytesAcknowledged(dataLength);
-            totalInFlightBytes -= dataLength;
+    @Override
+    public void onPacketAcknowledged(long packetNumber, PacketNumberSpace.SentPacket packet) {
+        ByteBuffer payload = packet.getUnencryptedPayload().duplicate();
+        while (payload.hasRemaining()) {
+            byte ackedFrameType = payload.get();
+            // Check if this is a STREAM frame (0x08-0x0f)
+            if (ackedFrameType >= 0x08 &&  ackedFrameType <= 0x0f) {
+                boolean hasLength = (ackedFrameType & 0x02) != 0;
+                long streamId = QuicVarint.read(payload);
+                long length = (hasLength) ? QuicVarint.read(payload) : payload.remaining();
 
-            logger.debug("Packet ACKed: stream {} {} bytes acknowledged, stream in-flight={}, conn in-flight={}",
-                       streamId, dataLength, state.getInFlightBytes(), totalInFlightBytes);
+                // Update stream flow control
+                StreamState state = streams.get(streamId);
+                if (state != null) {
+                    state.onBytesAcknowledged(length);
+                    totalInFlightBytes -= length;
+
+                    logger.debug("Packet ACKed: stream {} {} bytes acknowledged, stream in-flight={}, conn in-flight={}",
+                            streamId, length, state.getInFlightBytes(), totalInFlightBytes);
+                }
+
+                payload.position(Math.min(payload.limit(), payload.position() + (int) length));
+            }
         }
     }
 

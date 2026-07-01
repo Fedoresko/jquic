@@ -1,8 +1,6 @@
 package org.fmalyshev.quic.streamapi.frames;
 
-import org.fmalyshev.quic.streamapi.StreamFrameListener;
-
-public class ResetStreamFrameData implements StreamFrameListener.StreamFrame {
+public class ResetStreamFrameData implements StreamFrame {
     public final long streamId;
     public final long errorCode;
     public final long finalSize;

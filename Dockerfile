@@ -32,7 +32,11 @@ RUN mkdir -p /var/run/vsftpd/empty && \
     echo "local_umask=022" >> /etc/vsftpd.conf && \
     echo "chroot_local_user=YES" >> /etc/vsftpd.conf && \
     echo "allow_writeable_chroot=YES" >> /etc/vsftpd.conf && \
-    echo "seccomp_sandbox=NO" >> /etc/vsftpd.conf
+    echo "seccomp_sandbox=NO" >> /etc/vsftpd.conf && \
+    echo "pasv_enable=YES" >> /etc/vsftpd.conf && \
+    echo "pasv_address=127.0.0.1" >> /etc/vsftpd.conf && \
+    echo "pasv_min_port=30000" >> /etc/vsftpd.conf && \
+    echo "pasv_max_port=30000" >> /etc/vsftpd.conf
 
 RUN useradd -m -s /bin/bash fedoresko && \
     echo "fedoresko:colibri" | chpasswd
@@ -64,7 +68,7 @@ RUN chown -R fedoresko:fedoresko /app/server.p12
 
 
 # Explicitly document the container's open network ports
-EXPOSE 8080 433 4433 21 20 40000-40010
+EXPOSE 8080 433 4433 21 20 30000-30010
 
 # Create a startup script to run both vsftpd and your Java app concurrently
 RUN echo '#!/bin/sh\n\
@@ -76,25 +80,34 @@ echo "Starting compiled BPF C program with root privileges..."\n\
 strace -e bpf /app/loader &&\n\
 \n\
 # Start the Java application in the background and capture its PID\n\
-su - fedoresko -c "cd /app && java -XX:+UnlockDiagnosticVMOptions -XX:+DebugNonSafepoints -Djava.net.preferIPv4Stack=true --add-opens java.base/sun.nio.ch=ALL-UNNAMED --add-opens java.base/java.io=ALL-UNNAMED -jar jquic.jar" &\n\
+su - fedoresko -c "cd /app && java -XX:+UnlockDiagnosticVMOptions -XX:+DebugNonSafepoints -Djava.net.preferIPv4Stack=true\
+   --add-opens java.base/sun.nio.ch=ALL-UNNAMED --add-opens java.base/java.io=ALL-UNNAMED -Dlog.level=WARN\
+   -agentpath:/opt/async-profiler/lib/libasyncProfiler.so=start,event=cpu,alloc=2m,loop=1m,file=/home/fedoresko/profile-%t.jfr\
+   -jar jquic.jar" &\n\
 JAVA_PID=$!\n\
 \n\
-## Launch the looping profiler script as a parallel background task\n\
-#(\n\
-#  echo "Waiting 15 seconds for Java app to warm up..."\n\
-#  sleep 5\n\
-#  lsof -i &\n\
-#  echo "UDP 6..."\n\
-#  cat /proc/net/udp6 &\n\
-#  echo "UDP..."\n\
-#  cat /proc/net/udp &\n\
-#  \n\
-#  # Loop infinitely as long as the Java process remains active\n\
-#  echo "Starting a 60-second profiling cycle on PID $JAVA_PID..."\n\
-#  /opt/async-profiler/bin/asprof --loop 1h -f /app/flamegraph%n.html $JAVA_PID &\n\
-#) &\n\
+# Launch the looping profiler script as a parallel background task\n\
+echo "Waiting 5 seconds for Java app to warm up..."\n\
+sleep 5\n\
+\n\
+# Loop infinitely as long as the Java process remains active\n\
 while (true) do\n\
   sleep 5\n\
+  find /home/fedoresko -type f -name "*.jfr" -printf "%T@ %p\n" | \
+                                                sort -rn | \
+                                                awk '\''{sub(/^[^ ]+ /, ""); print}'\'' | \
+                                                tail -n +2 | while read -r FILE; do\n\
+      echo "Processing: $FILE"\n\
+      BASE_NAME="${FILE%.*}"\n\
+      OUTPUT_FILE="${BASE_NAME}.html"\n\
+      /opt/async-profiler/bin/jfrconv -o heatmap "$FILE" "$OUTPUT_FILE"\n\
+      if [ $? -eq 0 ]; then\n\
+          echo "Success. Deleting original file..."\n\
+          rm "$FILE"\n\
+      else\n\
+          echo "Error: Conversion failed for $FILE. Keeping original file."\n\
+      fi\n\
+  done\n\
 done\n\
 \n\
 # Keep the Docker container running by tying it to the main Java process\n\

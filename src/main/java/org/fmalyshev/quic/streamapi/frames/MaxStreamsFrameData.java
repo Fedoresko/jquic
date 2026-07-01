@@ -1,8 +1,6 @@
 package org.fmalyshev.quic.streamapi.frames;
 
-import org.fmalyshev.quic.streamapi.StreamFrameListener;
-
-public class MaxStreamsFrameData implements StreamFrameListener.StreamFrame {
+public class MaxStreamsFrameData implements StreamFrame {
     public final long maximumStreams;
     public final boolean bidirectional;
 

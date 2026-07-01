@@ -717,16 +717,12 @@ public class QuicCrypto {
                 metadata.serverEphemeralPublicKey = kpgResult.serverPublicKeyRaw;
                 metadata.selectedKeyScheme = selectionResult.chosenGroupId;
                 byte[] sharedSecret = kpgResult.sharedSecret;
-                System.out.println("Early secret: "+ HexFormat.of().formatHex(earlySecret));
 
                 // ── Step 7: Derive Handshake Secret and traffic secrets.
                 byte[] derivedFromEarly = hkdfExpandLabel(earlySecret, "derived", sha256(new byte[0]), 32);
 
-                System.out.println("derivedFromEarly: "+ HexFormat.of().formatHex(derivedFromEarly));
                 byte[] handshakeSecret  = hkdfExtract(derivedFromEarly, sharedSecret);
                 metadata.handshakeSecretBytes = handshakeSecret;
-
-                System.out.println("handshakeSecret: "+ HexFormat.of().formatHex(handshakeSecret));
 
                 logger.debug("Handshake traffic secrets derived");
             }
@@ -748,8 +744,6 @@ public class QuicCrypto {
 
         metadata.serverHandshakeTrafficSecret = serverHandshakeTrafficSecret;
         metadata.clientHandshakeTrafficSecret = clientHandshakeTrafficSecret;
-
-        System.out.println("serverHandshakeTrafficSecret: " + HexFormat.of().formatHex(serverHandshakeTrafficSecret) );
 
         metadata.serverHandshakeKeys = new PacketProtectionKeysWithHP(deriveKey(serverHandshakeTrafficSecret),
                 deriveIv(serverHandshakeTrafficSecret), deriveHp(serverHandshakeTrafficSecret));
@@ -998,7 +992,7 @@ public class QuicCrypto {
                     metadata.handshakeSecretBytes, "derived", sha256(new byte[0]), 32);
             byte[] masterSecret = hkdfExtract(derivedFromHandshake, new byte[32]);
 
-            logger.warn("App transcript master sec {}", HexFormat.of().formatHex(masterSecret));
+            logger.debug("App transcript master sec {}", HexFormat.of().formatHex(masterSecret));
 
             // Snapshot the current transcript hash (all messages up to client Finished)
             byte[] context = metadata.transcriptHash();
@@ -1006,8 +1000,8 @@ public class QuicCrypto {
             metadata.clientApplicationTrafficSecret = hkdfExpandLabel(
                     masterSecret, "c ap traffic", context, 32);
 
-            logger.warn("App transcript hash {}", HexFormat.of().formatHex(context));
-            logger.warn("App traffic sec {}", HexFormat.of().formatHex(metadata.clientApplicationTrafficSecret));
+            logger.debug("App transcript hash {}", HexFormat.of().formatHex(context));
+            logger.debug("App traffic sec {}", HexFormat.of().formatHex(metadata.clientApplicationTrafficSecret));
 
             metadata.serverApplicationTrafficSecret = hkdfExpandLabel(
                     masterSecret, "s ap traffic", context, 32);
@@ -1019,12 +1013,12 @@ public class QuicCrypto {
             byte[] clientApplicationIv = deriveIv(metadata.clientApplicationTrafficSecret);
             byte[] serverApplicationIv = deriveIv(metadata.serverApplicationTrafficSecret);
 
-            logger.warn("App client sec {}", HexFormat.of().formatHex(clientApplicationSecret.getEncoded()));
-            logger.warn("App client IV {}", HexFormat.of().formatHex(clientApplicationIv));
-            logger.warn("App client HP {}", HexFormat.of().formatHex(clientApplicationHpKey));
-            logger.warn("App sever sec {}", HexFormat.of().formatHex(serverApplicationSecret.getEncoded()));
-            logger.warn("App sever IV {}", HexFormat.of().formatHex(serverApplicationIv));
-            logger.warn("App sever HP {}", HexFormat.of().formatHex(serverApplicationHpKey));
+            logger.debug("App client sec {}", HexFormat.of().formatHex(clientApplicationSecret.getEncoded()));
+            logger.debug("App client IV {}", HexFormat.of().formatHex(clientApplicationIv));
+            logger.debug("App client HP {}", HexFormat.of().formatHex(clientApplicationHpKey));
+            logger.debug("App sever sec {}", HexFormat.of().formatHex(serverApplicationSecret.getEncoded()));
+            logger.debug("App sever IV {}", HexFormat.of().formatHex(serverApplicationIv));
+            logger.debug("App sever HP {}", HexFormat.of().formatHex(serverApplicationHpKey));
 
             metadata.serverApplicationHeaderProtection = serverApplicationHpKey;
             metadata.clientApplicationHeaderProtection = clientApplicationHpKey;

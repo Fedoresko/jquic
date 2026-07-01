@@ -8,6 +8,7 @@ import org.jctools.queues.SpscLinkedQueue;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.DatagramChannel;
@@ -37,6 +38,18 @@ class SelectorThread implements Runnable {
     private long lastTimeoutCheck = System.currentTimeMillis();
     private static final long TIMEOUT_CHECK_INTERVAL_MS = 1000; // Check every second
 
+    public class WriteBuffer {
+        private final ByteBuffer buffer = ByteBuffer.allocateDirect(65535);
+        private  SocketAddress sender;
+
+
+
+        public void send() throws IOException {
+            channel.send(buffer, sender);
+            buffer.clear();
+        }
+    }
+
     /**
      * Encapsulates a packet with its sender address for forwarding between threads.
      */
@@ -51,7 +64,6 @@ class SelectorThread implements Runnable {
     }
 
     public SelectorThread(int threadId, DatagramChannel channel, MpscArrayQueue<ByteBuffer> bufferReturnPool,
-
                          ConcurrentHashMap<Long, Integer> cidToSelectorMap) {
         this.threadId = threadId;
         this.channel = channel;
@@ -301,8 +313,8 @@ class SelectorThread implements Runnable {
             // Remove from heap
             QuicConnection connection = timeoutHeap.poll();
 
-            log.warn(logColor(), "Selector-{}: Connection CID: {} timed out at {}, evicting",
-                       threadId, connection.getConnectionId(), connection.getTimeoutTimestamp());
+            log.warn(logColor(), "Selector-{}: Connection CID: {} timed out at {}, evicting (now is: {})",
+                       threadId, connection.getConnectionId(), connection.getTimeoutTimestamp(), now);
             evictConnection(connection.getConnectionId());
             evictedCount++;
         }

@@ -2,9 +2,9 @@ package org.fmalyshev.quic;
 
 import ch.qos.logback.core.pattern.color.ANSIConstants;
 import org.fmalyshev.LogTool;
-import org.fmalyshev.quic.streamapi.StreamFrameListener;
+import org.fmalyshev.quic.streamapi.ConnectionStreamManager;
 import org.fmalyshev.quic.streamapi.frames.*;
-import org.fmalyshev.quic.streamapi.impl.*;
+import org.fmalyshev.quic.streamapi.impl.QuicStreamEngineImpl;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -56,6 +56,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
     private QuicCrypto.TlsMetadata tlsMetadata = new QuicCrypto.TlsMetadata();
     private final long creationTime;
     private int timeoutHeapIndex = -1;
+    ConnectionStreamManager connectionStreamManager;
 
     // ALPN - negotiated application protocol (RFC 9001 Section 8.1)
     private String negotiatedProtocol = null;
@@ -65,13 +66,9 @@ public class QuicConnection implements TimeoutHeap.Entry {
     private volatile long timeoutTimestamp;
 
     // Packet number spaces (RFC 9000 Section 12.3)
-    private final PacketNumberSpace initialSpace = new PacketNumberSpace("Initial");
-    private final PacketNumberSpace handshakeSpace = new PacketNumberSpace("Handshake");
-    private final PacketNumberSpace applicationSpace = new PacketNumberSpace("Application");
-
-    // Stream frame delivery
-    private StreamFrameCallbackListener streamFrameCallbackListener = null;
-    private StreamFrameListener streamFrameListener = null;
+    private final PacketNumberSpace initialSpace = new PacketNumberSpace(PacketNumberSpace.PacketPhase.INITIAL);
+    private final PacketNumberSpace handshakeSpace = new PacketNumberSpace(PacketNumberSpace.PacketPhase.HANDSHAKE);
+    private final PacketNumberSpace applicationSpace = new PacketNumberSpace(PacketNumberSpace.PacketPhase.APPLICATION);
 
     /** Maximum number of early 1-RTT packets buffered before ESTABLISHED. */
     private static final int MAX_EARLY_1RTT_QUEUE = 32;
@@ -109,11 +106,6 @@ public class QuicConnection implements TimeoutHeap.Entry {
         }
 
         sendApplicationPacket(frame);
-    }
-
-    public void setStreamFrameListener(StreamFrameListener listener) {
-        this.streamFrameListener = listener;
-        this.streamFrameCallbackListener = new StreamFrameCallbackListener(listener, connectionId);
     }
 
     /**
@@ -158,6 +150,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
         this.state = State.INITIAL;
         this.creationTime = System.currentTimeMillis();
         this.timeoutTimestamp = creationTime + idleTimeoutMs;
+        logger.info("Connection {} initial tiemout set to {}", connectionId, timeoutTimestamp);
     }
 
     public void setTimeoutHeapIndex(int index) {
@@ -175,7 +168,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
      */
     public void updateTimeout() {
         this.timeoutTimestamp = System.currentTimeMillis() + idleTimeoutMs;
-        logger.info("Connection {} time out updated to {}", connectionId, timeoutTimestamp);
+        logger.info("Connection {} tiemout updated to {}", connectionId, timeoutTimestamp);
     }
 
     /**
@@ -222,7 +215,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
                 QuicStreamEngineImpl engine =
                         QuicEngine.getStreamEngineInternal();
                 if (engine != null) {
-                    engine.createConnection(connectionId, this, negotiatedProtocol);
+                    connectionStreamManager = engine.createConnection(connectionId, this, negotiatedProtocol);
                     logger.info("Registered connection {} with stream engine (protocol: {})",
                             connectionId, negotiatedProtocol);
                 } else {
@@ -545,8 +538,15 @@ public class QuicConnection implements TimeoutHeap.Entry {
     public void process1RttPacket(ByteBuffer packet) {
         logger.debug("Processing 1-RTT packet for CID: {} in state: {}", connectionId, state);
 
-        // RFC 9000: 1-RTT packets are only valid in ESTABLISHED or CLOSING states
-        if (state != State.ESTABLISHED && state != State.CLOSING) {
+        // If in CLOSING state do nothing
+        if (state == State.CLOSING) {
+            logger.debug("Processing 1-RTT packet in CLOSING state for CID: {}", connectionId);
+            packet.position(packet.limit());
+            return;
+        }
+
+        // RFC 9000: 1-RTT packets are only valid in the ESTABLISHED state
+        if (state != State.ESTABLISHED) {
             logger.warn("Received 1-RTT packet for CID: {} in invalid state: {}, enqueueing for later processing",
                     connectionId, state);
 
@@ -556,15 +556,6 @@ public class QuicConnection implements TimeoutHeap.Entry {
             enqueueEarlyOneRtt(snapshot);
 
             packet.position(packet.limit());
-            return;
-        }
-
-        // If in CLOSING state, only process CONNECTION_CLOSE frames (done below)
-        if (state == State.CLOSING) {
-            logger.debug("Processing 1-RTT packet in CLOSING state for CID: {}", connectionId);
-            SelectorThread.skipPacket(packet);
-            packet.position(packet.limit());
-
             return;
         }
 
@@ -644,8 +635,8 @@ public class QuicConnection implements TimeoutHeap.Entry {
                 plaintext.get(data);
                 log.info(ANSIConstants.RED_FG,"STREAM frame received. Stream id {}, data: {}, str: {}", streamId, HexFormat.of().formatHex(data), new String(data));
 
-                if (streamFrameListener != null) {
-                    streamFrameListener.onStreamFrame(connectionId, new StreamFrameData(streamId, offset, ByteBuffer.wrap(data), fin));
+                if (connectionStreamManager != null) {
+                    connectionStreamManager.onStreamFrame(new StreamFrameData(streamId, offset, ByteBuffer.wrap(data), fin));
                 } else {
                     logger.warn("No stream frame listener set, dropping frame type 0x{}", String.format("%02x", frameType));
                 }
@@ -657,8 +648,8 @@ public class QuicConnection implements TimeoutHeap.Entry {
                 long finalSize = QuicVarint.read(plaintext);
                 logger.info("Received RESET_STREAM CID={} streamId={} errorCode={} finalSize={}",
                         connectionId, streamId, errorCode, finalSize);
-                if (streamFrameListener != null) {
-                    streamFrameListener.onStreamFrame(connectionId, new ResetStreamFrameData(streamId, errorCode, finalSize));
+                if (connectionStreamManager != null) {
+                    connectionStreamManager.onStreamFrame(new ResetStreamFrameData(streamId, errorCode, finalSize));
                 }
                 needsAck = true;
             } else if (frameType == FRAME_TYPE_STOP_SENDING) { // STOP_SENDING
@@ -666,51 +657,51 @@ public class QuicConnection implements TimeoutHeap.Entry {
                 long errorCode = QuicVarint.read(plaintext);
                 logger.info("Received STOP_SENDING CID={} streamId={} errorCode={}",
                         connectionId, streamId, errorCode);
-                if (streamFrameListener != null) {
-                    streamFrameListener.onStreamFrame(connectionId, new StopSendingFrameData(streamId, errorCode));
+                if (connectionStreamManager != null) {
+                    connectionStreamManager.onStreamFrame(new StopSendingFrameData(streamId, errorCode));
                 }
                 needsAck = true;
             } else if (frameType == FRAME_TYPE_MAX_STREAM_DATA) { //MAX_STREAM_DATA
                 long streamId = QuicVarint.read(plaintext);
                 long maxStramData = QuicVarint.read(plaintext);
                 logger.info("Received MAX_STREAM_DATA {} {}", streamId, maxStramData);
-                if (streamFrameListener != null) {
-                    streamFrameListener.onStreamFrame(connectionId, new MaxStreamDataFrameData(streamId, maxStramData));
+                if (connectionStreamManager != null) {
+                    connectionStreamManager.onStreamFrame(new MaxStreamDataFrameData(streamId, maxStramData));
                 }
             } else if (frameType == FRAME_TYPE_MAX_STREAMS_BIDI) { //MAX_STREAMS (Bidirectional)
                 long maxStreams = QuicVarint.read(plaintext);
                 logger.info("Received MAX_STREAMS (bidirectional) CID={} max={}", connectionId, maxStreams);
-                if (streamFrameListener != null) {
-                    streamFrameListener.onStreamFrame(connectionId, new MaxStreamsFrameData(maxStreams, true));
+                if (connectionStreamManager != null) {
+                    connectionStreamManager.onStreamFrame(new MaxStreamsFrameData(maxStreams, true));
                 }
                 needsAck = true;
             } else if (frameType == FRAME_TYPE_MAX_STREAMS_UNI) { //MAX_STREAMS (Unidirectional)
                 long maxStreams = QuicVarint.read(plaintext);
                 logger.info("Received MAX_STREAMS (unidirectional) CID={} max={}", connectionId, maxStreams);
-                if (streamFrameListener != null) {
-                    streamFrameListener.onStreamFrame(connectionId, new MaxStreamsFrameData(maxStreams, false));
+                if (connectionStreamManager != null) {
+                    connectionStreamManager.onStreamFrame(new MaxStreamsFrameData(maxStreams, false));
                 }
                 needsAck = true;
             } else if (frameType == FRAME_TYPE_STREAM_DATA_BLOCKED) { //STREAM_DATA_BLOCKED
                 long streamId  = QuicVarint.read(plaintext);
                 long dataLimit = QuicVarint.read(plaintext);
                 logger.info("Received STREAM_DATA_BLOCKED CID={} streamId={} limit={}", connectionId, streamId, dataLimit);
-                if (streamFrameListener != null) {
-                    streamFrameListener.onStreamFrame(connectionId, new StreamDataBlockedFrameData(streamId, dataLimit));
+                if (connectionStreamManager != null) {
+                    connectionStreamManager.onStreamFrame(new StreamDataBlockedFrameData(streamId, dataLimit));
                 }
                 needsAck = true;
             } else if (frameType == FRAME_TYPE_STREAMS_BLOCKED_BIDI) { //STREAMS_BLOCKED (Bidirectional)
                 long streamLimit = QuicVarint.read(plaintext);
                 logger.info("Received STREAMS_BLOCKED (bidirectional) CID={} limit={}", connectionId, streamLimit);
-                if (streamFrameListener != null) {
-                    streamFrameListener.onStreamFrame(connectionId, new StreamsBlockedFrameData(streamLimit, true));
+                if (connectionStreamManager != null) {
+                    connectionStreamManager.onStreamFrame(new StreamsBlockedFrameData(streamLimit, true));
                 }
                 needsAck = true;
             } else if (frameType == FRAME_TYPE_STREAMS_BLOCKED_UNI) { //STREAMS_BLOCKED (Unidirectional)
                 long streamLimit = QuicVarint.read(plaintext);
                 logger.info("Received STREAMS_BLOCKED (unidirectional) CID={} limit={}", connectionId, streamLimit);
-                if (streamFrameListener != null) {
-                    streamFrameListener.onStreamFrame(connectionId, new StreamsBlockedFrameData(streamLimit, false));
+                if (connectionStreamManager != null) {
+                    connectionStreamManager.onStreamFrame(new StreamsBlockedFrameData(streamLimit, false));
                 }
                 needsAck = true;
             } else if (frameType == 0x06) { // CRYPTO
@@ -1056,7 +1047,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
         logger.debug("Sending {} packet {}: {} bytes", phase, packetNumber, completePacket.remaining());
 
         // Track sent packet: store UNENCRYPTED payload for retransmission
-        space.onPacketSent(packetNumber, payload, PacketNumberSpace.PacketPhase.INITIAL, true);
+        space.onPacketSent(packetNumber, payload, true);
 
         outboundQueue.add(completePacket);
     }
@@ -1257,7 +1248,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
             long ce   = QuicVarint.read(buffer); // 3. Congestion Experienced Packets
         }
 
-        space.onAckReceived(largestAcked, ackRanges, ackDelay, streamFrameCallbackListener);
+        space.onAckReceived(largestAcked, ackRanges, ackDelay, connectionStreamManager);
 
         retransmitLostPackets(space);
     }

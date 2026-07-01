@@ -24,10 +24,6 @@ static int prog_fd = -1;
 static int server_fd = -1;
 static volatile sig_atomic_t running = 1;
 
-static int my_libbpf_print_fn(enum libbpf_print_level level, const char *format, va_list args) {
-    return vfprintf(stderr, format, args);
-}
-
 int load_bpf_program() {
     // Ensure BPF filesystem is mounted
     if (system("mount | grep -q /sys/fs/bpf || mount -t bpf bpf /sys/fs/bpf") != 0) {
@@ -38,8 +34,6 @@ int load_bpf_program() {
     unlink("/sys/fs/bpf/quic_sock_map");
     unlink("/sys/fs/bpf/sockarray_map");
     unlink("/sys/fs/bpf/quic_steer_prog");
-
-    libbpf_set_print(my_libbpf_print_fn);
 
     // Load ELF object
     obj = bpf_object__open_file("quic_router.bpf.o", NULL);
@@ -102,7 +96,7 @@ int load_bpf_program() {
 int main() {
     // Check if running as root
     if (geteuid() != 0) {
-        fprintf(stderr, "This daemon must run as root\n");
+        fprintf(stderr, "This tool must run as root\n");
         return 1;
     }
 

@@ -1,8 +1,6 @@
 package org.fmalyshev.quic.streamapi.frames;
 
-import org.fmalyshev.quic.streamapi.StreamFrameListener;
-
-public class StopSendingFrameData implements StreamFrameListener.StreamFrame {
+public class StopSendingFrameData implements StreamFrame {
     public final long streamId;
     public final long errorCode;
 

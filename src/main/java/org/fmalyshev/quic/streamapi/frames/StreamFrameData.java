@@ -1,10 +1,8 @@
 package org.fmalyshev.quic.streamapi.frames;
 
-import org.fmalyshev.quic.streamapi.StreamFrameListener;
-
 import java.nio.ByteBuffer;
 
-public class StreamFrameData implements StreamFrameListener.StreamFrame {
+public class StreamFrameData implements StreamFrame {
     public final long streamId;
     public final long offset;
     public final ByteBuffer data;

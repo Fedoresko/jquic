@@ -1,14 +1,13 @@
 package org.fmalyshev.quic.streamapi.impl;
 
 import org.fmalyshev.quic.QuicConnection;
-import org.fmalyshev.quic.streamapi.StreamFrameListener;
+import org.fmalyshev.quic.streamapi.ConnectionStreamManager;
 import org.fmalyshev.quic.streamapi.QuicApplicationProtocol;
 import org.fmalyshev.quic.streamapi.QuicStreamEngine;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -22,9 +21,7 @@ public class QuicStreamEngineImpl implements QuicStreamEngine {
     private static final Logger logger = LoggerFactory.getLogger(QuicStreamEngineImpl.class);
 
     private final StreamWorkerPool workerPool;
-    private StreamFrameListener[] workerListeners;
     private final int workerCount;
-    private final ConcurrentHashMap<Long, StreamManager> connectionManagers = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, QuicApplicationProtocol> protocols = new ConcurrentHashMap<>();
 
     /**
@@ -43,7 +40,6 @@ public class QuicStreamEngineImpl implements QuicStreamEngine {
      */
     public void start() {
         workerPool.start();
-        this.workerListeners = workerPool.getListeners();
         logger.info("QuicStreamEngineInternal started");
     }
 
@@ -52,7 +48,6 @@ public class QuicStreamEngineImpl implements QuicStreamEngine {
      */
     public void shutdown() {
         workerPool.shutdown();
-        connectionManagers.clear();
         logger.info("QuicStreamEngineInternal shut down");
     }
 
@@ -64,31 +59,30 @@ public class QuicStreamEngineImpl implements QuicStreamEngine {
      * @param connection   QuicConnection instance
      * @param protocolName Application protocol name
      */
-    public void createConnection(long connectionId, QuicConnection connection, String protocolName) {
+    public ConnectionStreamManager createConnection(long connectionId, QuicConnection connection, String protocolName) {
         QuicApplicationProtocol protocol = protocols.get(protocolName);
         if (protocol == null) {
             logger.error("Protocol {} not registered", protocolName);
-            return;
+            return null;
         }
 
         // Create connection handler
         var handler = protocol.getConnectionHandler().apply(connectionId);
 
+        // Register the appropriate worker listener based on consistent hashing
+        int workerIndex = getWorkerIndex(connectionId);
+
         // Create stream manager - always server-side (isServer = true)
         StreamManager manager = new StreamManager(
                 connection,
                 handler,
-                protocol
+                protocol,
+                workerPool.getStreamWorker(workerIndex)
         );
 
-        connectionManagers.put(connectionId, manager);
-        workerPool.assignConnection(connectionId, manager);
-
-        // Register the appropriate worker listener based on consistent hashing
-        int workerIndex = getWorkerIndex(connectionId);
-        connection.setStreamFrameListener(workerListeners[workerIndex]);
-
         logger.info("Created connection {} with protocol {} (worker {})", connectionId, protocolName, workerIndex);
+
+        return manager;
     }
 
     /**
@@ -107,19 +101,13 @@ public class QuicStreamEngineImpl implements QuicStreamEngine {
      * @param reason       Optional reason
      */
     public void removeConnection(long connectionId, @Nullable Long errorCode, @Nullable String reason) {
-        StreamManager manager = connectionManagers.remove(connectionId);
-
-        if (manager != null) {
-            workerPool.removeConnection(connectionId);
-
-            // Notify protocols - this runs on selector thread, which is acceptable
-            // as it's just a notification callback
-            for (QuicApplicationProtocol protocol : protocols.values()) {
-                protocol.onConnectionClose(connectionId, errorCode, reason);
-            }
-
-            logger.info("Removed connection {}", connectionId);
+        // Notify protocols - this runs on selector thread, which is acceptable
+        // as it's just a notification callback
+        for (QuicApplicationProtocol protocol : protocols.values()) {
+            protocol.onConnectionClose(connectionId, errorCode, reason);
         }
+
+        logger.info("Removed connection {}", connectionId);
     }
 
     @Override

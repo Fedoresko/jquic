@@ -1,7 +1,6 @@
 package org.fmalyshev.quic.streamapi.impl;
 
 import org.fmalyshev.quic.QuicVarint;
-import org.fmalyshev.quic.streamapi.StreamFrameListener;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

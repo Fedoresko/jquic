@@ -1,8 +1,6 @@
 package org.fmalyshev.quic.streamapi.frames;
 
-import org.fmalyshev.quic.streamapi.StreamFrameListener;
-
-public class StreamsBlockedFrameData implements StreamFrameListener.StreamFrame {
+public class StreamsBlockedFrameData implements StreamFrame {
     public final long limit;
     public final boolean bidirectional;
 

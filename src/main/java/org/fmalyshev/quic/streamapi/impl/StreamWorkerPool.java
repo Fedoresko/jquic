@@ -1,11 +1,9 @@
 package org.fmalyshev.quic.streamapi.impl;
 
-import org.fmalyshev.quic.streamapi.StreamFrameListener;
-import org.jctools.queues.SpscArrayQueue;
+import org.fmalyshev.quic.streamapi.frames.StreamFrame;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -80,230 +78,21 @@ public class StreamWorkerPool {
         }
     }
 
-    /**
-     * Assigns a connection to a worker using consistent hashing.
-     * 
-     * @param connectionId Connection ID
-     * @param manager StreamManager for this connection
-     */
-    public void assignConnection(long connectionId, StreamManager manager) {
-        int workerIndex = getWorkerIndex(connectionId);
-        workers[workerIndex].addConnection(connectionId, manager);
-        logger.debug("Assigned connection {} to worker {}", connectionId, workerIndex);
-    }
-
-    /**
-     * Removes a connection from its assigned worker.
-     * 
-     * @param connectionId Connection ID to remove
-     */
-    public void removeConnection(long connectionId) {
-        int workerIndex = getWorkerIndex(connectionId);
-        workers[workerIndex].removeConnection(connectionId);
-        logger.debug("Removed connection {} from worker {}", connectionId, workerIndex);
-    }
-
-    /**
-     * Returns an array of StreamFrameListener, one per worker.
-     * Each listener forwards frames to its worker using the worker's queue.
-     * Selector threads can directly call listeners[hash(connectionId) % workerCount].
-     */
-    public StreamFrameListener[] getListeners() {
-        StreamFrameListener[] listeners = new StreamFrameListener[workerCount];
-        for (int i = 0; i < workerCount; i++) {
-            final StreamWorker worker = workers[i];
-            listeners[i] = new StreamFrameListener() {
-                @Override
-                public void onStreamFrame(long connectionId, StreamFrame frame) {
-                    worker.enqueueFrame(connectionId, frame);
-                }
-
-                @Override
-                public void onAckReceived(long connectionId, long streamId, long dataLength) {
-                    worker.enqueueAck(connectionId, streamId, dataLength);
-                }
-            };
-        }
-        return listeners;
-    }
-
-    /**
-     * Computes worker index for a connection using consistent hashing.
-     */
-    private int getWorkerIndex(long connectionId) {
-        return (int) ((connectionId & 0x7FFFFFFFL) % workerCount);
+    public StreamWorker getStreamWorker(int index) {
+        return workers[index];
     }
 
     /**
      * Frame task for worker processing.
      */
     public static class FrameTask {
-        public final long connectionId;
-        StreamFrameListener.StreamFrame frameData;
+        public final StreamManager manager;
+        StreamFrame frameData;
 
-        public FrameTask(long connectionId, StreamFrameListener.StreamFrame frameData) {
-            this.connectionId = connectionId;
+        public FrameTask(StreamManager manager, StreamFrame frameData) {
+            this.manager = manager;
             this.frameData = frameData;
         }
     }
 
-    /**
-     * ACK task for worker processing.
-     */
-    public static class AckTask {
-        public final long connectionId;
-        public final long streamId;
-        public final long dataLength;
-
-        public AckTask(long connectionId, long streamId, long dataLength) {
-            this.connectionId = connectionId;
-            this.streamId = streamId;
-            this.dataLength = dataLength;
-        }
-    }
-
-    /**
-     * Worker thread that processes frame and ACK tasks.
-     * Only this worker thread accesses its connection map - no synchronization needed.
-     * Uses SPSC queues since consistent hashing ensures single producer (selector thread) per worker.
-     *
-     * <p>Two separate queues are maintained so that ACK processing (which drives flow-control
-     * window updates) is never blocked by a full frame queue. Each queue can be drained
-     * independently, which is the foundation for correct backpressure.</p>
-     */
-    private static class StreamWorker extends Thread {
-        private static final int FRAME_QUEUE_CAPACITY = 65536; // Power of 2 for performance
-        private static final int ACK_QUEUE_CAPACITY   = 16384; // ACKs are smaller and fewer
-
-        private final Map<Long, StreamManager> connections = new java.util.HashMap<>();
-        private final SpscArrayQueue<FrameTask> frameQueue = new SpscArrayQueue<>(FRAME_QUEUE_CAPACITY);
-        private final SpscArrayQueue<AckTask>   ackQueue   = new SpscArrayQueue<>(ACK_QUEUE_CAPACITY);
-        private final AtomicBoolean running = new AtomicBoolean(true);
-
-        public StreamWorker(String name) {
-            super(name);
-            setDaemon(false);
-        }
-
-        public synchronized void addConnection(long connectionId, StreamManager manager) {
-            connections.put(connectionId, manager);
-        }
-
-        public synchronized void removeConnection(long connectionId) {
-            connections.remove(connectionId);
-        }
-
-        /**
-         * Enqueues an ACK task for processing.
-         * IMPORTANT: This method takes ownership of the unencryptedPayload ByteBuffer.
-         * The caller must NOT access or modify the buffer after calling this method.
-         * 
-         * @param connectionId Connection ID
-         */
-        public void enqueueAck(long connectionId, long streamId, long dataLength) {
-            ackQueue.offer(new AckTask(connectionId, streamId, dataLength));
-        }
-
-        /**
-         * Enqueues a frame task for processing.
-         * IMPORTANT: This method takes ownership of the framePayload ByteBuffer.
-         * The caller must NOT access or modify the buffer after calling this method.
-         * 
-         * @param connectionId Connection ID
-         */
-        public void enqueueFrame(long connectionId, StreamFrameListener.StreamFrame frame) {
-            // Rough packet size measurement for speed (frame overhead ~20 bytes)
-            int roughPacketSize = frame.size();
-
-            // Check maxData limit before enqueuing
-            StreamManager manager;
-            synchronized (this) {
-                manager = connections.get(connectionId);
-            }
-
-            if (manager != null) {
-                long totalReceived = manager.getTotalReceivedBytes();
-                int maxData = manager.getMaxData();
-
-                if (totalReceived + roughPacketSize > maxData) {
-                    // Reject frame - exceeds connection maxData limit
-                    logger.warn("Rejecting frame for connection {}: would exceed maxData ({} + {} > {})",
-                               connectionId, totalReceived, roughPacketSize, maxData);
-                    return;
-                }
-
-                // Track received bytes at connection level
-                manager.addReceivedBytes(roughPacketSize);
-            }
-
-            // Transfer ownership of the ByteBuffer to the worker thread via the queue
-            frameQueue.offer(new FrameTask(connectionId, frame));
-        }
-
-        public void shutdown() {
-            running.set(false);
-            interrupt();
-        }
-
-        @Override
-        public void run() {
-            logger.info("Stream worker {} started", getName());
-
-            FrameTask currentFrameTask = null;
-            while (running.get()) {
-                try {
-                    boolean didWork = false;
-
-                    // Drain ACKs first: ACKs carry flow-control window updates and must
-                    // not be blocked by a full frame queue (backpressure correctness).
-                    AckTask ackTask = ackQueue.poll();
-                    if (ackTask != null) {
-                        didWork = true;
-                        StreamManager manager = connections.get(ackTask.connectionId);
-                        if (manager != null) {
-                            try {
-                                // Process ACK - StreamManager handles flow control updates
-                                manager.onAckReceived(ackTask.streamId, ackTask.dataLength);
-                            } catch (Exception e) {
-                                logger.error("Error processing ACK for connection {}", ackTask.connectionId, e);
-                            }
-                        } else {
-                            logger.warn("No manager for connection {} while processing ACK", ackTask.connectionId);
-                        }
-                    }
-
-                    // Then process one frame from the frame queue.
-                    if (currentFrameTask == null) {
-                        currentFrameTask = frameQueue.poll();
-                    }
-                    if (currentFrameTask != null) {
-                        StreamManager manager = connections.get(currentFrameTask.connectionId);
-                        if (manager != null) {
-                            try {
-                                // Process the frame directly - StreamManager handles it
-                                if (manager.processFrame(currentFrameTask.frameData)) {
-                                    currentFrameTask = null;
-                                    didWork = true;
-                                }
-                            } catch (Exception e) {
-                                logger.error("Error processing frame for connection {}", currentFrameTask.connectionId, e);
-                            }
-                        } else {
-                            logger.warn("No manager for connection {} while processing frame", currentFrameTask.connectionId);
-                        }
-                    }
-
-                    if (!didWork) {
-                        // Both queues empty - yield to avoid spinning
-                        Thread.yield();
-                    }
-
-                } catch (Exception e) {
-                    logger.error("Error in worker {} processing loop", getName(), e);
-                }
-            }
-
-            logger.info("Stream worker {} stopped", getName());
-        }
-    }
 }
