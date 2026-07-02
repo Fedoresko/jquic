@@ -4,10 +4,12 @@ import org.fmalyshev.quic.QuicConnection;
 import org.fmalyshev.quic.streamapi.ConnectionStreamManager;
 import org.fmalyshev.quic.streamapi.QuicApplicationProtocol;
 import org.fmalyshev.quic.streamapi.QuicStreamEngine;
+import org.jctools.queues.MpmcArrayQueue;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.nio.ByteBuffer;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -23,6 +25,8 @@ public class QuicStreamEngineImpl implements QuicStreamEngine {
     private final StreamWorkerPool workerPool;
     private final int workerCount;
     private final ConcurrentHashMap<String, QuicApplicationProtocol> protocols = new ConcurrentHashMap<>();
+
+    private final MpmcArrayQueue<ByteBuffer> userDataBufferPool = new MpmcArrayQueue<>(1024);
 
     /**
      * Creates a new QuicStreamEngineInternal.
@@ -49,6 +53,18 @@ public class QuicStreamEngineImpl implements QuicStreamEngine {
     public void shutdown() {
         workerPool.shutdown();
         logger.info("QuicStreamEngineInternal shut down");
+    }
+
+    public ByteBuffer requestBuffer()  {
+        ByteBuffer buffer = userDataBufferPool.poll();
+        if (buffer != null) {
+            return buffer.clear();
+        }
+        return ByteBuffer.allocate(4096);
+    }
+
+    public void returnBuffer(ByteBuffer buffer) {
+        userDataBufferPool.add(buffer);
     }
 
     /**

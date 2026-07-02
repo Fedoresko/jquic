@@ -3,7 +3,7 @@ package org.fmalyshev.quic;
 import ch.qos.logback.core.pattern.color.ANSIConstants;
 import org.apache.commons.codec.digest.MurmurHash3;
 import org.fmalyshev.LogTool;
-import org.jctools.queues.MpscArrayQueue;
+import org.fmalyshev.quic.buffers.PoolBuffer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -21,25 +21,21 @@ import static org.fmalyshev.quic.SelectorThread.skipPacket;
 class AcceptorThread implements Runnable {
     private static final Logger logger = LoggerFactory.getLogger(AcceptorThread.class);
     private static final LogTool log = new LogTool(logger);
-    private static final int BUFFER_SIZE = 2048;
     public static final int INITIAL_CONNECTIONS_MAP_SIZE = 1000;
     public static final int MINIMUM_INITIAL_PACKET = 1200;
 
     private final DatagramChannel channel;
     private SelectorThread[] selectors;
     private final ConcurrentHashMap<Long, Integer> cidToSelectorMap;
-    private final MpscArrayQueue<ByteBuffer> bufferPool;
     private final AtomicLong cidGenerator;
 
     record SelectorCID (Integer selectorId, Long cid) {}
     private final LruCache<ByteBuffer, SelectorCID> initialSelectorMap = new LruCache<>(INITIAL_CONNECTIONS_MAP_SIZE);
 
-    public AcceptorThread(DatagramChannel channel, MpscArrayQueue<ByteBuffer> bufferPool,
-                         ConcurrentHashMap<Long, Integer> cidToSelectorMap) {
+    public AcceptorThread(DatagramChannel channel, ConcurrentHashMap<Long, Integer> cidToSelectorMap) {
         this.channel = channel;
         this.selectors = null; // Will be set after selectors are initialized
         this.cidToSelectorMap = cidToSelectorMap;
-        this.bufferPool = bufferPool;
         this.cidGenerator = new AtomicLong(1); // Start from 1
     }
 
@@ -57,19 +53,13 @@ class AcceptorThread implements Runnable {
         try {
             while (!Thread.currentThread().isInterrupted()) {
                 // Get a buffer from pool for this receive operation
-                ByteBuffer buffer = bufferPool.poll();
-                if (buffer == null) {
-                    buffer = ByteBuffer.allocate(BUFFER_SIZE);
-                }
+                PoolBuffer buffer = QuicEngine.getPool().requestReadBuffer();
 
-                buffer.clear();
-                SocketAddress sender = channel.receive(buffer);
-                buffer.flip();
+                SocketAddress sender = channel.receive(buffer.buf());
+                buffer.buf().flip();
 
-                boolean bufferTransferred = false;
-
-                if (buffer.remaining() > 0) {
-                    QuicPacketHeader.PacketSummary packetSummary = QuicPacketHeader.parseSummary(buffer);
+                if (buffer.buf().remaining() > 0) {
+                    QuicPacketHeader.PacketSummary packetSummary = QuicPacketHeader.parseSummary(buffer.buf());
                     if (packetSummary == null) {
                         log.warn(ANSIConstants.RED_FG, "Could not parse paket summary");
                         break; // skip remaining
@@ -81,11 +71,10 @@ class AcceptorThread implements Runnable {
                     if (assignedSelectorId != null) {
                         log.debug(ANSIConstants.RED_FG, "[Acceptor] Packet in initialization mapping  CID: {}, enqueueing for handshake", assignedSelectorId.cid);
 
-                        buffer.rewind();
+                        buffer.buf().rewind();
                         selectors[assignedSelectorId.selectorId].forwardHandshake(
-                                new HandshakeTask(buffer, sender, assignedSelectorId.cid())
+                                new HandshakeTask(buffer.borrow(), sender, assignedSelectorId.cid())
                         );
-                        bufferTransferred = true;
                     } else {
                         long cid = ByteBuffer.wrap(dcid).getLong();
                         // Look up the Selector assignment from our stored mapping
@@ -94,9 +83,9 @@ class AcceptorThread implements Runnable {
                         if (owningSelectorId != null) {
                             log.debug(ANSIConstants.RED_FG, "[Acceptor] Packet in regular mapping  CID: {}, forwarding to selector", owningSelectorId);
                             // Forward this packet to the appropriate Selector
-                            bufferTransferred = forwardToSelector(owningSelectorId, buffer, sender);
+                            forwardToSelector(owningSelectorId, buffer, sender);
                         } else {
-                            if (packetSummary.type() == QuicPacketHeader.PacketType.INITIAL && buffer.remaining() >= MINIMUM_INITIAL_PACKET) {
+                            if (packetSummary.type() == QuicPacketHeader.PacketType.INITIAL && buffer.buf().remaining() >= MINIMUM_INITIAL_PACKET) {
                                 // LONG HEADER: Generate CID and enqueue for handshake processing
                                 long newCid = cidGenerator.getAndIncrement();
                                 log.debug(ANSIConstants.RED_FG, "[Acceptor] First initial packet, allocated CID: {}, enqueueing for handshake", newCid);
@@ -105,40 +94,35 @@ class AcceptorThread implements Runnable {
 
                                 initialSelectorMap.put(ByteBuffer.wrap(dcid), new SelectorCID(selectorId, newCid));
 
-                                buffer.rewind();
+                                buffer.buf().rewind();
                                 selectors[selectorId].forwardHandshake(
-                                        new HandshakeTask(buffer, sender, newCid)
+                                        new HandshakeTask(buffer.borrow(), sender, newCid)
                                 );
-
-                                bufferTransferred = true;
                             } else if (packetSummary.type() != QuicPacketHeader.PacketType.INITIAL) {
-                                skipPacket(buffer);
+                                skipPacket(buffer.buf());
                                 log.warn(ANSIConstants.RED_FG, "[Acceptor] Non-Initial packed with unknown DCID: {} type {} - no mapping found, dropping packet", dcid, packetSummary.type());
                             } else {
-                                buffer.position(buffer.limit());
-                                log.warn(ANSIConstants.RED_FG, "[Acceptor] Initial packed with unknown DCID: {} too short {}  dropping packet", dcid, buffer.remaining());
+                                buffer.buf().position(buffer.buf().limit());
+                                log.warn(ANSIConstants.RED_FG, "[Acceptor] Initial packed with unknown DCID: {} too short {}  dropping packet", dcid, buffer.buf().remaining());
                             }
                         }
                     }
                 }
 
-                // Return buffer to pool if ownership was not transferred
-                if (!bufferTransferred) {
-                    bufferPool.offer(buffer);
-                }
+                buffer.release();
             }
         } catch (Exception e) {
             log.error(ANSIConstants.RED_FG, "Error in acceptor thread", e);
         }
     }
 
-    private boolean forwardToSelector(Integer assignedSelectorId, ByteBuffer buffer, SocketAddress sender) {
+    private boolean forwardToSelector(Integer assignedSelectorId, PoolBuffer buffer, SocketAddress sender) {
         if (selectors != null && assignedSelectorId < selectors.length) {
             SelectorThread targetSelector = selectors[assignedSelectorId];
             if (targetSelector != null) {
                 // Transfer ownership of buffer to selector thread
-                buffer.rewind();
-                targetSelector.forwardPacket(buffer, sender);
+                buffer.buf().rewind();
+                targetSelector.forwardPacket(buffer.borrow(), sender);
                 return true;
             }
         }

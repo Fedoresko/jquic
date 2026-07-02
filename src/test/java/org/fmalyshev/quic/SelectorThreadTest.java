@@ -38,10 +38,9 @@ class SelectorThreadTest {
     void setUp() throws Exception {
         // Create SelectorThread components
         channel = DatagramChannel.open();
-        MpscArrayQueue<ByteBuffer> bufferPool = new MpscArrayQueue<>(256);
         ConcurrentHashMap<Long, Integer> cidToSelectorMap = new ConcurrentHashMap<>();
 
-        selectorThread = new SelectorThread(0, channel, bufferPool, cidToSelectorMap);
+        selectorThread = new SelectorThread(0, channel, cidToSelectorMap);
 
         // Use reflection to access private fields for testing
         Field activeConnectionsField = SelectorThread.class.getDeclaredField("activeConnections");

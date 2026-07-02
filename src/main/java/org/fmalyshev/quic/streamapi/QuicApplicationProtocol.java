@@ -10,7 +10,7 @@ public interface QuicApplicationProtocol {
      */
     String getProtocolName();
     /**
-     * Returns the maximum number of bidirectional  streams per connection simultaneously.
+     * Returns the maximum number of bidirectional streams per connection simultaneously.
      */
     Integer getMaxBidirectionalStreamsPerConnection();
     /**
@@ -18,11 +18,11 @@ public interface QuicApplicationProtocol {
      */
     Integer getMaxUnidirectionalStreamsPerConnection();
     /**
-     * Returns the maximum size of data that can be in-flight in a single stream (unacknowleged packets).
+     * Returns the maximum size of data that can be buffered for a single stream (unacknowleged packets).
      */
     Integer getMaxStreamData();
     /**
-     * Returns the maximum size of data that can be in-flight in a single connection (unacknowleged packets).
+     * Returns the maximum size of data that can be buffered for a single connection (unacknowleged packets).
      */
     Integer getMaxData();
 

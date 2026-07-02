@@ -8,19 +8,16 @@ import org.slf4j.LoggerFactory;
 import java.util.concurrent.locks.LockSupport;
 
 /**
- * Worker thread that processes frame and ACK tasks.
+ * Worker thread that processes frame tasks.
  * Only this worker thread accesses its connection map - no synchronization needed.
- * Uses SPSC queues since consistent hashing ensures single producer (selector thread) per worker.
- *
- * <p>Two separate queues are maintained so that ACK processing (which drives flow-control
- * window updates) is never blocked by a full frame queue. Each queue can be drained
- * independently, which is the foundation for correct backpressure.</p>
  */
 public class StreamWorker extends Thread {
     private static final Logger logger = LoggerFactory.getLogger(StreamWorker.class);
     private static final int FRAME_QUEUE_CAPACITY = 65536; // Power of 2 for performance
+    private static final int ACK_QUEUE_CAPACITY = 16384; // Power of 2 for performance
 
     private final MpscArrayQueue<StreamWorkerPool.FrameTask> frameQueue = new MpscArrayQueue<>(FRAME_QUEUE_CAPACITY);
+    private final MpscArrayQueue<StreamWorkerPool.AckTask> ackQueue = new MpscArrayQueue<>(ACK_QUEUE_CAPACITY);
     private long idleCount = 0;
     private volatile boolean isParked = true;
 
@@ -35,22 +32,6 @@ public class StreamWorker extends Thread {
      * The caller must NOT access or modify the buffer after calling this method.
      */
     public void enqueueFrame(StreamManager manager, StreamFrame frame) {
-        // Rough packet size measurement for speed (frame overhead ~20 bytes)
-        int roughPacketSize = frame.size();
-
-        long totalReceived = manager.getTotalReceivedBytes();
-        int maxData = manager.getMaxData();
-
-        if (totalReceived + roughPacketSize > maxData) {
-            // Reject frame - exceeds connection maxData limit
-            logger.warn("Rejecting frame for connection {}: would exceed maxData ({} + {} > {})",
-                    manager.getConnectionId(), totalReceived, roughPacketSize, maxData);
-            return;
-        }
-
-        // Track received bytes at connection level
-        manager.addReceivedBytes(roughPacketSize);
-
         // Transfer ownership of the ByteBuffer to the worker thread via the queue
         frameQueue.offer(new StreamWorkerPool.FrameTask(manager, frame));
 
@@ -58,6 +39,16 @@ public class StreamWorker extends Thread {
             LockSupport.unpark(this);
         }
     }
+
+    public void enqueueAck(StreamManager manager, long streamId, long ackTotalLength) {
+        // Transfer ownership of the ByteBuffer to the worker thread via the queue
+        ackQueue.offer(new StreamWorkerPool.AckTask(manager, streamId, ackTotalLength));
+
+        if (isParked) {
+            LockSupport.unpark(this);
+        }
+    }
+
 
     public void shutdown() {
         interrupt();
@@ -71,6 +62,12 @@ public class StreamWorker extends Thread {
         while (!Thread.currentThread().isInterrupted()) {
             try {
                 boolean didWork = false;
+
+                StreamWorkerPool.AckTask ackTask;
+                while ((ackTask = ackQueue.poll()) != null) {
+                    ackTask.manager.processAck(ackTask.sreamId, ackTask.totalAckedLength);
+                    didWork = true;
+                }
 
                 // Then process one frame from the frame queue.
                 if (currentFrameTask == null) {

@@ -1,8 +1,7 @@
 package org.fmalyshev.quic.streamapi.impl;
 
-import org.fmalyshev.quic.PacketNumberSpace;
-import org.fmalyshev.quic.QuicConnection;
-import org.fmalyshev.quic.QuicVarint;
+import org.fmalyshev.quic.*;
+import org.fmalyshev.quic.buffers.PoolBuffer;
 import org.fmalyshev.quic.streamapi.*;
 import org.fmalyshev.quic.streamapi.frames.*;
 import org.jspecify.annotations.Nullable;
@@ -14,16 +13,17 @@ import java.nio.ByteBuffer;
 import java.util.*;
 import java.util.function.Consumer;
 
-import static org.fmalyshev.quic.streamapi.impl.StreamFrameProcessor.FRAME_TYPE_STREAM;
-
 /**
  * Manages all streams for a single QUIC connection.
  * Handles stream lifecycle, frame processing, and flow control.
- * Thread-safety: ALL methods are called from worker thread only - no synchronization needed.
+ * Stream manager is bound to a particular Worker thread in which all user requests are processed.
+ * Thread-safety: ALL methods except {#onStreamFrame} and {#onPacketAcknowledged} are called from
+ * worker thread only - no synchronization needed.
  */
 public class StreamManager implements ConnectionStreamManager {
     public static final int STREAM_FRAME_HEADER_MAX_LEN = 1 + 8 + 8 + 8;
     private static final Logger logger = LoggerFactory.getLogger(StreamManager.class);
+    public static final int STREAM_BUFFER_CAPACITY = 50_000;
 
     private final QuicConnection connection;
     private final QuicApplicationProtocolConnectionHandler handler;
@@ -33,22 +33,19 @@ public class StreamManager implements ConnectionStreamManager {
     private final Map<Long, StreamBuffer> streamBuffers = new HashMap<>();
     private final StreamWorker streamWorker;
 
-    @Override
-    public void onStreamFrame(StreamFrame frame) {
-        streamWorker.enqueueFrame(this, frame);
-    }
-
     record FrameRecord (long streamId, boolean fin, ByteBuffer data) {};
     private final Deque<FrameRecord> outbox = new ArrayDeque<>();
 
     // Stream limits
     private final int maxBidirectionalStreams;
     private final int maxUnidirectionalStreams;
-    private final int maxStreamData;
-    private final int maxData;
+    private final int maxStreamDataCap;
+    private final long maxDataCap; // Hard limit per connection
+    private long currentMaxData; // Current MAX_DATA value advertised to peer
 
     // Connection-level flow control - receiving side
     private long totalReceivedBytes = 0;
+    private long totalBufferedBytes = 0; // Total bytes currently stored in all stream buffers
 
     // Connection-level flow control - sending side (in-flight bytes)
     private long totalInFlightBytes = 0;
@@ -65,12 +62,38 @@ public class StreamManager implements ConnectionStreamManager {
         this.handler = handler;
         this.maxBidirectionalStreams = protocol.getMaxBidirectionalStreamsPerConnection();
         this.maxUnidirectionalStreams = protocol.getMaxUnidirectionalStreamsPerConnection();
-        this.maxStreamData = protocol.getMaxStreamData();
-        this.maxData = protocol.getMaxData();
+        this.maxStreamDataCap = protocol.getMaxStreamData();
+        this.maxDataCap = protocol.getMaxData();
+        this.currentMaxData = maxDataCap; // Initial value
         this.streamWorker = streamWorker;
     }
 
+    // Called from Selector thread
+    @Override
+    public void onStreamFrame(StreamFrame frame) {
+        streamWorker.enqueueFrame(this, frame);
+    }
+
+    //Called from Selector thread
+    @Override
+    public void onPacketAcknowledged(long packetNumber, PacketNumberSpace.SentPacket packet) {
+        ByteBuffer payload = packet.getUnencryptedPayload().duplicate();
+        while (payload.hasRemaining()) {
+            byte ackedFrameType = payload.get();
+            // Check if this is a STREAM frame (0x08-0x0f)
+            if (ackedFrameType >= 0x08 &&  ackedFrameType <= 0x0f) {
+                boolean hasLength = (ackedFrameType & 0x02) != 0;
+                long streamId = QuicVarint.read(payload);
+                long length = (hasLength) ? QuicVarint.read(payload) : payload.remaining();
+
+                streamWorker.enqueueAck(this, streamId, length);
+                payload.position(Math.min(payload.limit(), payload.position() + (int) length));
+            }
+        }
+    }
+
     /**
+     * Called from worker thread
      * Opens a new stream.
      * This is always server-initiated (stream IDs are odd).
      */
@@ -101,9 +124,9 @@ public class StreamManager implements ConnectionStreamManager {
         }
 
         // Create stream state
-        StreamState state = new StreamState(streamId, true, streamType, maxStreamData);
+        StreamState state = new StreamState(streamId, true, streamType, maxStreamDataCap);
         streams.put(streamId, state);
-        StreamBuffer buffer = new StreamBuffer(streamId, maxStreamData);
+        StreamBuffer buffer = new StreamBuffer(streamId, maxStreamDataCap);
         streamBuffers.put(streamId, buffer);
 
         // Note: Handler callback will be called when worker thread processes first frame
@@ -114,6 +137,7 @@ public class StreamManager implements ConnectionStreamManager {
     }
 
     /**
+     * Called from Worker thread
      * Processes a frame. Called by worker thread only.
      */
     public boolean processFrame(StreamFrame frame) throws IOException, QuicStreamException {
@@ -146,10 +170,26 @@ public class StreamManager implements ConnectionStreamManager {
         return true;
     }
 
+    /**
+     * Called from Worker thread.
+     * Process acknowledged stream bytes.
+     */
+    public void processAck(long streamId, Long ackTotalLength) {
+        // Update stream flow control
+        StreamState state = streams.get(streamId);
+        if (state != null) {
+            state.onBytesAcknowledged(ackTotalLength);
+            totalInFlightBytes -= ackTotalLength;
+
+            logger.debug("Packet ACKed: stream {} {} bytes acknowledged, stream in-flight={}, conn in-flight={}",
+                    streamId, ackTotalLength, state.getInFlightBytes(), totalInFlightBytes);
+        }
+    }
+
     private void handleFrame(StreamFrameData frame) throws IOException {
         long streamId = frame.streamId;
         long offset = frame.offset;
-        ByteBuffer data = frame.data;
+        PoolBuffer data = frame.data;
         boolean hasFin = frame.fin;
 
         // Ensure stream and buffer exist
@@ -159,8 +199,8 @@ public class StreamManager implements ConnectionStreamManager {
                 QuicStreamResponse.StreamType.Bidirectional : 
                 QuicStreamResponse.StreamType.Unidirectional;
 
-            StreamState newState = new StreamState(id, serverInitiated, type, maxStreamData);
-            streamBuffers.put(id, new StreamBuffer(id, maxStreamData));
+            StreamState newState = new StreamState(id, serverInitiated, type, maxStreamDataCap);
+            streamBuffers.put(id, new StreamBuffer(id, maxStreamDataCap));
             return newState;
         });
 
@@ -184,14 +224,30 @@ public class StreamManager implements ConnectionStreamManager {
             handler.onNewStreamAllocated(streamId, response, state.isServerInitiated(), state.getStreamType());
         }
 
-        // Add data to reassembly buffer - StreamBuffer enforces maxStreamData limit
-        if (streamBuffer.addIncomingData(offset, data, hasFin)) {
-            // Deliver contiguous data to handler
-            deliverStreamData(streamId, null);
+        // Update state
+        int dataSize = data.buf().remaining();
+        if (totalReceivedBytes + dataSize > currentMaxData) {
+            // Reject frame - exceeds connection maxData limit
+            logger.warn("Rejecting frame for connection {}: would exceed maxData ({} + {} > {})",
+                    getConnectionId(), totalReceivedBytes, dataSize, currentMaxData);
+            connection.closeConnection(QuicTransportError.FLOW_CONTROL_ERROR, "MAX_DATA limit reached");
+            return;
         }
 
-        // Update state
-        state.addReceivedBytes(data.remaining());
+        totalReceivedBytes += dataSize;
+        state.addReceivedBytes(dataSize);
+
+        // Add data to reassembly buffer - StreamBuffer enforces maxStreamData limit
+        if (streamBuffer.addIncomingData(offset, data, hasFin)) {
+            // Update totalBufferedBytes when data is added to buffer
+            totalBufferedBytes += dataSize;
+            // Deliver contiguous data to handler
+            deliverStreamData(streamId, null);
+        } else {
+            logger.warn("Connection {} stream {} has reached MAX_STREAM_DATA", getConnectionId(), streamId);
+            connection.closeConnection(QuicTransportError.FLOW_CONTROL_ERROR, "MAX_STREAM_DATA limit reached");
+        }
+
         if (hasFin) {
             if (state.getState() == StreamState.State.OPEN) {
                 state.setState(StreamState.State.HALF_CLOSED_REMOTE);
@@ -200,9 +256,12 @@ public class StreamManager implements ConnectionStreamManager {
             }
         }
 
+        long received = state.getReceivedBytes();
+        long limit = state.getRemoteMaxStreamData();
+        long freeQueue = STREAM_BUFFER_CAPACITY - streamBuffer.getBufferedBytes();
         // Send MAX_STREAM_DATA if needed
-        if (shouldSendMaxStreamData(state)) {
-            sendMaxStreamDataFrame(streamId, state.getRemoteMaxStreamData() * 2);
+        if (received + freeQueue / 2 > limit) {
+            sendMaxStreamDataFrame(streamId, received + freeQueue);
         }
     }
 
@@ -304,11 +363,11 @@ public class StreamManager implements ConnectionStreamManager {
 
     private boolean trySendData(long streamId, boolean fin, ByteBuffer data, StreamState state) throws QuicStreamException {
         int dataSize = data.remaining();
-        if (totalInFlightBytes + dataSize > maxData) {
+        if (totalInFlightBytes + dataSize > currentMaxData) {
             logger.debug("Connection {} blocked by MAX_DATA: in-flight={}, data={}, limit={}",
-                        connection.getConnectionId(), totalInFlightBytes, dataSize, maxData);
+                        connection.getConnectionId(), totalInFlightBytes, dataSize, currentMaxData);
             // Send DATA_BLOCKED frame to inform peer
-            sendDataBlockedFrame(maxData);
+            sendDataBlockedFrame(currentMaxData);
             return false;
         }
 
@@ -331,19 +390,21 @@ public class StreamManager implements ConnectionStreamManager {
         ByteBuffer encodedFrame = StreamFrameProcessor.encodeStreamFrame(
                 streamId, offset, data, fin);
 
-        byte[] tt = new byte[encodedFrame.remaining()];
-        encodedFrame.duplicate().get(tt);
-        logger.debug("Sending STREAM resp {}", HexFormat.of().formatHex(tt));
+        if (logger.isDebugEnabled()) {
+            byte[] tt = new byte[encodedFrame.remaining()];
+            encodedFrame.duplicate().get(tt);
+            logger.debug("Sending STREAM resp {}", HexFormat.of().formatHex(tt));
+        }
 
         try {
-            connection.send1RttPacket(encodedFrame);
+            connection.enqueueApplicationData(encodedFrame);
 
             // Update in-flight counters
             state.addSentBytes(dataSize); // Also updates stream in-flight
             totalInFlightBytes += dataSize;
 
             logger.debug("Sent {} bytes on stream {}: conn in-flight={}/{}, stream in-flight={}/{}",
-                    dataSize, streamId, totalInFlightBytes, maxData,
+                    dataSize, streamId, totalInFlightBytes, currentMaxData,
                     state.getInFlightBytes(), state.getMaxStreamData());
         } catch (Exception e) {
             throw new QuicStreamException("Failed to send STREAM frame: " + e.getMessage());
@@ -384,23 +445,27 @@ public class StreamManager implements ConnectionStreamManager {
         StreamBuffer buffer = streamBuffers.get(streamId);
         if (buffer == null) return;
 
+        long bufferedBytesBefore = buffer.getBufferedBytes();
         StreamBuffer.StreamData data = buffer.readAvailableData();
         if (data != null) {
+            long bufferedBytesAfter = buffer.getBufferedBytes();
+            long freedBytes = bufferedBytesBefore - bufferedBytesAfter;
+
+            // Update totalBufferedBytes when data is freed from buffer
+            totalBufferedBytes -= freedBytes;
+
             QuicStreamResponseImpl response = new QuicStreamResponseImpl();
             handler.onStreamDataReceived(streamId, response, data.getData(), data.isLast(), errorCode);
-        }
-    }
 
-    private boolean shouldSendMaxStreamData(StreamState state) {
-        long received = state.getReceivedBytes();
-        long limit = state.getRemoteMaxStreamData();
-        return received > limit / 2; // Send update at 50% threshold
+            // Update MAX_DATA when data is freed from buffer
+            updateMaxDataIfNeeded();
+        }
     }
 
     private void sendMaxStreamDataFrame(long streamId, long maximumData) {
         java.nio.ByteBuffer frame = StreamFrameProcessor.encodeMaxStreamDataFrame(streamId, maximumData);
         try {
-            connection.send1RttPacket(frame);
+            connection.enqueueApplicationData(frame);
             StreamState state = streams.get(streamId);
             if (state != null) {
                 state.setRemoteMaxStreamData(maximumData);
@@ -410,10 +475,35 @@ public class StreamManager implements ConnectionStreamManager {
         }
     }
 
+    private void sendMaxDataFrame(long maximumData) {
+        java.nio.ByteBuffer frame = StreamFrameProcessor.encodeMaxDataFrame(maximumData);
+        try {
+            connection.enqueueApplicationData(frame);
+            currentMaxData = maximumData;
+            logger.debug("Sent MAX_DATA frame: maxData={}", maximumData);
+        } catch (Exception e) {
+            logger.error("Failed to send MAX_DATA frame", e);
+        }
+    }
+
+    /**
+     * Updates MAX_DATA when buffer space is freed.
+     * MAX_DATA = hardMaxDataCapacity - totalBufferedBytes + totalReceivedBytes
+     */
+    private void updateMaxDataIfNeeded() {
+        // New MAX_DATA = hardCapacity - bufferedBytes + totalReceived
+        long newMaxData = maxDataCap - totalBufferedBytes + totalReceivedBytes;
+
+        // Send MAX_DATA if the increase is significant
+        if (currentMaxData - totalReceivedBytes > (maxDataCap - totalBufferedBytes)/2 ) {
+            sendMaxDataFrame(newMaxData);
+        }
+    }
+
     private void sendResetStreamFrame(long streamId, long errorCode, long finalSize) {
         java.nio.ByteBuffer frame = StreamFrameProcessor.encodeResetStreamFrame(streamId, errorCode, finalSize);
         try {
-            connection.send1RttPacket(frame);
+            connection.enqueueApplicationData(frame);
             StreamState state = streams.get(streamId);
             if (state != null) {
                 state.setState(StreamState.State.RESET_SENT);
@@ -426,7 +516,7 @@ public class StreamManager implements ConnectionStreamManager {
     private void sendStopSendingFrame(long streamId, long errorCode) {
         java.nio.ByteBuffer frame = StreamFrameProcessor.encodeStopSendingFrame(streamId, errorCode);
         try {
-            connection.send1RttPacket(frame);
+            connection.enqueueApplicationData(frame);
         } catch (Exception e) {
             logger.error("Failed to send STOP_SENDING frame", e);
         }
@@ -435,52 +525,18 @@ public class StreamManager implements ConnectionStreamManager {
     private void sendStreamDataBlockedFrame(long streamId, long limit) {
         java.nio.ByteBuffer frame = StreamFrameProcessor.encodeStreamDataBlockedFrame(streamId, limit);
         try {
-            connection.send1RttPacket(frame);
+            connection.enqueueApplicationData(frame);
         } catch (Exception e) {
             logger.error("Failed to send STREAM_DATA_BLOCKED frame", e);
         }
     }
 
-    public long getTotalReceivedBytes() {
-        return totalReceivedBytes;
-    }
-
-    public int getMaxData() {
-        return maxData;
+    public long getCurrentMaxData() {
+        return currentMaxData;
     }
 
     public long getConnectionId() {
         return connection.getConnectionId();
-    }
-
-    public void addReceivedBytes(int bytes) {
-        totalReceivedBytes += bytes;
-    }
-
-    @Override
-    public void onPacketAcknowledged(long packetNumber, PacketNumberSpace.SentPacket packet) {
-        ByteBuffer payload = packet.getUnencryptedPayload().duplicate();
-        while (payload.hasRemaining()) {
-            byte ackedFrameType = payload.get();
-            // Check if this is a STREAM frame (0x08-0x0f)
-            if (ackedFrameType >= 0x08 &&  ackedFrameType <= 0x0f) {
-                boolean hasLength = (ackedFrameType & 0x02) != 0;
-                long streamId = QuicVarint.read(payload);
-                long length = (hasLength) ? QuicVarint.read(payload) : payload.remaining();
-
-                // Update stream flow control
-                StreamState state = streams.get(streamId);
-                if (state != null) {
-                    state.onBytesAcknowledged(length);
-                    totalInFlightBytes -= length;
-
-                    logger.debug("Packet ACKed: stream {} {} bytes acknowledged, stream in-flight={}, conn in-flight={}",
-                            streamId, length, state.getInFlightBytes(), totalInFlightBytes);
-                }
-
-                payload.position(Math.min(payload.limit(), payload.position() + (int) length));
-            }
-        }
     }
 
     /**
@@ -489,7 +545,7 @@ public class StreamManager implements ConnectionStreamManager {
     private void sendDataBlockedFrame(long limit) {
         java.nio.ByteBuffer frame = StreamFrameProcessor.encodeDataBlockedFrame(limit);
         try {
-            connection.send1RttPacket(frame);
+            connection.enqueueApplicationData(frame);
             logger.debug("Sent DATA_BLOCKED frame: limit={}", limit);
         } catch (Exception e) {
             logger.error("Failed to send DATA_BLOCKED frame", e);
@@ -502,7 +558,7 @@ public class StreamManager implements ConnectionStreamManager {
     private class QuicStreamResponseImpl implements QuicStreamResponse {
         @Override
         public void closeConnection(long errorCode, String reason) throws QuicStreamException {
-            connection.sendConnectionCloseAndUpdateState(errorCode, reason);
+            connection.closeConnection(errorCode, reason);
         }
 
         @Override

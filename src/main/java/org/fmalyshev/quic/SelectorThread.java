@@ -2,6 +2,9 @@ package org.fmalyshev.quic;
 
 import ch.qos.logback.core.pattern.color.ANSIConstants;
 import org.fmalyshev.LogTool;
+import org.fmalyshev.quic.buffers.BufferPool;
+import org.fmalyshev.quic.buffers.PoolBuffer;
+import org.fmalyshev.quic.buffers.RootPoolBuffer;
 import org.jctools.queues.MpscArrayQueue;
 import org.jctools.queues.SpscArrayQueue;
 import org.jctools.queues.SpscLinkedQueue;
@@ -27,7 +30,6 @@ class SelectorThread implements Runnable {
     private final int threadId;
     private final DatagramChannel channel;
     private final SpscLinkedQueue<PacketData> forwardedPackets;
-    private final MpscArrayQueue<ByteBuffer> bufferReturnPool;
     private final SpscArrayQueue<HandshakeTask> handshakeQueue = new SpscArrayQueue<>(HANDSHAKE_QUEUE_CAP);
     private final ConcurrentHashMap<Long, Integer> cidToSelectorMap;
     private final Map<Long, QuicConnection> activeConnections;
@@ -54,21 +56,19 @@ class SelectorThread implements Runnable {
      * Encapsulates a packet with its sender address for forwarding between threads.
      */
     private static class PacketData {
-        final ByteBuffer buffer;
+        final PoolBuffer buffer;
         final SocketAddress sender;
 
-        PacketData(ByteBuffer buffer, SocketAddress sender) {
+        PacketData(PoolBuffer buffer, SocketAddress sender) {
             this.buffer = buffer;
             this.sender = sender;
         }
     }
 
-    public SelectorThread(int threadId, DatagramChannel channel, MpscArrayQueue<ByteBuffer> bufferReturnPool,
-                         ConcurrentHashMap<Long, Integer> cidToSelectorMap) {
+    public SelectorThread(int threadId, DatagramChannel channel, ConcurrentHashMap<Long, Integer> cidToSelectorMap) {
         this.threadId = threadId;
         this.channel = channel;
         this.forwardedPackets = new SpscLinkedQueue<>();
-        this.bufferReturnPool = bufferReturnPool;
         this.cidToSelectorMap = cidToSelectorMap;
         this.activeConnections = new HashMap<>();
     }
@@ -84,7 +84,7 @@ class SelectorThread implements Runnable {
      * Zero-copy implementation: takes ownership of the ByteBuffer.
      * The buffer will be returned to the pool after processing.
      */
-    public void forwardPacket(ByteBuffer packet, SocketAddress sender) {
+    public void forwardPacket(PoolBuffer packet, SocketAddress sender) {
         try {
             // Zero-copy: just transfer ownership through queue
             // BlockingQueue provides happens-before guarantee for thread-safe handoff
@@ -100,10 +100,11 @@ class SelectorThread implements Runnable {
 
     @Override
     public void run() {
-        ByteBuffer buffer = ByteBuffer.allocateDirect(2048);
         try {
             // Configure channel for non-blocking to allow polling forwarded queue
             channel.configureBlocking(false);
+
+            PoolBuffer buffer = QuicEngine.getPool().requestReadBuffer();
 
             while (!Thread.currentThread().isInterrupted()) {
                 long now = System.currentTimeMillis();
@@ -111,26 +112,26 @@ class SelectorThread implements Runnable {
                 boolean hadWork = false;
 
                 // Process packets from socket
-                buffer.clear();
-                SocketAddress sender = channel.receive(buffer);
+                SocketAddress sender = channel.receive(buffer.buf());
                 if (sender != null) {
-                    buffer.flip();
+                    buffer.buf().flip();
                     processPacket(buffer, sender, "socket");
                     hadWork = true;
+                    buffer.release();
+                    buffer = QuicEngine.getPool().requestReadBuffer();
                 }
+
 
                 // Process forwarded packets
                 PacketData forwarded = forwardedPackets.poll();
                 if (forwarded != null) {
                     processPacket(forwarded.buffer, forwarded.sender, "forwarded");
-                    bufferReturnPool.offer(forwarded.buffer);
                     hadWork = true;
                 }
 
                 HandshakeTask handshakeTask = handshakeQueue.poll();
                 if (handshakeTask != null) {
                     processHandshakeTask(handshakeTask);
-                    bufferReturnPool.offer(handshakeTask.packet);
                     hadWork = true;
                 }
 
@@ -143,6 +144,7 @@ class SelectorThread implements Runnable {
                 if (!hadWork) {
                     Thread.sleep(1);
                 }
+
             }
         } catch (Exception e) {
             log.error(logColor(), "Selector-{}: Error in selector thread", threadId, e);
@@ -153,19 +155,19 @@ class SelectorThread implements Runnable {
      * Processes a received datagram which may contain multiple coalesced packets.
      * Routes packets to appropriate connections based on CID.
      */
-    private void processPacket(ByteBuffer datagram, SocketAddress sender, String source) {
+    private void processPacket(PoolBuffer datagram, SocketAddress sender, String source) {
         try {
             int packetCount = 0;
 
             // Process all coalesced packets in the datagram
-            while (datagram.hasRemaining()) {
-                if (datagram.remaining() < 9) { // Minimum: 1 byte flags + 8 bytes CID
+            while (datagram.buf().hasRemaining()) {
+                if (datagram.buf().remaining() < 9) { // Minimum: 1 byte flags + 8 bytes CID
                     log.debug(logColor(), "Selector-{}: Remaining bytes too short for packet: {}", 
-                               threadId, datagram.remaining());
+                               threadId, datagram.buf().remaining());
                     break;
                 }
 
-                QuicPacketHeader.PacketSummary packetSummary = QuicPacketHeader.parseSummary(datagram);
+                QuicPacketHeader.PacketSummary packetSummary = QuicPacketHeader.parseSummary(datagram.buf());
 
                 if (packetSummary == null || packetSummary.type() == QuicPacketHeader.PacketType.RETRY) {
                     break; //invalid data skip remaining
@@ -186,7 +188,7 @@ class SelectorThread implements Runnable {
 
                 if (packetSummary.type() == QuicPacketHeader.PacketType.ZERO_RTT ) {
                     log.warn(logColor(), "Selector-{}: Processing {} packet for CID: {} not implemented",threadId, packetSummary.type(), cid);
-                    skipPacket(datagram);
+                    skipPacket(datagram.buf());
                     continue;
                 }
 
@@ -218,12 +220,18 @@ class SelectorThread implements Runnable {
                         }
                         case RETRY, ZERO_RTT -> {
                             log.warn(logColor(), "Selector-{}: Processing {} packet for CID: {} not implemented",threadId, packetSummary.type(), cid);
-                            skipPacket(datagram);
+                            skipPacket(datagram.buf());
                         }
                     };
 
                     // Update timeout in heap after processing (remove-add pattern)
                     timeoutHeap.insertOrUpdate(connection);
+
+                    // Drain application queue and process packages.
+                    ByteBuffer appData;
+                    while( (appData = connection.applicationQueue().poll()) != null) {
+                        connection.send1RttPacket(appData);
+                    }
 
                     // Drain any packets the connection produced internally (e.g. early-1RTT
                     // replay triggered by the ESTABLISHED transition, or sendFrame() calls).
@@ -237,6 +245,8 @@ class SelectorThread implements Runnable {
                     break;
                 }
             }
+
+            datagram.release();
 
             log.debug(logColor(), "Selector-{}: Processed {} packet(s) from datagram", threadId, packetCount);
 
@@ -254,7 +264,7 @@ class SelectorThread implements Runnable {
         try {
             log.debug(logColor(), "Selector-{}: Processing Initial packet for new CID: {}", threadId, task.allocatedCid);
 
-            QuicPacketHeader.PacketSummary packetSummary = QuicPacketHeader.parseSummary(task.packet);
+            QuicPacketHeader.PacketSummary packetSummary = QuicPacketHeader.parseSummary(task.packet.buf());
             if (packetSummary == null) {
                 return;
             }

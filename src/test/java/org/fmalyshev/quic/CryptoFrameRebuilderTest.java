@@ -1,11 +1,15 @@
 package org.fmalyshev.quic;
 
+import org.fmalyshev.quic.buffers.BorrowedPoolBuffer;
+import org.fmalyshev.quic.buffers.PoolBuffer;
+import org.fmalyshev.quic.buffers.RootPoolBuffer;
 import org.junit.jupiter.api.Test;
 
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.mock;
 
 /**
  * Tests for {@link CryptoFrameRebuilder}.
@@ -32,8 +36,8 @@ class CryptoFrameRebuilderTest {
     // ─────────────────────────────────────────────────────────────
 
     /** Wrap a plain byte array in a ByteBuffer positioned at 0. */
-    private static ByteBuffer buf(byte... bytes) {
-        return ByteBuffer.wrap(bytes);
+    private static PoolBuffer buf(byte... bytes) {
+        return new BorrowedPoolBuffer(mock(RootPoolBuffer.class), ByteBuffer.wrap(bytes));
     }
 
     /** Create a sequential payload of {@code length} bytes starting at {@code start}. */
@@ -445,7 +449,7 @@ class CryptoFrameRebuilderTest {
         CryptoFrameRebuilder rebuilder = new CryptoFrameRebuilder();
         rebuilder.setExpectedLength(10);
 
-        ByteBuffer tooSmall = ByteBuffer.wrap(new byte[3]);
+        PoolBuffer tooSmall = new BorrowedPoolBuffer(mock(RootPoolBuffer.class), ByteBuffer.wrap(new byte[3]));
         assertThrows(IllegalStateException.class,
             () -> rebuilder.addPart(0, 5, tooSmall));
     }

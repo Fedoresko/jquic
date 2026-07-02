@@ -1,5 +1,7 @@
 package org.fmalyshev.quic;
 
+import org.fmalyshev.quic.buffers.BorrowedPoolBuffer;
+import org.fmalyshev.quic.buffers.RootPoolBuffer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Disabled;
@@ -141,7 +143,7 @@ class QuicConnectionPacketTest {
         ByteBuffer mockInitialPacket = createMockInitialPacket();
 
         // Act
-        connection.processInitialAndRespond(mockInitialPacket);
+        connection.processInitialAndRespond(new BorrowedPoolBuffer(mock(RootPoolBuffer.class), mockInitialPacket));
         List<ByteBuffer> responses = getOutboundPackets(connection);
 
         // Assert
@@ -176,7 +178,7 @@ class QuicConnectionPacketTest {
 
         // Act
         getOutboundPackets(connection);
-        connection.processHandshakePacket(mockHandshakePacket);
+        connection.processHandshakePacket(new BorrowedPoolBuffer(mock(RootPoolBuffer.class), mockHandshakePacket));
         List<ByteBuffer> responses = getOutboundPackets(connection);
 
         // Assert
@@ -200,7 +202,7 @@ class QuicConnectionPacketTest {
 
         // Act
         getOutboundPackets(connection);
-        connection.process1RttPacket(mock1RttPacket);
+        connection.process1RttPacket(new BorrowedPoolBuffer(mock(RootPoolBuffer.class), mock1RttPacket));
         ByteBuffer ackPacket = connection.pollOutbound();
 
 
@@ -233,7 +235,7 @@ class QuicConnectionPacketTest {
         ByteBuffer invalidInitial = createInvalidInitialPacket();
 
         // Act
-         connection.processInitialAndRespond(invalidInitial);
+         connection.processInitialAndRespond(new BorrowedPoolBuffer(mock(RootPoolBuffer.class), invalidInitial));
         List<ByteBuffer> closePackets = getOutboundPackets(connection);
 
         // Assert
@@ -253,7 +255,7 @@ class QuicConnectionPacketTest {
         ByteBuffer mockInitial = createMockInitialPacket();
 
         // Act
-        connection.processInitialAndRespond(mockInitial);
+        connection.processInitialAndRespond(new BorrowedPoolBuffer(mock(RootPoolBuffer.class), mockInitial));
         List<ByteBuffer> responses = getOutboundPackets(connection);
 
         // Assert - verify both DCID and SCID contain the connection ID
@@ -276,7 +278,7 @@ class QuicConnectionPacketTest {
         ByteBuffer mockInitial = createMockInitialPacket();
 
         // Act
-        connection.processInitialAndRespond(mockInitial);
+        connection.processInitialAndRespond(new BorrowedPoolBuffer(mock(RootPoolBuffer.class), mockInitial));
         List<ByteBuffer> responses = getOutboundPackets(connection);
 
         // Assert - skip to token length field
@@ -451,7 +453,7 @@ class QuicConnectionPacketTest {
     private void setupConnectionInHandshakeState() throws Exception {
         // Process Initial to move to HANDSHAKE state
         ByteBuffer mockInitial = createMockInitialPacket();
-        connection.processInitialAndRespond(mockInitial);
+        connection.processInitialAndRespond(new BorrowedPoolBuffer(mock(RootPoolBuffer.class), mockInitial));
 
         assertEquals(QuicConnection.State.HANDSHAKE, connection.getState(), 
                     "Connection should be in HANDSHAKE state");
@@ -462,7 +464,7 @@ class QuicConnectionPacketTest {
 
         // Process Handshake to move to ESTABLISHED
         ByteBuffer mockHandshake = createMockHandshakePacket();
-        connection.processHandshakePacket(mockHandshake);
+        connection.processHandshakePacket(new BorrowedPoolBuffer(mock(RootPoolBuffer.class), mockHandshake));
 
         assertEquals(QuicConnection.State.ESTABLISHED, connection.getState(), 
                     "Connection should be in ESTABLISHED state");

@@ -1,8 +1,12 @@
 package org.fmalyshev.quic;
 
+import org.fmalyshev.quic.buffers.BufferPool;
+import org.fmalyshev.quic.buffers.PoolBuffer;
+import org.fmalyshev.quic.buffers.RootPoolBuffer;
 import org.fmalyshev.quic.streamapi.QuicStreamEngine;
 import org.fmalyshev.quic.streamapi.impl.QuicStreamEngineImpl;
 import org.jctools.queues.MpscArrayQueue;
+import org.jctools.queues.MpscGrowableArrayQueue;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -22,10 +26,6 @@ public class QuicEngine {
     public static final int SELECTOR_COUNT = 4;
     public static final int WORKER_COUNT = 4;
 
-    // Buffer pool configuration
-    private static final int BUFFER_POOL_SIZE = 32;
-    private static final int BUFFER_SIZE = 2048;
-
     // Singleton stream engine for managing all connections
     private static QuicStreamEngineImpl streamEngineInternal;
 
@@ -33,6 +33,7 @@ public class QuicEngine {
     private static ArrayList<Thread> selectorThreads;
     private static Thread acceptorThread;
 
+    private static BufferPool bufferPool = new BufferPool();
     /**
      * Gets the static QuicStreamEngineInternal instance.
      * This is used by QuicConnection to register/unregister connections.
@@ -45,6 +46,10 @@ public class QuicEngine {
 
     public static QuicStreamEngine getStreamEngine() {
         return streamEngineInternal;
+    }
+
+    public static BufferPool getPool() {
+        return bufferPool;
     }
 
     private static DatagramChannel createSocketWithReusePort() throws IOException {
@@ -80,13 +85,6 @@ public class QuicEngine {
         streamEngineInternal.start();
         logger.info("QuicStreamEngineInternal singleton created and started");
 
-        // Create shared buffer pool for zero-copy packet forwarding
-        MpscArrayQueue<ByteBuffer> sharedBufferPool =
-                new MpscArrayQueue<>(BUFFER_POOL_SIZE);
-        for (int i = 0; i < BUFFER_POOL_SIZE; i++) {
-            sharedBufferPool.offer(java.nio.ByteBuffer.allocate(BUFFER_SIZE));
-        }
-
         // Create shared CID-to-Selector mapping
         java.util.concurrent.ConcurrentHashMap<Long, Integer> cidToSelectorMap =
                 new java.util.concurrent.ConcurrentHashMap<Long, Integer>();
@@ -96,7 +94,7 @@ public class QuicEngine {
 
         BpfRouting.registerAcceptor(acceptorChannel);
 
-        AcceptorThread acceptor = new AcceptorThread(acceptorChannel, sharedBufferPool, cidToSelectorMap);
+        AcceptorThread acceptor = new AcceptorThread(acceptorChannel, cidToSelectorMap);
 
         selectorThreads = new ArrayList<>();
         // 2. Initialize Worker Selector Threads
@@ -107,7 +105,7 @@ public class QuicEngine {
             // Register selector socket in the eBPF map
             BpfRouting.registerSelector(selectorThreadId+1, selectorChannel);
 
-            selectors[selectorThreadId] = new SelectorThread(selectorThreadId, selectorChannel, sharedBufferPool,
+            selectors[selectorThreadId] = new SelectorThread(selectorThreadId, selectorChannel,
                     cidToSelectorMap);
 
             Thread thread = new Thread(selectors[selectorThreadId], "Selector-Thread-" + selectorThreadId);

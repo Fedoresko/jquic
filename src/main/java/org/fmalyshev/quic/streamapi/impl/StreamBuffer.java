@@ -1,7 +1,8 @@
 package org.fmalyshev.quic.streamapi.impl;
 
+import org.fmalyshev.quic.buffers.PoolBuffer;
+
 import java.io.IOException;
-import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
 import java.nio.channels.WritableByteChannel;
 import java.util.TreeMap;
@@ -13,10 +14,10 @@ import java.util.TreeMap;
  */
 public class StreamBuffer {
     private final long streamId;
-    private final int maxStreamData;
+    private final int streamBufferCapacity;
 
     // Incoming data buffer for reassembly (offset -> data)
-    private final TreeMap<Long, ByteBuffer> incomingFragments = new TreeMap<>();
+    private final TreeMap<Long, PoolBuffer> incomingFragments = new TreeMap<>();
     private long nextExpectedOffset = 0;
     private boolean receivedFin = false;
     private long finOffset = -1;
@@ -27,9 +28,9 @@ public class StreamBuffer {
     // Outgoing data tracking
     private long nextSendOffset = 0;
 
-    public StreamBuffer(long streamId, int maxStreamData) {
+    public StreamBuffer(long streamId, int streamBufferCapacity) {
         this.streamId = streamId;
-        this.maxStreamData = maxStreamData;
+        this.streamBufferCapacity = streamBufferCapacity;
     }
 
     /**
@@ -41,23 +42,24 @@ public class StreamBuffer {
      * @param fin Whether this frame has the FIN flag
      * @return true if this frame allows reading more data (in-order data received)
      */
-    public boolean addIncomingData(long offset, ByteBuffer data, boolean fin) {
+    public boolean addIncomingData(long offset, PoolBuffer data, boolean fin) {
         // Check flow control limit before accepting new data
-        if (data.remaining() > 0 && bufferedBytes + data.remaining() > maxStreamData) {
+        if (data.buf().remaining() > 0 && bufferedBytes + data.buf().remaining() > streamBufferCapacity) {
             // Reject fragment - exceeds maxStreamData limit
+            data.release();
             return false;
         }
 
         // Store the fragment
-        if (data.remaining() > 0) {
+        if (data.buf().remaining() > 0) {
             incomingFragments.put(offset, data);
-            bufferedBytes += data.remaining();
+            bufferedBytes += data.buf().remaining();
         }
 
         // Track FIN
         if (fin) {
             receivedFin = true;
-            finOffset = offset + data.remaining();
+            finOffset = offset + data.buf().remaining();
         }
 
         // Check if we can advance the read pointer
@@ -87,21 +89,23 @@ public class StreamBuffer {
                 break; // Gap in data
             }
 
-            ByteBuffer fragment = incomingFragments.remove(firstOffset);
+            PoolBuffer fragment = incomingFragments.remove(firstOffset);
 
             // Decrease buffered bytes as we remove fragment
-            bufferedBytes -= fragment.remaining();
+            bufferedBytes -= fragment.buf().remaining();
 
             // Handle overlapping or duplicate data
-            if (firstOffset + fragment.remaining() <= nextExpectedOffset) {
+            if (firstOffset + fragment.buf().remaining() <= nextExpectedOffset) {
                 // Already received this data, skip
                 continue;
             }
 
             // Write the new portion
             int startIndex = (int) Math.max(0, nextExpectedOffset - firstOffset);
-            channel.write(fragment.duplicate().position(startIndex));
-            nextExpectedOffset = firstOffset + fragment.remaining();
+            channel.write(fragment.buf().duplicate().position(fragment.buf().position() + startIndex));
+            nextExpectedOffset = firstOffset + fragment.buf().remaining();
+
+            fragment.release();
         }
 
         byte[] data = baos.toByteArray();

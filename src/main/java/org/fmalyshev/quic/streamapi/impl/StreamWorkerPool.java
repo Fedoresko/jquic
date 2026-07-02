@@ -95,4 +95,16 @@ public class StreamWorkerPool {
         }
     }
 
+    public static class AckTask {
+        public final StreamManager manager;
+        long sreamId;
+        long totalAckedLength;
+
+        public AckTask(StreamManager manager, long sreamId, long totalAckedLength) {
+            this.manager = manager;
+            this.sreamId = sreamId;
+            this.totalAckedLength = totalAckedLength;
+        }
+    }
+
 }

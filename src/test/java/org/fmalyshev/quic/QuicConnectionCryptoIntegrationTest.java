@@ -1,5 +1,7 @@
 package org.fmalyshev.quic;
 
+import org.fmalyshev.quic.buffers.BorrowedPoolBuffer;
+import org.fmalyshev.quic.buffers.RootPoolBuffer;
 import org.junit.jupiter.api.Test;
 
 import javax.crypto.SecretKey;
@@ -13,6 +15,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.mock;
 
 /**
  * Integration tests for QUIC connection with REAL cryptographic operations.
@@ -57,7 +60,7 @@ class QuicConnectionCryptoIntegrationTest {
         );
 
         QuicConnection connection = new QuicConnection(TEST_CONNECTION_ID, TEST_ADDRESS);
-        connection.processInitialAndRespond(encryptedPacket.duplicate());
+        connection.processInitialAndRespond(new BorrowedPoolBuffer(mock(RootPoolBuffer.class), encryptedPacket.duplicate()));
         List<ByteBuffer> responses = getOutboundPackets(connection);
 
 
@@ -105,7 +108,7 @@ class QuicConnectionCryptoIntegrationTest {
 
         // Step 3: Try to process tampered packet
         QuicConnection connection = new QuicConnection(TEST_CONNECTION_ID, TEST_ADDRESS);
-        connection.processInitialAndRespond(tamperedPacket);
+        connection.processInitialAndRespond(new BorrowedPoolBuffer(mock(RootPoolBuffer.class), tamperedPacket));
         List<ByteBuffer> responses = getOutboundPackets(connection);
 
 
@@ -140,7 +143,7 @@ class QuicConnectionCryptoIntegrationTest {
                     destinationCidBytes(TEST_CONNECTION_ID), 5, plaintext,
                     meta1Rtt.clientApplicationKeys, null, (byte) 0);
 
-        connection.process1RttPacket(encryptedPacket.duplicate());
+        connection.process1RttPacket(new BorrowedPoolBuffer(mock(RootPoolBuffer.class), encryptedPacket.duplicate()));
         List<ByteBuffer> responses = getOutboundPackets(connection);
 
         assertNotNull(responses, "Should process packet with valid GCM tag");
@@ -190,7 +193,7 @@ class QuicConnectionCryptoIntegrationTest {
         tamperedPacket.put(last, (byte) (tamperedPacket.get(last) ^ 0xFF));
         tamperedPacket.rewind();
 
-        connection.process1RttPacket(tamperedPacket);
+        connection.process1RttPacket(new BorrowedPoolBuffer(mock(RootPoolBuffer.class), tamperedPacket));
         List<ByteBuffer> responses = getOutboundPackets(connection);
 
         assertEquals(0, responses.size(), "Should reject packet with invalid GCM tag");
@@ -225,7 +228,7 @@ class QuicConnectionCryptoIntegrationTest {
         ByteBuffer initialPacket = QuicPacketBuilder.buildInitialPacket(
             dcid, TEST_CONNECTION_ID, 0, cryptoFrame, initKeys[0]);
 
-        connection.processInitialAndRespond(initialPacket);
+        connection.processInitialAndRespond(new BorrowedPoolBuffer(mock(RootPoolBuffer.class), initialPacket));
         List<ByteBuffer> serverHelloPackets = getOutboundPackets(connection);
 
 
@@ -274,7 +277,7 @@ class QuicConnectionCryptoIntegrationTest {
             dcidBytes, TEST_CONNECTION_ID, 0,
             finishedCryptoFrame, meta.clientHandshakeKeys);
 
-        connection.processHandshakePacket(handshakePacket);
+        connection.processHandshakePacket(new BorrowedPoolBuffer(mock(RootPoolBuffer.class), handshakePacket));
         List<ByteBuffer> handshakeResponses = getOutboundPackets(connection);
 
         assertFalse(handshakeResponses.isEmpty(),
@@ -304,7 +307,7 @@ class QuicConnectionCryptoIntegrationTest {
                         ByteBuffer rttPacket = QuicPacketBuilder.build1RttPacket(
             rttDcid, 0, pingFrame, meta.clientApplicationKeys, null, (byte) 0);
 
-        connection.process1RttPacket(rttPacket);
+        connection.process1RttPacket(new BorrowedPoolBuffer(mock(RootPoolBuffer.class), rttPacket));
         List<ByteBuffer> rttResponses = getOutboundPackets(connection);
 
         assertNotNull(rttResponses, "Should process 1-RTT packet without error");
@@ -336,7 +339,7 @@ class QuicConnectionCryptoIntegrationTest {
         truncatedPacket.flip();
 
         QuicConnection connection = new QuicConnection(TEST_CONNECTION_ID, TEST_ADDRESS);
-        connection.processInitialAndRespond(truncatedPacket);
+        connection.processInitialAndRespond(new BorrowedPoolBuffer(mock(RootPoolBuffer.class), truncatedPacket));
         List<ByteBuffer> responses = getOutboundPackets(connection);
 
         assertTrue(responses.isEmpty(), "Should reject truncated packet");

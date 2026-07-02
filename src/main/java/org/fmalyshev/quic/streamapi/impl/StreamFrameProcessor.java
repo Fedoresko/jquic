@@ -122,6 +122,19 @@ public class StreamFrameProcessor {
 //    }
 
     /**
+     * Encodes a MAX_DATA frame (connection-level flow control).
+     * Frame type: 0x10
+     * Format: type(0x10) | maximum_data
+     */
+    public static ByteBuffer encodeMaxDataFrame(long maximumData) {
+        ByteBuffer buffer = ByteBuffer.allocate(1 + 8);
+        buffer.put(FRAME_TYPE_MAX_DATA);
+        QuicVarint.write(buffer, maximumData);
+        buffer.flip();
+        return buffer;
+    }
+
+    /**
      * Encodes a DATA_BLOCKED frame (connection-level flow control).
      * Frame type: 0x14
      */

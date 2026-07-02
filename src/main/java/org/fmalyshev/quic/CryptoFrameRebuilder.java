@@ -1,5 +1,7 @@
 package org.fmalyshev.quic;
 
+import org.fmalyshev.quic.buffers.PoolBuffer;
+
 import java.nio.ByteBuffer;
 import java.util.Iterator;
 import java.util.Map;
@@ -13,7 +15,7 @@ public class CryptoFrameRebuilder {
     private final TreeMap<Integer, Integer> segments = new TreeMap<>();
 
     // Holds raw byte segments received BEFORE setExpectedLength is called
-    private final TreeMap<Integer, byte[]> earlyFragments = new TreeMap<>();
+    private final TreeMap<Integer, PoolBuffer> earlyFragments = new TreeMap<>();
 
     // Tracks the total contiguous bytes available starting from offset 0
     private int contiguousHead = 0;
@@ -50,7 +52,7 @@ public class CryptoFrameRebuilder {
      * @return returns true if frame is complete
      * @throws IllegalStateException
      */
-    public boolean addPart(int offset, int length, ByteBuffer data) throws IllegalStateException {
+    public boolean addPart(int offset, int length, PoolBuffer data) throws IllegalStateException {
         int endOffset = offset + length;
 
         // 1. Boundary checking
@@ -58,7 +60,7 @@ public class CryptoFrameRebuilder {
             throw new IllegalStateException("Frame segment boundaries must be positive");
         }
 
-        if (data.remaining() < length) {
+        if (data.buf().remaining() < length) {
             throw new IllegalStateException("Provided ByteBuffer has fewer remaining bytes than specified length");
         }
 
@@ -68,8 +70,8 @@ public class CryptoFrameRebuilder {
         // and collect only the sub-intervals that are not yet present, then store each gap.
 
         // Snapshot the data bytes for the full new segment (we will index into it by position)
-        byte[] incoming = new byte[length];
-        data.get(incoming);
+//        byte[] incoming = new byte[length];
+//        data.buf().get(incoming);
 
         // Find the first existing segment whose end > offset (it may overlap from the left)
         Map.Entry<Integer, Integer> startEntry = segments.lowerEntry(endOffset);
@@ -105,9 +107,12 @@ public class CryptoFrameRebuilder {
                 // Extract the slice of `incoming` that covers [gapStart, gapEnd)
                 int sliceOffset = gapStart - offset;
                 int sliceLen    = gapEnd - gapStart;
-                byte[] slice = new byte[sliceLen];
-                System.arraycopy(incoming, sliceOffset, slice, 0, sliceLen);
-                earlyFragments.put(gapStart, slice);
+//                byte[] slice = new byte[sliceLen];
+//                System.arraycopy(incoming, sliceOffset, slice, 0, sliceLen);
+                PoolBuffer fragment = data.borrow();
+                fragment.buf().position(fragment.buf().position() + sliceOffset);
+                fragment.buf().limit(fragment.buf().position() + sliceOffset + sliceLen);
+                earlyFragments.put(gapStart, fragment);
                 segments.put(gapStart, gapEnd);
             }
 
@@ -117,6 +122,8 @@ public class CryptoFrameRebuilder {
             }
             gapStart = next.getValue(); // skip over the existing segment
         }
+
+        data.buf().position(data.buf().position() + length);
 
         // 3. Advance the Contiguous Head Pointer
         while (segments.containsKey(contiguousHead)) {
@@ -144,10 +151,11 @@ public class CryptoFrameRebuilder {
         this.continuousBuffer = ByteBuffer.allocate(contiguousHead);
 
         // Drain any early fragments that arrived out-of-order into our new fixed buffer
-        for (Map.Entry<Integer, byte[]> entry : earlyFragments.entrySet()) {
+        for (Map.Entry<Integer, PoolBuffer> entry : earlyFragments.entrySet()) {
             if (entry.getKey() >= this.expectedLength) break;
             continuousBuffer.position(entry.getKey());
-            continuousBuffer.put(entry.getValue());
+            continuousBuffer.put(entry.getValue().buf());
+            entry.getValue().release();
         }
         // Clear early staging references to free JVM heap objects immediately
         earlyFragments.clear();
@@ -165,11 +173,11 @@ public class CryptoFrameRebuilder {
         ByteBuffer temp = ByteBuffer.allocate(numBytes);
         int read = 0;
         while (read < numBytes) {
-            byte[] chunk = earlyFragments.get(read);
+            PoolBuffer chunk = earlyFragments.get(read);
             if (chunk == null) break; // Gap in tree detected
 
-            int toCopy = Math.min(chunk.length, numBytes - read);
-            temp.put(chunk, 0, toCopy);
+            int toCopy = Math.min(chunk.buf().remaining(), numBytes - read);
+            temp.put(chunk.buf().duplicate().limit(chunk.buf().position() + toCopy));
             read += toCopy;
         }
         temp.flip();
