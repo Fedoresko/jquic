@@ -1,6 +1,5 @@
 package org.fmalyshev.quic;
 
-import org.jctools.queues.MpscArrayQueue;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -189,7 +188,7 @@ class SelectorThreadTest {
         assertEquals(1, activeConnections.size(), "Should have 1 active connection");
 
         // Send CONNECTION_CLOSE packet using real encryption
-        ByteBuffer packet = createEncrypted1RttPacketWithConnectionClose(TEST_CID, tlsMetadata.clientApplicationKeys.key());
+        ByteBuffer packet = createEncrypted1RttPacketWithConnectionClose(tlsMetadata.clientApplicationKeys.key());
 
         Method processPacketMethod = SelectorThread.class.getDeclaredMethod(
             "processPacket", ByteBuffer.class, SocketAddress.class, String.class);
@@ -304,7 +303,7 @@ class SelectorThreadTest {
      */
     private ByteBuffer createEncrypted1RttPacketWithPing(long cid, SecretKey encryptionKey) throws Exception {
         // Create PING frame
-        ByteBuffer pingFrame = ByteBuffer.allocate(1);
+        ByteBuffer pingFrame = ByteBuffer.allocate(20);
         pingFrame.put((byte) 0x01); // PING frame type
         pingFrame.flip();
 
@@ -314,15 +313,16 @@ class SelectorThreadTest {
         QuicConnection conn = activeConnections.get(cid);
         byte[] baseIv = (conn != null && conn.getTlsMetadata() != null)
                 ? conn.getTlsMetadata().clientApplicationKeys.iv() : new byte[12];
-        return QuicPacketBuilder.build1RttPacket( destinationCidBytes(cid), 0, pingFrame, new QuicCrypto.PacketProtectionKeys(encryptionKey, baseIv), null, (byte) 0);
+        QuicPacketBuilder.build1RttPacket( destinationCidBytes(cid), 0, pingFrame, new QuicCrypto.PacketProtectionKeys(encryptionKey, baseIv), null, (byte) 0);
+        return pingFrame;
     }
 
     /**
      * Creates a real encrypted 1-RTT packet with CONNECTION_CLOSE frame.
      */
-    private ByteBuffer createEncrypted1RttPacketWithConnectionClose(long cid, SecretKey encryptionKey) throws Exception {
+    private ByteBuffer createEncrypted1RttPacketWithConnectionClose(SecretKey encryptionKey) throws Exception {
         // Create CONNECTION_CLOSE frame
-        ByteBuffer closeFrame = ByteBuffer.allocate(4);
+        ByteBuffer closeFrame = ByteBuffer.allocate(20);
         closeFrame.put((byte) 0x1c); // CONNECTION_CLOSE frame type
         closeFrame.put((byte) 0);    // Error code (varint)
         closeFrame.put((byte) 0);    // Frame type (varint)
@@ -330,9 +330,10 @@ class SelectorThreadTest {
         closeFrame.flip();
 
         // Use QuicPacketBuilder to create properly encrypted packet
-        QuicConnection conn = activeConnections.get(cid);
+        QuicConnection conn = activeConnections.get(SelectorThreadTest.TEST_CID);
         byte[] baseIv = (conn != null && conn.getTlsMetadata() != null)
                 ? conn.getTlsMetadata().clientApplicationKeys.iv() : new byte[12];
-        return QuicPacketBuilder.build1RttPacket( destinationCidBytes(cid), 0, closeFrame, new QuicCrypto.PacketProtectionKeys(encryptionKey, baseIv), null, (byte) 0);
+        QuicPacketBuilder.build1RttPacket( destinationCidBytes(SelectorThreadTest.TEST_CID), 0, closeFrame, new QuicCrypto.PacketProtectionKeys(encryptionKey, baseIv), null, (byte) 0);
+        return closeFrame;
     }
 }

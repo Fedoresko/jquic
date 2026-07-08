@@ -5,7 +5,6 @@ import org.slf4j.LoggerFactory;
 
 import java.nio.ByteBuffer;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Manages packet number space for a specific encryption level (Initial, Handshake, or Application).
@@ -20,7 +19,7 @@ public class PacketNumberSpace {
     private static final long K_GRANULARITY_MS = 1; // Timer granularity: 1ms
     private static final long K_INITIAL_RTT_MS = 333; // Initial RTT estimate: 333ms
 
-    private final PacketPhase phase; // For logging: "Initial", "Handshake", "Application"
+    final PacketPhase phase; // For logging: "Initial", "Handshake", "Application"
 
     // Packet number allocation
     private long nextPacketNumber = 0;
@@ -392,10 +391,6 @@ public class PacketNumberSpace {
      *    - Used for: RTT measurement (only ack-eliciting packets update RTT)
      *    - Per RFC 9002 Section 5: ACK-only packets don't trigger ACKs or RTT updates
      * 
-     * WHY NOT STORE completePacket?
-     * - RFC 9002: Retransmitted packets MUST have brand new packet numbers
-     * - Reusing encrypted packets would violate cryptographic nonce reuse (same PN = same nonce)
-     * - We must re-encrypt the payload with a fresh packet number for security
      */
     public static class SentPacket implements TimeoutHeap.Entry {
         final long packetNumber;

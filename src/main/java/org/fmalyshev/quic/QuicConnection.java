@@ -3,28 +3,33 @@ package org.fmalyshev.quic;
 import ch.qos.logback.core.pattern.color.ANSIConstants;
 import org.fmalyshev.LogTool;
 import org.fmalyshev.quic.buffers.PoolBuffer;
+import org.fmalyshev.quic.buffers.ChunkedOutputStreamWithAmendmentsImpl;
+import org.fmalyshev.quic.buffers.RootPoolBuffer;
+import org.fmalyshev.quic.buffers.TranscryptHashSupport;
 import org.fmalyshev.quic.streamapi.ConnectionStreamManager;
 import org.fmalyshev.quic.streamapi.frames.*;
 import org.fmalyshev.quic.streamapi.impl.QuicStreamEngineImpl;
 import org.jctools.queues.MessagePassingQueue;
 import org.jctools.queues.SpscArrayQueue;
+import org.jspecify.annotations.NonNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.crypto.SecretKey;
+import java.io.IOException;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.net.SocketAddress;
-import java.nio.Buffer;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
-import java.security.SecureRandom;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
+import static org.fmalyshev.quic.QuicCrypto.GCM_TAG_LENGTH;
 import static org.fmalyshev.quic.QuicCrypto.rotateApplicationKeys;
+import static org.fmalyshev.quic.QuicFrameBuilder.*;
 import static org.fmalyshev.quic.streamapi.impl.StreamFrameProcessor.*;
 
 /**
@@ -35,9 +40,6 @@ public class QuicConnection implements TimeoutHeap.Entry {
     private static final LogTool log = new LogTool(logger);
     public static final int ERR_PROTOCOL_VIOLATION = 10;
     public static final int ERR_TLS_HANDSHAKE_FAILURE = 0x0100 + 40;
-    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
-    public static final int STATELESS_RESET_TOKEN_LENGTH = 16; // RFC 9000: 16 bytes
-    private static final int MIN_STATELESS_RESET_LENGTH = 21; // 1 byte fixed bit + 4 bytes unpredictable + 16 bytes token
     public static final int OUTBOUND_APP_QUEUE_SIZE = 1000;
 
     /**
@@ -56,9 +58,10 @@ public class QuicConnection implements TimeoutHeap.Entry {
     private static final long MAX_IDLE_TIMEOUT_MS = 600_000; // 10 minutes
 
     private final long connectionId;
+    private final ByteBuffer connectionIdBytes;
     private final SocketAddress remoteAddress;
     private final AtomicReference<State> state = new AtomicReference<>(State.INITIAL);
-    private QuicCrypto.TlsMetadata tlsMetadata = new QuicCrypto.TlsMetadata();
+    public QuicCrypto.TlsMetadata tlsMetadata = new QuicCrypto.TlsMetadata();
     private final long creationTime;
     private int timeoutHeapIndex = -1;
     ConnectionStreamManager connectionStreamManager;
@@ -92,7 +95,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
      * SPSC: single producer (this connection, always on the selector thread),
      * single consumer (the selector thread).
      */
-    private final Deque<ByteBuffer> outboundQueue = new ArrayDeque<>();
+    private final Deque<PoolBuffer> outboundQueue = new ArrayDeque<>();
 
     private final MessagePassingQueue<ByteBuffer> applicationQueue = new SpscArrayQueue<>(OUTBOUND_APP_QUEUE_SIZE);
 
@@ -132,7 +135,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
      *
      * @return the next ready-to-send encrypted packet, or {@code null} if the queue is empty
      */
-    ByteBuffer pollOutbound() {
+    PoolBuffer pollOutbound() {
         return outboundQueue.pollFirst();
     }
 
@@ -162,6 +165,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
 
     public QuicConnection(long connectionId, SocketAddress remoteAddress) {
         this.connectionId = connectionId;
+        this.connectionIdBytes = ByteBuffer.allocate(8).putLong(connectionId);
         this.remoteAddress = remoteAddress;
         this.state.set(State.INITIAL);
         this.creationTime = System.currentTimeMillis();
@@ -530,7 +534,6 @@ public class QuicConnection implements TimeoutHeap.Entry {
                 logger.debug("1-RTT application keys derived (transcript complete)");
 
                 tlsMetadata.updateTranscript(clientFinishedBytes);
-                logger.debug("Transcript updated with client Finished ({} bytes)", clientFinishedBytes.remaining());
 
                 // Generate HANDSHAKE_DONE packet (uses server1RttSecret, now available)
                 sendHandshakeDonePacket();
@@ -898,20 +901,21 @@ public class QuicConnection implements TimeoutHeap.Entry {
         logger.debug("Initial packet processed for connection {}", connectionId);
 
         if (state.get() == State.INITIAL && tlsMetadata.clientMetadata != null) {
-            logger.info("Connection CID: {} got complete ClientHello, proceeding with handshake...", connectionId);
-            // Step 3: Transition to HANDSHAKE state
-            setState(State.HANDSHAKE);
-
-            sendInitialResponse();
-
             try {
+                logger.info("Connection CID: {} got complete ClientHello, proceeding with handshake...", connectionId);
+
+                sendInitialResponse();
+
                 QuicCrypto.generateHandshakeSecrets(tlsMetadata);
 
                 // Generate Handshake response with server Certificate/Finished.
                 // This updates the transcript with: Certificate, CertificateVerify, server Finished.
                 sendHandshakePacket();
+
+                // Transition to HANDSHAKE state
+                setState(State.HANDSHAKE);
             } catch (Exception e) {
-                logger.error("Failed to generate TLS Handshake packet", e);
+                logger.error("Failed to send Handshake response", e);
             }
         } else {
             if (state.get() != State.INITIAL) {
@@ -1020,13 +1024,14 @@ public class QuicConnection implements TimeoutHeap.Entry {
             };
 
             setState(State.CLOSING);
-            ByteBuffer closeFrame = QuicFrameBuilder.createConnectionCloseFrame(errorCode, reason);
+            ByteBuffer byteBuffer = ByteBuffer.allocate(2018);
+            QuicFrameBuilder.writeConnectionCloseFrame(byteBuffer, errorCode, reason);
 
             logger.debug("Sending CONNECTION_CLOSE Initial packet");
             if (ext) {
-                enqueueApplicationData(closeFrame);
+                enqueueApplicationData(byteBuffer);
             } else {
-                sendPacket(closeFrame, phase);
+                sendPacket(byteBuffer, phase);
             }
             logger.info("Sent CONNECTION_CLOSE for CID: {}, transitioning to CLOSING", connectionId);
         } catch (Exception encryptEx) {
@@ -1036,11 +1041,13 @@ public class QuicConnection implements TimeoutHeap.Entry {
     }
 
     private void sendHelloRetryRequest(short prefferedGroupId) {
-        ByteBuffer payload = QuicCrypto.createHelloRetryRequest(prefferedGroupId);
-        QuicCrypto.applyHelloRetryRequestToTranscript(tlsMetadata, payload);
+        ByteBuffer hrrFrame = ByteBuffer.allocate(128);
+
+        writeHelloRetryRequest(hrrFrame, prefferedGroupId);
+        QuicCrypto.applyHelloRetryRequestToTranscript(tlsMetadata, hrrFrame);
 
         logger.debug("Sending HelloRetryRequest Initial packet");
-        sendInitialPacket(payload);
+        sendInitialPacket(hrrFrame);
     }
 
     private void sendPacket(ByteBuffer payload, PacketNumberSpace.PacketPhase phase) {
@@ -1052,19 +1059,19 @@ public class QuicConnection implements TimeoutHeap.Entry {
 
         long packetNumber = space.allocatePacketNumber();
 
-        ByteBuffer completePacket;
+        PoolBuffer completePacket;
         try {
             completePacket = switch (phase) {
                 case INITIAL -> QuicPacketBuilder.buildInitialPacket(
                         clientCid,      // DCID = connection ID
-                        connectionId,      // SCID = connection ID (server uses same)
+                        connectionIdBytes,      // SCID = connection ID (server uses same)
                         packetNumber,
                         payload.duplicate(),            // Plaintext payload
                         tlsMetadata.serverInitialKeys
                     );
                 case HANDSHAKE -> QuicPacketBuilder.buildHandshakePacket(
                         clientCid,      // DCID = connection ID
-                        connectionId,      // SCID = connection ID (server uses same)
+                        connectionIdBytes,      // SCID = connection ID (server uses same)
                         packetNumber,
                         payload.duplicate(),            // Plaintext payload
                         tlsMetadata.serverHandshakeKeys
@@ -1083,7 +1090,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
             return;
         }
 
-        logger.debug("Sending {} packet {}: {} bytes", phase, packetNumber, completePacket.remaining());
+        logger.debug("Sending {} packet {}: {} bytes", phase, packetNumber, completePacket.buf().remaining());
 
         // Track sent packet: store UNENCRYPTED payload for retransmission
         space.onPacketSent(packetNumber, payload, true);
@@ -1104,37 +1111,37 @@ public class QuicConnection implements TimeoutHeap.Entry {
     /**
      * Creates Initial packet with ServerHello.
      */
-    private void sendInitialResponse() {
+    private void sendInitialResponse() throws IOException {
         // Create ServerHello — uses the server's ephemeral public key already stored in tlsMetadata
-        ByteBuffer serverHello = QuicCrypto.createServerHello(tlsMetadata);
+        int headersReservedSize = MAX_LONG_HEADER_LENGTH + INITIAL_PACKET_TOKEN_LENGTH + CRYPTO_FRAME_MAX_HEADER_LENGTH;
 
-        // Feed ServerHello into the running transcript hash
-        byte[] serverHelloBytes = new byte[serverHello.remaining()];
-        serverHello.duplicate().get(serverHelloBytes);
-        tlsMetadata.updateTranscript(serverHelloBytes);
-        logger.debug("Transcript updated with ServerHello ({} bytes)", serverHelloBytes.length);
+        ByteBuffer serverHello = ByteBuffer.allocate(4096);
 
-        // Wrap in CRYPTO frame (this is the unencrypted payload)
-        while (serverHello.hasRemaining()) {
-            int oldLimit = serverHello.limit();
-            if (serverHello.remaining() > tlsMetadata.clientMetadata.maxUdpPayloadSize - 17 - 16) {
-                serverHello.limit(serverHello.position() + (int) tlsMetadata.clientMetadata.maxUdpPayloadSize - 17 - 16);
-            }
+        serverHello.position( headersReservedSize);
 
-            ByteBuffer cryptoFrame = QuicFrameBuilder.createCryptoFrame(0, serverHello);
+        ChunkedOutputStreamWithAmendmentsImpl outs = new ChunkedOutputStreamWithAmendmentsImpl(serverHello,
+                (int) (tlsMetadata.clientMetadata.maxUdpPayloadSize - 17 - 16),
+                (buffer, offset) -> {
+                    QuicFrameBuilder.prependCryptoFrameHeader(offset, buffer);
+                    ByteBuffer wrappedChunk = buffer.duplicate();
 
-            serverHello.limit(oldLimit);
+                    int chunkEnd = buffer.limit();
+                    buffer.limit(buffer.capacity());
+                    buffer.position(chunkEnd + headersReservedSize + GCM_TAG_LENGTH);
+                    return wrappedChunk;
+                }
+            );
+        TranscryptHashSupport transcryptHashSupport = new TranscryptHashSupport(outs, this::updateTranscript);
 
-            ByteBuffer payload = cryptoFrame;
+        transcryptHashSupport.startHashMessage("ServerHello");
+        writeServerHello(outs, tlsMetadata);
 
-            if (serverHello.remaining() == 0) {
-                payload = merge(List.of(payload, QuicFrameBuilder.createAckFrame(initialSpace)));
-                logger.debug("Sending ServerHello Initial packet");
-            } else {
-                logger.debug("Sending ServerHello + ACK Initial packet");
-            }
+        outs.close();
+        transcryptHashSupport.finish();
 
-            sendInitialPacket(payload);
+        for (ByteBuffer chunk : outs.readyChunks()) {
+            sendInitialPacket(chunk);
+            logger.debug("Sending ServerHello Initial packet");
         }
     }
 
@@ -1148,40 +1155,50 @@ public class QuicConnection implements TimeoutHeap.Entry {
      * so that CertificateVerify signs over EE+Cert and Finished covers the full flight.
      */
     private void sendHandshakePacket() throws Exception {
+        ByteBuffer frameBuffer = ByteBuffer.allocate(4096);
+        int headersReservedSize = MAX_LONG_HEADER_LENGTH + CRYPTO_FRAME_MAX_HEADER_LENGTH + PING_FRAME_LENGTH;
+        frameBuffer.position(headersReservedSize);
+
+        ChunkedOutputStreamWithAmendmentsImpl out = new ChunkedOutputStreamWithAmendmentsImpl(frameBuffer, (int) tlsMetadata.clientMetadata.maxUdpPayloadSize - 16,
+                (buffer, offset) -> {
+                    QuicFrameBuilder.prependCryptoFrameHeader(offset, buffer);
+                    QuicFrameBuilder.prependPingFrame(buffer);
+                    ByteBuffer wrappedChunk = buffer.duplicate();
+
+                    int chunkEnd = buffer.limit();
+                    buffer.limit(buffer.capacity());
+                    buffer.position(chunkEnd + headersReservedSize + GCM_TAG_LENGTH);
+                    return wrappedChunk;
+                });
+
+        TranscryptHashSupport transcryptUpdater = new TranscryptHashSupport(out, this::updateTranscript);
         // ── 1. EncryptedExtensions ────────────────────────────────────────────
-        ByteBuffer encryptedExtensions = QuicCrypto.createEncryptedExtensions(tlsMetadata, connectionId);
-        updateTranscript(encryptedExtensions, "EncryptedExtensions");
+        transcryptUpdater.startHashMessage("EncryptedExtensions");
+        QuicCrypto.putEncryptedExtensions(tlsMetadata, connectionId, out);
 
         // ── 2. Certificate ────────────────────────────────────────────────────
-        ByteBuffer certificate = QuicCrypto.createCertificate();
-        updateTranscript(certificate, "Certificate");
+        transcryptUpdater.startHashMessage("Certificate");
+        QuicCrypto.putCertificate(out);
 
         // ── 3. CertificateVerify ──────────────────────────────────────────────
         // Transcript now covers EE + Cert; CertificateVerify signs over that hash.
-        ByteBuffer certVerify = QuicCrypto.createCertificateVerify(tlsMetadata);
-        updateTranscript(certVerify, "CertificateVerify");
+        transcryptUpdater.startHashMessage("CertificateVerify");
+        QuicCrypto.putCertificateVerify(tlsMetadata, out);
 
         // ── 4. Finished ───────────────────────────────────────────────────────
-        ByteBuffer finished = QuicCrypto.createServerFinished(tlsMetadata);
-        updateTranscript(finished, "server Finished");
+        transcryptUpdater.startHashMessage("server Finished");
+        QuicCrypto.createServerFinished(tlsMetadata, out);
 
-        // ── 5. Coalesce all four messages into a single CRYPTO frame payload ──
-        ByteBuffer handshakeData = merge(List.of(encryptedExtensions, certificate, certVerify, finished));
+        out.close();
+        transcryptUpdater.finish();
 
-
-        while (handshakeData.hasRemaining()) {
-            int oldLimit = handshakeData.limit();
-            ByteBuffer payload = QuicFrameBuilder.createCryptoFrame(handshakeData.position(),
-                    handshakeData.limit(Math.min(oldLimit, handshakeData.position() + (int) tlsMetadata.clientMetadata.maxUdpPayloadSize - 16)));
-
-            handshakeData.limit(oldLimit);
-
-            ByteBuffer ping = ByteBuffer.allocate(1).put((byte) 0x01);//PING
-            payload = merge(List.of(ping, payload));
-
-            logger.debug("Sending Handshake Crypto frame");
-            sendHandshakePacket(payload);
+        for (ByteBuffer chunk : out.readyChunks()) {
+            sendHandshakePacket(chunk);
         }
+    }
+
+    private static @NonNull ByteBuffer lastPutPart(PoolBuffer poolBuffer, int pos) {
+        return poolBuffer.buf().duplicate().position(pos).limit(poolBuffer.buf().position());
     }
 
     /**
@@ -1189,10 +1206,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
      * The buffer's position is not advanced (uses a duplicate for reading).
      */
     private void updateTranscript(ByteBuffer message, String messageName) {
-        byte[] bytes = new byte[message.remaining()];
-        message.duplicate().get(bytes);
-        tlsMetadata.updateTranscript(bytes);
-        logger.debug("Transcript updated with {} ({} bytes)", messageName, bytes.length);
+        tlsMetadata.updateTranscript(message);
     }
 
     /**
@@ -1201,7 +1215,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
      */
     private void sendHandshakeDonePacket() throws Exception {
         // Create HANDSHAKE_DONE frame (type 0x1e)
-        ByteBuffer frame =  ByteBuffer.allocateDirect(OUTBOUND_APP_QUEUE_SIZE);
+        ByteBuffer frame =  ByteBuffer.allocate(OUTBOUND_APP_QUEUE_SIZE);
         QuicFrameBuilder.createHandshakeDoneFrame(frame);
         frame.put((byte) 0x01); // PING
         frame.flip();
@@ -1211,23 +1225,22 @@ public class QuicConnection implements TimeoutHeap.Entry {
     }
 
     private void sendInitialAck() {
-        ByteBuffer ackFrame = QuicFrameBuilder.createAckFrame(initialSpace);
-
+        ByteBuffer frameBuffer = ByteBuffer.allocate(256);
+        QuicFrameBuilder.writeAckFrame(initialSpace, frameBuffer);
         logger.debug("Sending ACK Initial packet");
-        sendInitialPacket(ackFrame);
+        sendInitialPacket(frameBuffer);
     }
     private void sendHandshakeAck() {
-        ByteBuffer ackFrame = QuicFrameBuilder.createAckFrame(handshakeSpace);
-
+        ByteBuffer frameBuffer = ByteBuffer.allocate(256);
+        QuicFrameBuilder.writeAckFrame(handshakeSpace, frameBuffer);
         logger.debug("Sending Handshake ACK");
-        sendHandshakePacket(ackFrame);
+        sendHandshakePacket(frameBuffer);
     }
     private void send1RttAck() {
-        // Get ACK ranges from application space
-        ByteBuffer ackFrame = QuicFrameBuilder.createAckFrame(applicationSpace);
-
+        ByteBuffer frameBuffer = ByteBuffer.allocate(256);
+        QuicFrameBuilder.writeAckFrame(applicationSpace, frameBuffer);
         logger.debug("Sending 1-RTT ACK");
-        sendApplicationPacket(ackFrame);
+        sendApplicationPacket(frameBuffer);
     }
 
     /**
@@ -1355,8 +1368,6 @@ public class QuicConnection implements TimeoutHeap.Entry {
             logger.info("CONNECTION_CLOSE (Application): error_code={}, reason=\"{}\"",
                     errorCode, reason);
         }
-
-
     }
 
     /**
@@ -1368,44 +1379,11 @@ public class QuicConnection implements TimeoutHeap.Entry {
      */
     private void sendStatelessReset(int incomingPacketSize) {
         try {
-            // RFC 9000: Stateless Reset should be smaller than incoming packet
-            // to avoid amplification attacks, but at least 21 bytes
-            int resetSize = Math.max(MIN_STATELESS_RESET_LENGTH,
-                    Math.min(incomingPacketSize - 1, 1200));
-
-            ByteBuffer resetPacket = ByteBuffer.allocate(resetSize);
-
-            // First byte must have fixed bit (0x40) set to appear as valid short header
-            byte firstByte = (byte) (0x40 | (SECURE_RANDOM.nextInt() & 0x3F));
-            resetPacket.put(firstByte);
-
-            // Fill with random unpredictable bits (excluding last 16 bytes for token)
-            int randomBytesCount = resetSize - 1 - STATELESS_RESET_TOKEN_LENGTH;
-            byte[] randomBytes = new byte[randomBytesCount];
-            SECURE_RANDOM.nextBytes(randomBytes);
-            resetPacket.put(randomBytes);
-
-            // Add 16-byte Stateless Reset Token at the end
-            // In a real implementation, this should be a pseudorandom function of the CID
-            // For now, we use random bytes (stateless - doesn't require storing state)
-            byte[] token = QuicCrypto.generateStatelessResetToken(ByteBuffer.allocate(8).putLong(connectionId).array());
-            SECURE_RANDOM.nextBytes(token);
-            resetPacket.put(token);
-
-            resetPacket.flip();
-
-            outboundQueue.push(resetPacket);
-            logger.info("Sent Stateless Reset ({} bytes)", resetSize);
-
+            ByteBuffer frame = QuicPacketBuilder.writeStatelessResetFrame(connectionId, incomingPacketSize);
+            sendInitialPacket(frame);
+            logger.info("Sent Stateless Reset ({} bytes)", frame.remaining());
         } catch (Exception e) {
             logger.error("Failed to send Stateless Reset", e);
         }
-    }
-
-    private static ByteBuffer merge(List<ByteBuffer> buffers) {
-        int combinedSize = buffers.stream().mapToInt(Buffer::remaining).sum();
-        ByteBuffer merged = ByteBuffer.allocate(combinedSize);
-        buffers.forEach(merged::put);
-        return merged.flip();
     }
 }

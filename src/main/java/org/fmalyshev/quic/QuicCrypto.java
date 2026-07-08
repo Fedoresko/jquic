@@ -1,6 +1,7 @@
 package org.fmalyshev.quic;
 
 import org.conscrypt.Conscrypt;
+import org.fmalyshev.quic.buffers.ChunkedOutputStreamWithAmendments;
 import org.fmalyshev.quic.streamapi.QuicApplicationProtocol;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -11,12 +12,13 @@ import javax.crypto.Mac;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.security.*;
 import java.util.*;
 import java.util.stream.Collectors;
 
-import static org.fmalyshev.quic.QuicConnection.STATELESS_RESET_TOKEN_LENGTH;
+import static org.fmalyshev.quic.QuicPacketBuilder.STATELESS_RESET_TOKEN_LENGTH;
 
 /**
  * Handles QUIC cryptographic operations based on TLS 1.3.
@@ -45,9 +47,9 @@ public class QuicCrypto {
 
     // TLS 1.3 identifiers used during ClientHello parsing and ServerHello construction
     /** TLS_AES_128_GCM_SHA256 cipher suite identifier (RFC 8446 Appendix B.4). */
-    private static final int TLS_AES_128_GCM_SHA256_ID = 0x1301;
+    public static final int TLS_AES_128_GCM_SHA256_ID = 0x1301;
     /** TLS 1.3 version identifier used in supported_versions extension (RFC 8446 §4.2.1). */
-    private static final int TLS_VERSION_1_3 = 0x0304;
+    public static final int TLS_VERSION_1_3 = 0x0304;
     /** IANA NamedGroup identifier for x25519 (RFC 8446 §4.2.7). */
     private static final int GROUP_X25519 = 0x001d;
 
@@ -55,7 +57,7 @@ public class QuicCrypto {
      * Sentinel random used in HelloRetryRequest (RFC 8446 §4.1.3).
      * = SHA-256("HelloRetryRequest") — fixed, well-known value.
      */
-    private static final byte[] HRR_RANDOM = {
+    public static final byte[] HRR_RANDOM = {
         (byte)0xCF, (byte)0x21, (byte)0xAD, (byte)0x74, (byte)0xE5, (byte)0x9A, (byte)0x61, (byte)0x11,
         (byte)0xBE, (byte)0x1D, (byte)0x8C, (byte)0x02, (byte)0x1E, (byte)0x65, (byte)0xB8, (byte)0x91,
         (byte)0xC2, (byte)0xA2, (byte)0x11, (byte)0x16, (byte)0x7A, (byte)0xBB, (byte)0x8C, (byte)0x5E,
@@ -189,16 +191,11 @@ public class QuicCrypto {
          */
         public synchronized void updateTranscript(ByteBuffer message) {
             message.mark();
-            byte[] buf = new byte[message.remaining()];
-            message.get(buf);
-            message.reset();
-            logger.info("Updating transcript with {}", HexFormat.of().formatHex(buf));
             transcriptDigest.update(message);
             message.reset();
         }
 
         public synchronized void updateTranscript(byte[] message) {
-            logger.info("Updating transcript with {}", HexFormat.of().formatHex(message));
             transcriptDigest.update(message);
         }
 
@@ -592,35 +589,21 @@ public class QuicCrypto {
      * @throws CryptoException if encryption fails
      */
     public static ByteBuffer encryptPacket(ByteBuffer plaintext, SecretKey secret, long packetNumber,
-                                           byte[] associatedData, byte[] baseIv) throws CryptoException {
+                                           ByteBuffer associatedData, byte[] baseIv) throws CryptoException {
         try {
-            if (secret == null) {
-                // Mock encryption for testing - still include space for GCM tag
-                ByteBuffer encrypted = ByteBuffer.allocate(plaintext.remaining() + GCM_TAG_LENGTH);
-                encrypted.put(plaintext);
-                // In mock mode, pad with zeros for the "tag"
-                for (int i = 0; i < GCM_TAG_LENGTH; i++) {
-                    encrypted.put((byte) 0);
-                }
-                encrypted.flip();
-                return encrypted;
-            }
-
             // RFC 9001 §5.3: nonce = baseIv XOR left-padded(packetNumber)
             byte[] iv = baseIv.clone();
             for (int i = 0; i < 8; i++) {
                 iv[GCM_NONCE_LENGTH - 1 - i] ^= (byte) (packetNumber >> (i * 8));
             }
 
-            logger.debug("Encrypting packet {} with IV: {}", packetNumber, HexFormat.of().formatHex(iv));
-            logger.debug("Encrypting packet {} with Key: {}", packetNumber, HexFormat.of().formatHex(secret.getEncoded()));
 
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding", "Conscrypt");
             cipher.init(Cipher.ENCRYPT_MODE, secret, new GCMParameterSpec(GCM_TAG_LENGTH * 8, iv));
 
             // RFC 9001 Section 5.4.1: Set Associated Data (packet header)
             // The GCM tag will authenticate both the header and the encrypted payload
-            if (associatedData != null && associatedData.length > 0) {
+            if (associatedData != null && associatedData.remaining() > 0) {
                 cipher.updateAAD(associatedData);
             }
 
@@ -670,7 +653,6 @@ public class QuicCrypto {
             byte[] clientHelloBytes = new byte[clientHello.remaining()];
             clientHello.duplicate().get(clientHelloBytes);
             metadata.updateTranscript(clientHelloBytes);
-            logger.debug("Transcript updated with ClientHello ({} bytes)", clientHelloBytes.length);
 
             // ── Step 3: Parse and validate the ClientHello.
             ParsedClientHello parsed = parseClientHello(clientHello);
@@ -749,7 +731,6 @@ public class QuicCrypto {
                 deriveIv(serverHandshakeTrafficSecret), deriveHp(serverHandshakeTrafficSecret));
         metadata.clientHandshakeKeys = new PacketProtectionKeysWithHP(deriveKey(clientHandshakeTrafficSecret),
                 deriveIv(clientHandshakeTrafficSecret), deriveHp(clientHandshakeTrafficSecret));
-
     }
 
     /**
@@ -992,16 +973,11 @@ public class QuicCrypto {
                     metadata.handshakeSecretBytes, "derived", sha256(new byte[0]), 32);
             byte[] masterSecret = hkdfExtract(derivedFromHandshake, new byte[32]);
 
-            logger.debug("App transcript master sec {}", HexFormat.of().formatHex(masterSecret));
-
             // Snapshot the current transcript hash (all messages up to client Finished)
             byte[] context = metadata.transcriptHash();
 
             metadata.clientApplicationTrafficSecret = hkdfExpandLabel(
                     masterSecret, "c ap traffic", context, 32);
-
-            logger.debug("App transcript hash {}", HexFormat.of().formatHex(context));
-            logger.debug("App traffic sec {}", HexFormat.of().formatHex(metadata.clientApplicationTrafficSecret));
 
             metadata.serverApplicationTrafficSecret = hkdfExpandLabel(
                     masterSecret, "s ap traffic", context, 32);
@@ -1012,13 +988,6 @@ public class QuicCrypto {
             byte[] serverApplicationHpKey = deriveHp(metadata.serverApplicationTrafficSecret);
             byte[] clientApplicationIv = deriveIv(metadata.clientApplicationTrafficSecret);
             byte[] serverApplicationIv = deriveIv(metadata.serverApplicationTrafficSecret);
-
-            logger.debug("App client sec {}", HexFormat.of().formatHex(clientApplicationSecret.getEncoded()));
-            logger.debug("App client IV {}", HexFormat.of().formatHex(clientApplicationIv));
-            logger.debug("App client HP {}", HexFormat.of().formatHex(clientApplicationHpKey));
-            logger.debug("App sever sec {}", HexFormat.of().formatHex(serverApplicationSecret.getEncoded()));
-            logger.debug("App sever IV {}", HexFormat.of().formatHex(serverApplicationIv));
-            logger.debug("App sever HP {}", HexFormat.of().formatHex(serverApplicationHpKey));
 
             metadata.serverApplicationHeaderProtection = serverApplicationHpKey;
             metadata.clientApplicationHeaderProtection = clientApplicationHpKey;
@@ -1055,9 +1024,6 @@ public class QuicCrypto {
                     )
             );
 
-            logger.warn("App client sec {}", HexFormat.of().formatHex(metadata.clientApplicationKeys.key.getEncoded()));
-            logger.warn("App client IV {}", HexFormat.of().formatHex(metadata.clientApplicationKeys.iv));
-
             metadata.currentPhase = (byte)( (metadata.currentPhase == 0) ? 1 : 0 );
 
             logger.info("Rotated application keys, current Key Phase set to {}", metadata.currentPhase);
@@ -1074,151 +1040,6 @@ public class QuicCrypto {
         return digest.digest(input);
     }
 
-    /**
-     * Creates a TLS 1.3 ServerHello message (RFC 8446 Section 4.1.3).
-     *
-     * <p>The {@code key_share} extension carries {@link TlsMetadata#serverEphemeralPublicKey},
-     * the server's X25519 ephemeral public key produced by {@link #processClientHello},
-     * so the client can complete its side of the ECDHE exchange.
-     *
-     * @param metadata the live {@link TlsMetadata} for this connection
-     * @return serialised ServerHello bytes ready to wrap in a TLS CRYPTO frame
-     */
-    public static ByteBuffer createServerHello(TlsMetadata metadata) {
-        short cipherSuiteId = getCipherSuiteId(metadata.selectedCipherSuite);
-
-        byte[] keyShare = metadata.serverEphemeralPublicKey;
-//        if (keyShare == null || keyShare.length != 32) {
-//            logger.error("serverEphemeralPublicKey missing or wrong length — was processClientHello called?");
-//            keyShare = new byte[32]; // fallback; handshake will fail on the client side
-//        }
-
-        byte[] serverRandom = metadata.serverRandom != null ? metadata.serverRandom : new byte[32];
-
-        // ServerHello wire layout (RFC 8446 §4.1.3):
-        //   ProtocolVersion(2) + Random(32) + session_id_len(1)
-        //   + CipherSuite(2) + compression(1) + extensions_len(2) + extensions
-        ByteBuffer buf = ByteBuffer.allocate(256);
-
-        buf.putShort((short) 0x0303);           // legacy_version = TLS 1.2 (for compatibility)
-        buf.put(serverRandom);                  // server random from metadata
-        buf.put((byte) 0x00);                   // legacy session_id (empty for TLS 1.3)
-        buf.putShort(cipherSuiteId);            // selected cipher suite
-        buf.put((byte) 0x00);                   // legacy compression = null
-
-        int extLenPos = buf.position();
-        buf.putShort((short) 0);                // extensions length placeholder
-        int extStart = buf.position();
-
-        // supported_versions extension (0x002b) — signals TLS 1.3 to the client
-        buf.putShort((short) 0x002b);
-        buf.putShort((short) 0x0002);
-        buf.putShort((short) 0x0304);           // TLS 1.3
-
-        // key_share extension (0x0033) — server's x25519 ephemeral public key
-        buf.putShort((short) 0x0033);
-        buf.putShort((short) (2 + 2 + keyShare.length)); // group(2) + key_len(2) + key
-        buf.putShort(metadata.selectedKeyScheme);
-        buf.putShort((short) keyShare.length);
-        buf.put(keyShare);
-
-
-        // Back-fill extensions length
-        buf.putShort(extLenPos, (short) (buf.position() - extStart));
-
-        buf.flip();
-
-        int len = buf.remaining();
-        ByteBuffer wrap = ByteBuffer.allocate(len + 4);
-        wrap.put((byte) 0x02); //Server Hello
-        wrap.put((byte) (len >> 16));
-        wrap.put((byte) (len >> 8));
-        wrap.put((byte) len);
-        wrap.put(buf);
-
-        return wrap.flip();
-    }
-
-
-
-    /**
-     * Builds the raw TLS 1.3 HelloRetryRequest (HRR) wire message and wraps it
-     * in a QUIC CRYPTO frame (RFC 9000 §19.6).
-     *
-     * <p>An HRR is a special ServerHello (RFC 8446 §4.1.3) whose Random field equals
-     * SHA-256("HelloRetryRequest"). It carries exactly two extensions:
-     * <ul>
-     *   <li>{@code supported_versions} (0x002b) — advertises TLS 1.3.</li>
-     *   <li>{@code key_share} (0x0033) — contains <em>only</em> the preferred group id,
-     *       no key material (RFC 8446 §4.2.8), telling the client to retry with that group.</li>
-     * </ul>
-     *
-     * <p>This method is a <em>pure builder</em>: it does not touch the transcript.
-     * After obtaining the frame, call
-     * {@link #applyHelloRetryRequestToTranscript(TlsMetadata, ByteBuffer)}
-     * to perform the RFC 8446 §4.4.1 transcript replacement.
-     *
-     * @param preferredGroupId IANA NamedGroup id the server wants the client to use
-     *                         (e.g. {@code 0x001d} for x25519, {@code 0x0017} for secp256r1)
-     * @return a flipped {@link ByteBuffer} containing the QUIC CRYPTO frame ready to
-     *         place inside an Initial packet; the buffer is also suitable as the
-     *         {@code hrr} argument to
-     *         {@link #applyHelloRetryRequestToTranscript(TlsMetadata, ByteBuffer)}
-     */
-    public static ByteBuffer createHelloRetryRequest(short preferredGroupId) {
-        // Zero-copy: single buffer, lengths back-filled in place.
-        ByteBuffer hrr = ByteBuffer.allocate(128);
-
-        // ── 4-byte TLS handshake header ───────────────────────────────────────────
-        hrr.put((byte) 0x02);                    // HandshakeType: server_hello (HRR reuses 0x02)
-        int bodyLenPos = hrr.position();
-        hrr.put((byte) 0).put((byte) 0).put((byte) 0); // body length — back-filled
-
-        // ── ServerHello body (RFC 8446 §4.1.3) ───────────────────────────────────
-        int bodyStart = hrr.position();
-        hrr.putShort((short) 0x0303);                     // legacy_version = TLS 1.2
-        hrr.put(HRR_RANDOM);                              // sentinel random
-        hrr.put((byte) 0x00);                             // legacy session_id length = 0
-        hrr.putShort((short) TLS_AES_128_GCM_SHA256_ID); // cipher suite
-        hrr.put((byte) 0x00);                             // legacy compression = null
-
-        int extLenPos = hrr.position();
-        hrr.putShort((short) 0);                 // extensions_length — back-filled
-        int extStart = hrr.position();
-
-        // supported_versions (0x002b): TLS 1.3
-        hrr.putShort((short) 0x002b);
-        hrr.putShort((short) 0x0002);
-        hrr.putShort((short) TLS_VERSION_1_3);
-
-        // key_share (0x0033): selected_group only — no key bytes (RFC 8446 §4.2.8)
-        hrr.putShort((short) 0x0033);
-        hrr.putShort((short) 0x0002);            // extension data length = 2 (group id only)
-        hrr.putShort(preferredGroupId);
-
-        // Back-fill extensions_length
-        int extEnd = hrr.position();
-        hrr.putShort(extLenPos, (short) (extEnd - extStart));
-
-        // Back-fill body length (3 bytes, big-endian)
-        int bodyLen = extEnd - bodyStart;
-        hrr.put(bodyLenPos,     (byte) ((bodyLen >> 16) & 0xFF));
-        hrr.put(bodyLenPos + 1, (byte) ((bodyLen >>  8) & 0xFF));
-        hrr.put(bodyLenPos + 2, (byte) ( bodyLen        & 0xFF));
-
-        hrr.flip();
-
-        // ── Wrap in QUIC CRYPTO frame (RFC 9000 §19.6) ───────────────────────────
-        // type(varint=0x06) | offset(varint=0) | length(varint) | data
-        int hrrLen = hrr.remaining();
-        ByteBuffer frame = ByteBuffer.allocateDirect(3 + 8 + hrrLen);
-        QuicVarint.write(frame, 0x06);
-        QuicVarint.write(frame, 0x00);
-        QuicVarint.write(frame, hrrLen);
-        frame.put(hrr);
-        frame.flip();
-        return frame;
-    }
 
     /**
      * Applies the RFC 8446 §4.4.1 transcript replacement that must happen after
@@ -1248,7 +1069,6 @@ public class QuicCrypto {
      *
      * @param metadata live {@link TlsMetadata}; its transcript is updated in-place
      * @param hrrCryptoFrame the QUIC CRYPTO frame returned by
-     *                       {@link #createHelloRetryRequest(short)}; the TLS HRR message
      *                       is extracted from it (bytes after the 3-varint CRYPTO header)
      */
     public static void applyHelloRetryRequestToTranscript(TlsMetadata metadata, ByteBuffer hrrCryptoFrame) {
@@ -1305,7 +1125,7 @@ public class QuicCrypto {
      * @param metadata the live {@link TlsMetadata} for this connection
      * @return serialised EncryptedExtensions bytes ready to wrap in a TLS CRYPTO frame
      */
-    public static ByteBuffer createEncryptedExtensions(TlsMetadata metadata, long cid) {
+    public static void putEncryptedExtensions(TlsMetadata metadata, long cid, ChunkedOutputStreamWithAmendments output) throws IOException {
         // Zero-copy: single pre-allocated buffer, all lengths back-filled in place.
         // Layout:
         //   [0]      HandshakeType (1)          = 0x08
@@ -1314,114 +1134,121 @@ public class QuicCrypto {
         //   [6..]    extensions:
         //              ALPN (0x0010)
         //              QUIC transport parameters (0x0039)
-        ByteBuffer msg = ByteBuffer.allocate(1024);
 
         // ── TLS handshake header (4 bytes) ────────────────────────────────────────
-        msg.put((byte) 0x08);                    // HandshakeType: encrypted_extensions
-        int bodyLenPos = msg.position();
-        msg.put((byte) 0).put((byte) 0).put((byte) 0); // body length placeholder
+        output.write((byte) 0x08);                    // HandshakeType: encrypted_extensions
+        int bodyLenPos = output.getPos();
+        output.write((byte) 0);
+        output.write((byte) 0);
+        output.write((byte) 0); // body length placeholder
 
         // ── EncryptedExtensions body: extensions_length field (2 bytes) ───────────
-        int extLenPos = msg.position();
-        msg.putShort((short) 0);                 // extensions_length placeholder
+        int extLenPos = output.getPos();
+        output.writeShort((short) 0);                 // extensions_length placeholder
 
-        int extStart = msg.position();
+        int extStart = output.getPos();
 
         // ── ALPN extension (0x0010, RFC 7301) ────────────────────────────────────
         // Only include if a protocol was negotiated.
-        msg.put((byte) 0x00).put((byte) 0x10);  // extension type: ALPN
+        output.write((byte) 0x00);
+        output.write((byte) 0x10);  // extension type: ALPN
         int totalLen = QuicEngine.getStreamEngine().getProtocols()
                 .stream().map(QuicApplicationProtocol::getProtocolName)
                 .mapToInt(String::length).sum();
         totalLen += QuicEngine.getStreamEngine().getProtocols().size();
-        msg.putShort((short) (totalLen + 2));  // extension data length
-        msg.putShort((short) totalLen);  // ProtocolNameList length
+        output.writeShort((short) (totalLen + 2));  // extension data length
+        output.writeShort((short) totalLen);  // ProtocolNameList length
         for (QuicApplicationProtocol protocol : QuicEngine.getStreamEngine().getProtocols()) {
-            msg.put((byte) protocol.getProtocolName().length());
-            msg.put(protocol.getProtocolName().getBytes());
+            output.write((byte) protocol.getProtocolName().length());
+            output.write(protocol.getProtocolName().getBytes());
         }
 
         // ── QUIC transport parameters extension (0x0039, RFC 9001 §8.2) ──────────
-        msg.putShort((short) 0x0039);            // extension type: quic_transport_parameters
-        int tpExtLenPos = msg.position();
-        msg.putShort((short) 0);                 // transport parameters length placeholder
+        output.writeShort((short) 0x0039);            // extension type: quic_transport_parameters
+        int tpExtLenPos = output.getPos();
+        output.writeShort((short) 0);                 // transport parameters length placeholder
 
-        int tpStart = msg.position();
+        int tpStart = output.getPos();
 
         // original_destination_connection_id (param id 0x00, RFC 9000 §18.2)
         if (metadata.originalDCid != null && metadata.originalDCid.length > 0) {
-            QuicVarint.write(msg, 0x00);                         // param id
-            QuicVarint.write(msg, metadata.originalDCid.length); // param length
-            msg.put(metadata.originalDCid);                      // param value
+            QuicVarint.write(output, 0x00);                         // param id
+            QuicVarint.write(output, metadata.originalDCid.length); // param length
+            output.write(metadata.originalDCid);                      // param value
         }
 
         // initial_source_connection_id (param id 0x0f)
-        QuicVarint.write(msg, 0x0f);
-        QuicVarint.write(msg, 8);
-        msg.putLong(cid);
+        QuicVarint.write(output, 0x0f);
+        QuicVarint.write(output, 8);
+        output.writeLong(cid);
+
+        // disable_active_migration (param id 0x0c, RFC 9000)
+        QuicVarint.write(output, 0x0c);
+        QuicVarint.write(output, 0x00);
 
         // initial_max_data  (param id 0x04)
-        QuicVarint.write(msg, 0x04);
-        QuicVarint.write(msg, QuicVarint.sizeOf(10485760));
-        QuicVarint.write(msg,10485760);
+        QuicVarint.write(output, 0x04);
+        QuicVarint.write(output, QuicVarint.sizeOf(10485760));
+        QuicVarint.write(output,10485760);
 
         //initial_max_stream_data_bidi_local: 0x05
-        QuicVarint.write(msg, 0x05);
-        QuicVarint.write(msg, QuicVarint.sizeOf(10485760));
-        QuicVarint.write(msg,10485760);
+        QuicVarint.write(output, 0x05);
+        QuicVarint.write(output, QuicVarint.sizeOf(10485760));
+        QuicVarint.write(output,10485760);
 
         //initial_max_stream_data_bidi_remote: 0x06
-        QuicVarint.write(msg, 0x06);
-        QuicVarint.write(msg, QuicVarint.sizeOf(10485760));
-        QuicVarint.write(msg,10485760);
+        QuicVarint.write(output, 0x06);
+        QuicVarint.write(output, QuicVarint.sizeOf(10485760));
+        QuicVarint.write(output,10485760);
 
         //initial_max_stream_data_uni: 0x07
-        QuicVarint.write(msg, 0x07);
-        QuicVarint.write(msg, QuicVarint.sizeOf(10485760));
-        QuicVarint.write(msg,10485760);
+        QuicVarint.write(output, 0x07);
+        QuicVarint.write(output, QuicVarint.sizeOf(10485760));
+        QuicVarint.write(output,10485760);
 
         // initial_max_streams_bidi (param id 0x08)
-        QuicVarint.write(msg, 0x08);
-        QuicVarint.write(msg, QuicVarint.sizeOf(100));
-        QuicVarint.write(msg,100);
+        QuicVarint.write(output, 0x08);
+        QuicVarint.write(output, QuicVarint.sizeOf(100));
+        QuicVarint.write(output,100);
 
         // initial_max_streams_uni  (param id 0x09)
-        QuicVarint.write(msg, 0x09);
-        QuicVarint.write(msg, QuicVarint.sizeOf(100));
-        QuicVarint.write(msg,100);
+        QuicVarint.write(output, 0x09);
+        QuicVarint.write(output, QuicVarint.sizeOf(100));
+        QuicVarint.write(output,100);
 
         // max_udp_payload_size
-        QuicVarint.write(msg, 0x03);
-        QuicVarint.write(msg, QuicVarint.sizeOf(metadata.clientMetadata.maxUdpPayloadSize));
-        QuicVarint.write(msg, metadata.clientMetadata.maxUdpPayloadSize);
+        QuicVarint.write(output, 0x03);
+        QuicVarint.write(output, QuicVarint.sizeOf(metadata.clientMetadata.maxUdpPayloadSize));
+        QuicVarint.write(output, metadata.clientMetadata.maxUdpPayloadSize);
 
 
         // max_idle_timeout (param id 0x01)
         long idleTimeoutMs = metadata.negotiatedIdleTimeoutMs > 0
                 ? metadata.negotiatedIdleTimeoutMs
                 : 30_000;
-        QuicVarint.write(msg, 0x01);             // param id: max_idle_timeout
-        QuicVarint.write(msg, QuicVarint.sizeOf(idleTimeoutMs));
-        QuicVarint.write(msg, idleTimeoutMs);    // param value
+        QuicVarint.write(output, 0x01);             // param id: max_idle_timeout
+        QuicVarint.write(output, QuicVarint.sizeOf(idleTimeoutMs));
+        QuicVarint.write(output, idleTimeoutMs);    // param value
 
-        int tpEnd = msg.position();
+        int tpEnd = output.getPos();
         int tpLen = tpEnd - tpStart;
 
         // Back-fill transport parameters extension data length
-        msg.putShort(tpExtLenPos, (short) tpLen);
+        output.amendAtPos(tpExtLenPos, wrt -> wrt.writeShort((short) tpLen));
 
         // ── Back-fill extensions_length ───────────────────────────────────────────
-        int extEnd = msg.position();
-        msg.putShort(extLenPos, (short) (extEnd - extStart));
+        int extEnd = output.getPos();
+        output.amendAtPos(extLenPos, wrt -> wrt.writeShort((short) (extEnd - extStart)));
 
         // ── Back-fill body length (3 bytes, big-endian) ───────────────────────────
         int bodyLen = extEnd - (bodyLenPos + 3);
-        msg.put(bodyLenPos,     (byte) ((bodyLen >> 16) & 0xFF));
-        msg.put(bodyLenPos + 1, (byte) ((bodyLen >>  8) & 0xFF));
-        msg.put(bodyLenPos + 2, (byte) ( bodyLen        & 0xFF));
+        output.amendAtPos(bodyLenPos, wrt-> {
+            wrt.write((byte) ((bodyLen >> 16) & 0xFF));
+            wrt.write((byte) ((bodyLen >> 8) & 0xFF));
+            wrt.write((byte) (bodyLen & 0xFF));
+        });
 
-        msg.flip();
-        return msg;
+        logger.debug("Encrypted Extensions TP len: {} ext len: {} body len {}", tpLen, (extEnd - extStart), bodyLen);
     }
 
     /**
@@ -1439,10 +1266,9 @@ public class QuicCrypto {
      * where {@code finished_key = HKDF-Expand-Label(server_hs_secret, "finished", "", 32)}.
      *
      * @param metadata the live {@link TlsMetadata}; its transcript must be fully up-to-date
-     * @return serialised Finished message bytes (36 bytes)
      * @throws CryptoException if HMAC computation fails
      */
-    public static ByteBuffer createServerFinished(TlsMetadata metadata) throws CryptoException {
+    public static void createServerFinished(TlsMetadata metadata, ChunkedOutputStreamWithAmendments output) throws CryptoException, IOException {
         try {
             byte[] finishedKey = hkdfExpandLabel(metadata.serverHandshakeTrafficSecret, "finished", new byte[0], 32);
             byte[] transcriptHash = metadata.transcriptHash();
@@ -1452,13 +1278,11 @@ public class QuicCrypto {
             byte[] verifyData = mac.doFinal(transcriptHash);
 
             // Wrap in TLS handshake header: msg_type(1) + length(3) + verify_data(32)
-            ByteBuffer msg = ByteBuffer.allocate(4 + verifyData.length);
-            msg.put((byte) 0x14);                                 // HandshakeType: finished
-            msg.put((byte) ((verifyData.length >>> 16) & 0xFF));
-            msg.put((byte) ((verifyData.length >>>  8) & 0xFF));
-            msg.put((byte) ( verifyData.length         & 0xFF));
-            msg.put(verifyData);
-            return msg.flip();
+            output.write((byte) 0x14);                                 // HandshakeType: finished
+            output.write((byte) ((verifyData.length >>> 16) & 0xFF));
+            output.write((byte) ((verifyData.length >>>  8) & 0xFF));
+            output.write((byte) ( verifyData.length         & 0xFF));
+            output.write(verifyData);
         } catch (GeneralSecurityException e) {
             throw new CryptoException("Failed to create server Finished", e);
         }
@@ -1479,11 +1303,8 @@ public class QuicCrypto {
      * <p>The certificate chain is loaded from the configured {@link KeystoreManager}.
      * If no keystore is configured an empty Certificate message is returned (the client
      * will reject it, but this keeps the code runnable during development).
-     *
-     * @return serialised Certificate message bytes ready to concatenate into the
-     *         server handshake CRYPTO frame payload
      */
-    public static ByteBuffer createCertificate() {
+    public static void putCertificate(ChunkedOutputStreamWithAmendments out) throws IOException {
         byte[] certChainBytes = encodeCertificateChain();
 
         if (certChainBytes != null) {
@@ -1491,28 +1312,24 @@ public class QuicCrypto {
             // (each entry: 3-byte cert length + DER cert + 2-byte extensions length).
             // Body = request_context (1 byte = 0x00) + certificate_list
             int certBodyLen = 1 + certChainBytes.length;
-            ByteBuffer msg = ByteBuffer.allocate(4 + certBodyLen);
-            msg.put((byte) 0x0b);                              // HandshakeType: certificate
-            msg.put((byte) ((certBodyLen >> 16) & 0xFF));
-            msg.put((byte) ((certBodyLen >>  8) & 0xFF));
-            msg.put((byte) ( certBodyLen        & 0xFF));
-            msg.put((byte) 0x00);                              // request_context (empty)
-            msg.put(certChainBytes);
-            return msg.flip();
+            out.write((byte) 0x0b);                              // HandshakeType: certificate
+            out.write((byte) ((certBodyLen >> 16) & 0xFF));
+            out.write((byte) ((certBodyLen >>  8) & 0xFF));
+            out.write((byte) ( certBodyLen        & 0xFF));
+            out.write((byte) 0x00);                              // request_context (empty)
+            out.write(certChainBytes);
         } else {
             // No keystore — empty Certificate (request_context + empty list)
             logger.warn("No keystore configured — sending empty Certificate message");
             int certBodyLen = 1 + 3; // request_context(1) + empty list length field(3)
-            ByteBuffer msg = ByteBuffer.allocate(4 + certBodyLen);
-            msg.put((byte) 0x0b);
-            msg.put((byte) ((certBodyLen >> 16) & 0xFF));
-            msg.put((byte) ((certBodyLen >>  8) & 0xFF));
-            msg.put((byte) ( certBodyLen        & 0xFF));
-            msg.put((byte) 0x00);  // request_context
-            msg.put((byte) 0x00);  // empty certificate_list length (3 bytes = 0)
-            msg.put((byte) 0x00);
-            msg.put((byte) 0x00);
-            return msg.flip();
+            out.write((byte) 0x0b);
+            out.write((byte) ((certBodyLen >> 16) & 0xFF));
+            out.write((byte) ((certBodyLen >>  8) & 0xFF));
+            out.write((byte) ( certBodyLen        & 0xFF));
+            out.write((byte) 0x00);  // request_context
+            out.write((byte) 0x00);  // empty certificate_list length (3 bytes = 0)
+            out.write((byte) 0x00);
+            out.write((byte) 0x00);
         }
     }
 
@@ -1543,10 +1360,9 @@ public class QuicCrypto {
      * <p>If no keystore is configured an empty CertificateVerify stub is returned.
      *
      * @param metadata the live {@link TlsMetadata}; transcript must include Certificate
-     * @return serialised CertificateVerify bytes
      * @throws CryptoException if signing fails unexpectedly
      */
-    public static ByteBuffer createCertificateVerify(TlsMetadata metadata) throws CryptoException {
+    public static void putCertificateVerify(TlsMetadata metadata, ChunkedOutputStreamWithAmendments output) throws CryptoException, IOException {
         byte[] contextString = "TLS 1.3, server CertificateVerify"
                 .getBytes(java.nio.charset.StandardCharsets.US_ASCII);
         byte[] transcriptHash = metadata.transcriptHash();
@@ -1565,21 +1381,19 @@ public class QuicCrypto {
 
         short sigScheme = metadata.selectedSignatureScheme;
         int cvBodyLen = 2 + 2 + signature.length;
-        ByteBuffer msg = ByteBuffer.allocate(4 + cvBodyLen);
-        msg.put((byte) 0x0f);                           // HandshakeType: certificate_verify
-        msg.put((byte) ((cvBodyLen >>> 16) & 0xFF));
-        msg.put((byte) ((cvBodyLen >>> 8) & 0xFF));
-        msg.put((byte) (cvBodyLen & 0xFF));
-        msg.putShort(sigScheme);                        // signature algorithm
-        msg.putShort((short) (signature.length & 0xFFFF));         // signature length
-        msg.put(signature);
-        return msg.flip();
+        output.write((byte) 0x0f);                           // HandshakeType: certificate_verify
+        output.write((byte) ((cvBodyLen >>> 16) & 0xFF));
+        output.write((byte) ((cvBodyLen >>> 8) & 0xFF));
+        output.write((byte) (cvBodyLen & 0xFF));
+        output.writeShort(sigScheme);                        // signature algorithm
+        output.writeShort((short) (signature.length & 0xFFFF));         // signature length
+        output.write(signature);
     }
 
     /**
      * Maps cipher suite name to TLS identifier (RFC 8446 Appendix B.4).
      */
-    private static short getCipherSuiteId(String cipherSuite) {
+    public static short getCipherSuiteId(String cipherSuite) {
         if (cipherSuite == null) {
             logger.warn("Cipher suite is null, defaulting to TLS_AES_128_GCM_SHA256");
             return (short) 0x1301;
@@ -1616,7 +1430,7 @@ public class QuicCrypto {
     /**
      * HKDF-Expand-Label as per RFC 8446 for TLS 1.3.
      */
-    private static byte[] hkdfExpandLabel(byte[] secret, String label, byte[] context, int length) 
+    private static byte[] hkdfExpandLabel(byte[] secret, String label, byte[] context, int length)
             throws GeneralSecurityException {
         byte[] hkdfLabel = buildHkdfLabel(length, "tls13 " + label, context);
         return hkdfExpand(secret, hkdfLabel, length);

@@ -2,10 +2,7 @@ package org.fmalyshev.quic;
 
 import ch.qos.logback.core.pattern.color.ANSIConstants;
 import org.fmalyshev.LogTool;
-import org.fmalyshev.quic.buffers.BufferPool;
 import org.fmalyshev.quic.buffers.PoolBuffer;
-import org.fmalyshev.quic.buffers.RootPoolBuffer;
-import org.jctools.queues.MpscArrayQueue;
 import org.jctools.queues.SpscArrayQueue;
 import org.jctools.queues.SpscLinkedQueue;
 import org.slf4j.Logger;
@@ -39,18 +36,6 @@ class SelectorThread implements Runnable {
     private final TimeoutHeap<QuicConnection> timeoutHeap = new TimeoutHeap<>(QuicConnection.class);
     private long lastTimeoutCheck = System.currentTimeMillis();
     private static final long TIMEOUT_CHECK_INTERVAL_MS = 1000; // Check every second
-
-    public class WriteBuffer {
-        private final ByteBuffer buffer = ByteBuffer.allocateDirect(65535);
-        private  SocketAddress sender;
-
-
-
-        public void send() throws IOException {
-            channel.send(buffer, sender);
-            buffer.clear();
-        }
-    }
 
     /**
      * Encapsulates a packet with its sender address for forwarding between threads.
@@ -117,7 +102,6 @@ class SelectorThread implements Runnable {
                     buffer.buf().flip();
                     processPacket(buffer, sender, "socket");
                     hadWork = true;
-                    buffer.release();
                     buffer = QuicEngine.getPool().requestReadBuffer();
                 }
 
@@ -230,15 +214,17 @@ class SelectorThread implements Runnable {
                     // Drain application queue and process packages.
                     ByteBuffer appData;
                     while( (appData = connection.applicationQueue().poll()) != null) {
+                        logger.debug("Polled application data frame cid {}", connection.getConnectionId());
                         connection.send1RttPacket(appData);
                     }
 
                     // Drain any packets the connection produced internally (e.g. early-1RTT
                     // replay triggered by the ESTABLISHED transition, or sendFrame() calls).
-                    ByteBuffer outbound;
+                    PoolBuffer outbound;
                     log.info(logColor(), "Selector-{}: Connection CID: {} sending {} response packets.", threadId, cid, connection.outboundQueueSize());
                     while ((outbound = connection.pollOutbound()) != null) {
-                        channel.send(outbound, connection.getRemoteAddress());
+                        channel.send(outbound.buf(), connection.getRemoteAddress());
+                        outbound.release();
                     }
                 } catch (Exception e) {
                     log.error(logColor(), "Selector-{}: Failed to process packet for CID: {}", threadId, cid, e);
@@ -262,7 +248,7 @@ class SelectorThread implements Runnable {
      */
     private void processHandshakeTask(HandshakeTask task) {
         try {
-            log.debug(logColor(), "Selector-{}: Processing Initial packet for new CID: {}", threadId, task.allocatedCid);
+            log.warn(logColor(), "Selector-{}: Processing Initial packet for new CID: {}", threadId, task.allocatedCid);
 
             QuicPacketHeader.PacketSummary packetSummary = QuicPacketHeader.parseSummary(task.packet.buf());
             if (packetSummary == null) {

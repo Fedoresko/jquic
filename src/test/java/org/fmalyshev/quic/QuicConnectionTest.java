@@ -2,6 +2,7 @@ package org.fmalyshev.quic;
 
 import org.fmalyshev.http3.Http3Protocol;
 import org.fmalyshev.quic.buffers.BorrowedPoolBuffer;
+import org.fmalyshev.quic.buffers.PoolBuffer;
 import org.fmalyshev.quic.buffers.RootPoolBuffer;
 import org.fmalyshev.quic.streamapi.ConnectionStreamManager;
 import org.fmalyshev.quic.streamapi.frames.StreamFrame;
@@ -195,7 +196,7 @@ class QuicConnectionTest {
             // Create 1-RTT packet with STREAM frame
             ByteBuffer packet = createMock1RttPacketWithStreamData(4L, "Hello QUIC".getBytes());
             connection.process1RttPacket(new BorrowedPoolBuffer(mock(RootPoolBuffer.class), packet));
-            ByteBuffer ackResponse = connection.pollOutbound();
+            PoolBuffer ackResponse = connection.pollOutbound();
 
 
             // Verify stream data was delivered
@@ -242,7 +243,7 @@ class QuicConnectionTest {
             // Send CONNECTION_CLOSE frame
             ByteBuffer closePacket = createMock1RttPacketWithConnectionClose();
             connection.process1RttPacket(new BorrowedPoolBuffer(mock(RootPoolBuffer.class), closePacket));
-            ByteBuffer ackResponse = connection.pollOutbound();
+            PoolBuffer ackResponse = connection.pollOutbound();
 
             // Verify state transition
             assertEquals(QuicConnection.State.CLOSING, connection.getState(),
@@ -1215,7 +1216,7 @@ class QuicConnectionTest {
                 });
 
         // Mock ServerHello creation (single TlsMetadata arg)
-        mock.when(() -> QuicCrypto.createServerHello(any(QuicCrypto.TlsMetadata.class)))
+        mock.when(() -> QuicFrameBuilder.writeServerHello(any(), any(QuicCrypto.TlsMetadata.class)))
                 .thenReturn(ByteBuffer.allocate(64));
 
         // Mock client Finished verification - return true for valid Finished message

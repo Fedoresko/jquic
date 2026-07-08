@@ -107,8 +107,6 @@ public class CryptoFrameRebuilder {
                 // Extract the slice of `incoming` that covers [gapStart, gapEnd)
                 int sliceOffset = gapStart - offset;
                 int sliceLen    = gapEnd - gapStart;
-//                byte[] slice = new byte[sliceLen];
-//                System.arraycopy(incoming, sliceOffset, slice, 0, sliceLen);
                 PoolBuffer fragment = data.borrow();
                 fragment.buf().position(fragment.buf().position() + sliceOffset);
                 fragment.buf().limit(fragment.buf().position() + sliceOffset + sliceLen);

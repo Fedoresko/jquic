@@ -1,6 +1,7 @@
 package org.fmalyshev.quic.streamapi.impl;
 
 import org.fmalyshev.quic.*;
+import org.fmalyshev.quic.buffers.ChunkedOutputStreamWithAmendmentsImpl;
 import org.fmalyshev.quic.buffers.PoolBuffer;
 import org.fmalyshev.quic.streamapi.*;
 import org.fmalyshev.quic.streamapi.frames.*;
@@ -8,6 +9,7 @@ import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.DataOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.*;
@@ -337,7 +339,7 @@ public class StreamManager implements ConnectionStreamManager {
      * Sends data on a stream immediately.
      * Called from worker thread (via QuicStreamResponse).
      */
-    public void sendData(long streamId, Consumer<ByteBuffer> writer, boolean fin) throws QuicStreamException {
+    public void sendData(long streamId, Consumer<DataOutputStream> writer, boolean fin) throws QuicStreamException  {
         if (connection.getState() != QuicConnection.State.ESTABLISHED) {
             throw new QuicStreamException("Connection is in wrong state " + connection.getState());
         }
@@ -350,14 +352,42 @@ public class StreamManager implements ConnectionStreamManager {
             throw new QuicStreamException("Stream " + streamId + " cannot send data in state " + state.getState());
         }
 
-        ByteBuffer data = ByteBuffer.allocateDirect(2048);
+        ByteBuffer data = ByteBuffer.allocate(2048);
         data.position(STREAM_FRAME_HEADER_MAX_LEN);
-        ByteBuffer slice = data.slice();
-        writer.accept(slice);
-        data.limit(slice.limit() + STREAM_FRAME_HEADER_MAX_LEN);
 
-        if (!trySendData(streamId, fin, data, state) ) {
-            outbox.add(new FrameRecord(streamId, fin, data));
+        ChunkedOutputStreamWithAmendmentsImpl outs = new ChunkedOutputStreamWithAmendmentsImpl(data,
+                (int) connection.tlsMetadata.clientMetadata.maxUdpPayloadSize - 16,
+                (buf, off ) -> {
+                    int dataSize = buf.remaining();
+                    StreamBuffer buffer = streamBuffers.get(streamId);
+                    long offset = buffer.allocateSendOffset(dataSize);
+                    ByteBuffer encodedFrame = StreamFrameProcessor.encodeStreamFrame(
+                            streamId, offset, buf.duplicate(), fin);
+
+                    if (logger.isDebugEnabled()) {
+                        byte[] tt = new byte[encodedFrame.remaining()];
+                        encodedFrame.duplicate().get(tt);
+                        logger.debug("Sending STREAM resp {}", HexFormat.of().formatHex(tt));
+                    }
+                    int chunkEnd = encodedFrame.limit();
+                    buf.limit(buf.capacity());
+                    buf.position(chunkEnd + STREAM_FRAME_HEADER_MAX_LEN);
+                    return encodedFrame;
+                }
+        );
+
+        writer.accept(outs);
+
+        try {
+            outs.close();
+        } catch (IOException e) {
+            throw new QuicStreamException("Cant write stream data", e);
+        }
+
+        for (ByteBuffer buf : outs.readyChunks()) {
+            if (!trySendData(streamId, fin, buf, state)) {
+                outbox.push(new FrameRecord(streamId, fin, buf));
+            }
         }
     }
 
@@ -379,25 +409,8 @@ public class StreamManager implements ConnectionStreamManager {
             return false;
         }
 
-        // Get send offset
-        StreamBuffer buffer = streamBuffers.get(streamId);
-        if (buffer == null) {
-            throw new QuicStreamException("Stream buffer not found for stream " + streamId);
-        }
-        long offset = buffer.allocateSendOffset(dataSize);
-
-        // Encode and send frame immediately
-        ByteBuffer encodedFrame = StreamFrameProcessor.encodeStreamFrame(
-                streamId, offset, data, fin);
-
-        if (logger.isDebugEnabled()) {
-            byte[] tt = new byte[encodedFrame.remaining()];
-            encodedFrame.duplicate().get(tt);
-            logger.debug("Sending STREAM resp {}", HexFormat.of().formatHex(tt));
-        }
-
         try {
-            connection.enqueueApplicationData(encodedFrame);
+            connection.enqueueApplicationData(data);
 
             // Update in-flight counters
             state.addSentBytes(dataSize); // Also updates stream in-flight
@@ -572,7 +585,7 @@ public class StreamManager implements ConnectionStreamManager {
         }
 
         @Override
-        public void sendData(long streamId, Consumer<ByteBuffer> writer, boolean fin) throws QuicStreamException {
+        public void sendData(long streamId, Consumer<DataOutputStream> writer, boolean fin) throws QuicStreamException {
             StreamManager.this.sendData(streamId, writer, fin);
         }
     }

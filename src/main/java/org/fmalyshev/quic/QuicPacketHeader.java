@@ -20,7 +20,6 @@ import static org.fmalyshev.quic.QuicPacketBuilder.QUIC_VERSION_1;
  */
 public class QuicPacketHeader {
     private static final Logger log = LoggerFactory.getLogger(QuicPacketHeader.class);
-    public final byte[] rawData;
     public final Long packetNumber;
     public final int pnLength;
     public final int version;
@@ -31,6 +30,7 @@ public class QuicPacketHeader {
     public final long payloadLength;
     public final int headerLength;
     public final byte flags;
+    public final byte[] rawData;
 
     public QuicPacketHeader(PacketNumber packetNumber,
                             int quicVersion, byte[] destinationCid,
@@ -54,48 +54,27 @@ public class QuicPacketHeader {
         this.sourceCid = sourceCid;
         this.token = token;
         this.payloadLength = payloadLength;
+        this.headerLength = measureHeaderLength();
+        this.rawData = rawData;
+    }
 
-        if (rawData == null) {
-            ByteBuffer header = ByteBuffer.allocate(64);
-            header.put(flags);
-            if (packetType.isLongHeader()) {
-                // Version
-                header.putInt(quicVersion);
-
-                header.put((byte) destinationCid.length);
-                header.put(destinationCid);
-
-                // Source CID length (8 bytes)
-                header.put((byte) sourceCid.length);
-                header.put(sourceCid);
-
-                // Token length (0 for server Initial)
-                if (packetType == PacketType.INITIAL) {
-                    header.put((byte) token.length);
-                    header.put(token);
-                }
-
-                // Length = encrypted payload size + packet number bytes
-                QuicVarint.write(header, this.payloadLength);
-
-                // Packet number (pnLen bytes, big-endian)
-                writePacketNumber(header, packetNumber.packetNumber, packetNumber.pnLength);
-            } else {
-                header.put(destinationCid);
-
-                // Packet number (pnLen bytes, big-endian)
-                writePacketNumber(header, packetNumber.packetNumber, packetNumber.pnLength);
+    private int measureHeaderLength() {
+        int headerLength = 1;
+        if (packetType.isLongHeader()) {
+            headerLength+=6;
+            headerLength+= destinationCid.length;
+            headerLength+= sourceCid.length;
+            if (packetType == PacketType.INITIAL) {
+                headerLength+=1;
+                headerLength+= token.length;
             }
-
-            // Extract header bytes for Associated Data
-            headerLength = header.position();
-            this.rawData = new byte[headerLength];
-            header.flip();
-            header.get(this.rawData);
+            headerLength+=QuicVarint.sizeOf(this.payloadLength);
+            headerLength+=pnLength;
         } else {
-            this.rawData = rawData;
-            headerLength = rawData.length;
+            headerLength+= destinationCid.length;
+            headerLength+=pnLength;
         }
+        return headerLength;
     }
 
     private static void writePacketNumber(ByteBuffer buf, long pn, int pnLen) {
@@ -104,6 +83,37 @@ public class QuicPacketHeader {
         }
     }
 
+    public void write(ByteBuffer header) {
+        header.put(flags);
+        if (packetType.isLongHeader()) {
+            // Version
+            header.putInt(version);
+
+            header.put((byte) destinationCid.length);
+            header.put(destinationCid);
+
+            // Source CID length (8 bytes)
+            header.put((byte) sourceCid.length);
+            header.put(sourceCid);
+
+            // Token length (0 for server Initial)
+            if (packetType == PacketType.INITIAL) {
+                header.put((byte) token.length);
+                header.put(token);
+            }
+
+            // Length = encrypted payload size + packet number bytes
+            QuicVarint.write(header, this.payloadLength);
+
+            // Packet number (pnLen bytes, big-endian)
+            writePacketNumber(header, packetNumber, pnLength);
+        } else {
+            header.put(destinationCid);
+
+            // Packet number (pnLen bytes, big-endian)
+            writePacketNumber(header, packetNumber, pnLength);
+        }
+    }
 
     /**
      * Parses a QUIC packet header, reading even the protected packet number bytes.

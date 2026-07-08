@@ -198,8 +198,7 @@ public class StreamFrameProcessor {
         ByteBuffer buffer = ByteBuffer.allocate(1 + 8);
         buffer.put(bidirectional ? FRAME_TYPE_MAX_STREAMS_BIDI : FRAME_TYPE_MAX_STREAMS_UNI);
         QuicVarint.write(buffer, maximumStreams);
-        buffer.flip();
-        return buffer;
+        return buffer.flip();
     }
 //
 //    /**

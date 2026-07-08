@@ -8,11 +8,11 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class RootPoolBuffer implements PoolBuffer {
     public final ByteBuffer buffer;
     AtomicInteger count = new AtomicInteger(0);
-    int id = cnt.incrementAndGet();
-    static AtomicInteger cnt = new AtomicInteger(0);
+    private final boolean writeBuffer;
 
-    public RootPoolBuffer(ByteBuffer buffer) {
+    public RootPoolBuffer(ByteBuffer buffer, boolean writeBuffer) {
         this.buffer = buffer;
+        this.writeBuffer = writeBuffer;
     }
 
     @Override
@@ -24,7 +24,11 @@ public class RootPoolBuffer implements PoolBuffer {
     public void release() {
         int cnt = count.decrementAndGet();
         if (cnt == 0) {
-            QuicEngine.getPool().returnReadBuffer(this);
+            if (writeBuffer) {
+                QuicEngine.getPool().returnWriteBuffer(this);
+            } else {
+                QuicEngine.getPool().returnReadBuffer(this);
+            }
         }
         if (cnt < 0) {
             throw new IllegalStateException();

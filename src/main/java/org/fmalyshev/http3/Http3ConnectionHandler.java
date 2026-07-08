@@ -2,6 +2,7 @@ package org.fmalyshev.http3;
 
 import org.fmalyshev.quic.QuicVarint;
 import org.fmalyshev.quic.streamapi.QuicApplicationProtocolConnectionHandler;
+import org.fmalyshev.quic.streamapi.QuicStreamException;
 import org.fmalyshev.quic.streamapi.QuicStreamResponse;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
@@ -11,14 +12,13 @@ import tech.kwik.qpack.Decoder;
 import tech.kwik.qpack.Encoder;
 
 import java.io.ByteArrayInputStream;
+import java.io.DataOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
-
-
 
 /**
  * HTTP/3 connection handler.
@@ -32,19 +32,13 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
     private final ConcurrentHashMap<Long, Http3StreamContext> streams = new ConcurrentHashMap<>();
 
     /** When {@code true} QPACK encoding/decoding is used; otherwise plain-text framing. */
-    private final boolean useQpack;
     private final Encoder qpackEncoder = Encoder.newBuilder().build();
     private final Decoder qpackDecoder = Decoder.newBuilder().build();
 
 
-    Http3ConnectionHandler(long connectionId, Http3RequestHandler requestHandler) {
-        this(connectionId, requestHandler, true);
-    }
-
-    Http3ConnectionHandler(long connectionId, Http3RequestHandler requestHandler, boolean useQpack) {
+    public Http3ConnectionHandler(long connectionId, Http3RequestHandler requestHandler) {
         this.connectionId = connectionId;
         this.requestHandler = requestHandler;
-        this.useQpack = useQpack;
     }
 
     @Override
@@ -60,7 +54,7 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
         logger.debug("New HTTP/3 stream {} allocated on connection {} (server={}, quicType={}, h3Role={})",
                     streamId, connectionId, isServer, streamType, initialRole);
 
-        Http3StreamContext context = new Http3StreamContext(streamId, response, streamType, initialRole);
+        Http3StreamContext context = new Http3StreamContext(streamId, initialRole);
         streams.put(streamId, context);
     }
 
@@ -225,52 +219,12 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
         }
     }
 
-
-//    static class Entry implements Map.Entry<String, String> {
-//        private Entry(String key, String value) {
-//            this.key = key;
-//            this.value = value;
-//        }
-//
-//        public static Entry of(String key, String value) {
-//            return new Entry(key, value);
-//        }
-//
-//        private final String key;
-//        private final String value;
-//
-//        @Override
-//        public String getKey() {
-//            return key;
-//        }
-//
-//        @Override
-//        public String getValue() {
-//            return value;
-//        }
-//
-//        @Override
-//        public String setValue(String value) {
-//            return "";
-//        }
-//
-//        @Override
-//        public boolean equals(Object o) {
-//            return false;
-//        }
-//
-//        @Override
-//        public int hashCode() {
-//            return 0;
-//        }
-//    }
-
     /**
      * Encodes HTTP/3 response to raw bytes.
      * Uses QPACK header compression when {@code useQpack} is enabled,
      * otherwise falls back to the simplified plain-text format.
      */
-    private ByteBuffer putResponse(ByteBuffer buffer, Http3Response response) {
+    private void putResponse(DataOutputStream outputStream, Http3Response response) {
         byte[] body        = response.getBody();
 
         List<Map.Entry<String, String>> headers = new ArrayList<>(List.of(
@@ -282,29 +236,31 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
 
         ByteBuffer headerBlock = qpackEncoder.compressHeaders(headers).position(0);
 
-        // HTTP/3 framing: each frame = type (varint) + length (varint) + payload
-        putHttp3Frame(buffer,0x01, headerBlock);
-        putHttp3Frame(buffer,0x00, body);
-
-        return buffer.flip();
+        try {
+            // HTTP/3 framing: each frame = type (varint) + length (varint) + payload
+            putHttp3Frame(outputStream, 0x01, headerBlock);
+            putHttp3Frame(outputStream, 0x00, body);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     /**
      * Builds a minimal HTTP/3 frame with the given type and payload.
      * Uses single-byte varints (sufficient for payloads up to 63 bytes in type/length).
      */
-    private void putHttp3Frame(ByteBuffer buf, int frameType, byte[] payload) {
+    private void putHttp3Frame(DataOutputStream outputStream, int frameType, byte[] payload) throws IOException {
         // Encode type and length as QUIC-style varints (1-byte form for values < 64)
-        QuicVarint.write(buf, frameType);
-        QuicVarint.write(buf, payload.length);
-        buf.put(payload);
+        QuicVarint.write(outputStream, frameType);
+        QuicVarint.write(outputStream, payload.length);
+        outputStream.write(payload);
     }
 
-    private void putHttp3Frame(ByteBuffer buf, int frameType, ByteBuffer payload) {
+    private void putHttp3Frame(DataOutputStream outputStream, int frameType, ByteBuffer payload) throws IOException {
         // Encode type and length as QUIC-style varints (1-byte form for values < 64)
-        QuicVarint.write(buf, frameType);
-        QuicVarint.write(buf, payload.remaining());
-        buf.put(payload);
+        QuicVarint.write(outputStream, frameType);
+        QuicVarint.write(outputStream, payload.remaining());
+        outputStream.write(payload.array(), payload.position(), payload.remaining());
     }
 
     /**
@@ -342,8 +298,6 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
         }
 
         private final long streamId;
-        private final QuicStreamResponse response;
-        private final QuicStreamResponse.StreamType streamType;
         private final ByteBuffer dataBuffer = ByteBuffer.allocate(64 * 1024); // 64 KB buffer
 
         /** HTTP/3-level role of this stream (determined from the QUIC stream type or the stream-type varint). */
@@ -358,11 +312,8 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
 
         public int readBodyBytes = 0;
 
-        Http3StreamContext(long streamId, QuicStreamResponse response,
-                           QuicStreamResponse.StreamType streamType, Http3StreamRole role) {
+        Http3StreamContext(long streamId, Http3StreamRole role) {
             this.streamId = streamId;
-            this.response = response;
-            this.streamType = streamType;
             this.role = role;
         }
 

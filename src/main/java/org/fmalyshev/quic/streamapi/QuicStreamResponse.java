@@ -1,6 +1,6 @@
 package org.fmalyshev.quic.streamapi;
 
-import java.nio.ByteBuffer;
+import java.io.DataOutputStream;
 import java.util.function.Consumer;
 
 public interface QuicStreamResponse {
@@ -39,5 +39,5 @@ public interface QuicStreamResponse {
      * @param fin - true if this is the last frame in the stream (FIN)
      * @throws QuicStreamException
      */
-    void sendData(long streamId, Consumer<ByteBuffer> writer, boolean fin) throws QuicStreamException;
+    void sendData(long streamId, Consumer<DataOutputStream> writer, boolean fin) throws QuicStreamException;
 }

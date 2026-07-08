@@ -55,18 +55,6 @@ public class QuicStreamEngineImpl implements QuicStreamEngine {
         logger.info("QuicStreamEngineInternal shut down");
     }
 
-    public ByteBuffer requestBuffer()  {
-        ByteBuffer buffer = userDataBufferPool.poll();
-        if (buffer != null) {
-            return buffer.clear();
-        }
-        return ByteBuffer.allocate(4096);
-    }
-
-    public void returnBuffer(ByteBuffer buffer) {
-        userDataBufferPool.add(buffer);
-    }
-
     /**
      * Creates a new connection and associates it with a protocol.
      * Called by SelectorThread when a new connection is established.

@@ -1,6 +1,7 @@
 package org.fmalyshev.quic;
 
 import org.fmalyshev.quic.buffers.BorrowedPoolBuffer;
+import org.fmalyshev.quic.buffers.PoolBuffer;
 import org.fmalyshev.quic.buffers.RootPoolBuffer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -87,16 +88,12 @@ class QuicConnectionPacketTest {
         mockMetadata.serverHandshakeKeys = mockKeyss;
         mockMetadata.clientHandshakeKeys = mockKeyss;
 
-        mockedQuicCrypto.when(() -> QuicCrypto.createEncryptedExtensions(any(), anyLong())).thenReturn(ByteBuffer.allocate(10));
-        mockedQuicCrypto.when(() -> QuicCrypto.createCertificate()).thenReturn(ByteBuffer.allocate(10));
-        mockedQuicCrypto.when(() -> QuicCrypto.createCertificateVerify(any())).thenReturn(ByteBuffer.allocate(10));
-        mockedQuicCrypto.when(() -> QuicCrypto.createServerFinished(any())).thenReturn(ByteBuffer.allocate(10));
         mockedQuicCrypto.when(() -> QuicCrypto.getCryptoFrameLength(any())).thenCallRealMethod();
         mockedQuicCrypto.when(() -> QuicCrypto.processClientHello(any(), any(ByteBuffer.class)))
             .thenReturn(mockMetadata);
 
         // Mock ServerHello creation — single TlsMetadata arg
-        mockedQuicCrypto.when(() -> QuicCrypto.createServerHello(any(QuicCrypto.TlsMetadata.class)))
+        mockedQuicCrypto.when(() -> QuicFrameBuilder.writeServerHello(any(), any(QuicCrypto.TlsMetadata.class)))
             .thenReturn(ByteBuffer.wrap(new byte[100]));
 
         // Mock deriveApplicationKeys (called inside processHandshakePacket after Finished)
@@ -116,7 +113,7 @@ class QuicConnectionPacketTest {
         mockedQuicCrypto.when(() -> QuicCrypto.encryptPacket(any(ByteBuffer.class),
                                                              any(SecretKey.class),
                                                              anyLong(),
-                                                             any(byte[].class),
+                                                             any(),
                                                              any(byte[].class)))
             .thenAnswer(invocation -> {
                 ByteBuffer plaintext = invocation.getArgument(0);
@@ -203,7 +200,7 @@ class QuicConnectionPacketTest {
         // Act
         getOutboundPackets(connection);
         connection.process1RttPacket(new BorrowedPoolBuffer(mock(RootPoolBuffer.class), mock1RttPacket));
-        ByteBuffer ackPacket = connection.pollOutbound();
+        ByteBuffer ackPacket = connection.pollOutbound().buf();
 
 
         // Assert

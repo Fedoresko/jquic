@@ -1,5 +1,9 @@
 package org.fmalyshev.quic;
 
+import org.fmalyshev.quic.buffers.ChunkedOutputStreamWithAmendments;
+
+import java.io.DataOutputStream;
+import java.io.IOException;
 import java.nio.ByteBuffer;
 
 /**
@@ -72,6 +76,28 @@ public class QuicVarint {
             buffer.put((byte) (0xC0 | (value >> 56)));
             for (int i = 6; i >= 0; i--) {
                 buffer.put((byte) (value >> (i * 8)));
+            }
+        }
+    }
+
+    public static void write(DataOutputStream out, long value) throws IOException {
+        if (value < 0) {
+            throw new IllegalArgumentException("Varint cannot be negative: " + value);
+        }
+        if (value < 64) {
+            out.write((byte) value);
+        } else if (value < 16384) {
+            out.write((byte) (0x40 | (value >> 8)));
+            out.write((byte) value);
+        } else if (value < 1073741824) {
+            out.write((byte) (0x80 | (value >> 24)));
+            out.write((byte) (value >> 16));
+            out.write((byte) (value >> 8));
+            out.write((byte) value);
+        } else {
+            out.write((byte) (0xC0 | (value >> 56)));
+            for (int i = 6; i >= 0; i--) {
+                out.write((byte) (value >> (i * 8)));
             }
         }
     }

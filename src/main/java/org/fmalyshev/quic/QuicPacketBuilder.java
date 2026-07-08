@@ -1,10 +1,12 @@
 package org.fmalyshev.quic;
 
+import org.fmalyshev.quic.buffers.PoolBuffer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.crypto.SecretKey;
 import java.nio.ByteBuffer;
+import java.security.SecureRandom;
 import java.util.HexFormat;
 
 import static org.fmalyshev.quic.QuicCrypto.GCM_TAG_LENGTH;
@@ -23,7 +25,11 @@ import static org.fmalyshev.quic.QuicCrypto.GCM_TAG_LENGTH;
 public class QuicPacketBuilder {
     // QUIC version 1 (RFC 9000)
     public static final int QUIC_VERSION_1 = 0x00000001;
+    public static final int STATELESS_RESET_TOKEN_LENGTH = 16; // RFC 9000: 16 bytes
     private static final Logger log = LoggerFactory.getLogger(QuicPacketBuilder.class);
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+    private static final byte[] ZERO_BLOCK = new byte[4096];
+    private static final int MIN_STATELESS_RESET_LENGTH = 21; // 1 byte fixed bit + 4 bytes unpredictable + 16 bytes token
 
     /**
      * Builds Initial packet with long header and proper AEAD encryption (RFC 9000 Section 17.2.2, RFC 9001 Section 5).
@@ -39,37 +45,32 @@ public class QuicPacketBuilder {
      * @param destinationCid Destination connection ID
      * @param sourceCid Source connection ID
      * @param packetNumber Packet number
-     * @param plaintext Plaintext payload (QUIC frames) to encrypt
+     * @param packetBuffer Plaintext payload (QUIC frames) to encrypt
      * @param keys Encryption keys (RFC 9001 Section 5.4)
      * @return Complete Initial packet ready to send
      * @throws QuicCrypto.CryptoException if encryption fails
      */
-    public static ByteBuffer buildInitialPacket(byte [] destinationCid, long sourceCid,
-                                                long packetNumber, ByteBuffer plaintext, QuicCrypto.PacketProtectionKeysWithHP keys) throws QuicCrypto.CryptoException {
-
-        int encryptedPayloadSize = plaintext.remaining() + GCM_TAG_LENGTH;
+    public static PoolBuffer buildInitialPacket(byte [] destinationCid, ByteBuffer sourceCid,
+                                                long packetNumber, ByteBuffer packetBuffer, QuicCrypto.PacketProtectionKeysWithHP keys) throws QuicCrypto.CryptoException {
+        int encryptedPayloadSize = packetBuffer.remaining() + GCM_TAG_LENGTH;
         int pnLen = encodedPnLength(packetNumber);
 
-        byte [] scid = ByteBuffer.allocate(8).putLong(sourceCid).flip().array();
-        
         QuicPacketHeader header = new QuicPacketHeader(new QuicPacketHeader.PacketNumber(pnLen, packetNumber, (byte) 0),
-                QUIC_VERSION_1, destinationCid, scid, QuicPacketHeader.PacketType.INITIAL,
+                QUIC_VERSION_1, destinationCid, sourceCid.array(), QuicPacketHeader.PacketType.INITIAL,
                 new byte[0], encryptedPayloadSize + pnLen, (byte)0
         );
 
-        return encryptAndProtectQuicPacket(plaintext, keys.key(), keys.iv(), header, keys.headerProtection());
+        return encryptAndProtectQuicPacket(packetBuffer, keys.key(), keys.iv(), header, keys.headerProtection());
     }
 
-    private static ByteBuffer encryptAndProtectQuicPacket(ByteBuffer plaintext, SecretKey key, byte[] iv, QuicPacketHeader header, byte[] hp_key) throws QuicCrypto.CryptoException {
-        log.debug("Protect packet {} with hp_key {}", header.packetNumber, HexFormat.of().formatHex(hp_key));
-        ByteBuffer encryptedPayload = QuicCrypto.encryptPacket(plaintext, key, header.packetNumber, header.rawData, iv);
+    private static PoolBuffer encryptAndProtectQuicPacket(ByteBuffer plaintext, SecretKey key, byte[] iv, QuicPacketHeader header, byte[] hp_key) throws QuicCrypto.CryptoException {
+        PoolBuffer packet = QuicEngine.getPool().requestWriteBuffer();
+        header.write(packet.buf());
+        ByteBuffer encryptedPayload = QuicCrypto.encryptPacket(plaintext, key, header.packetNumber, packet.buf().duplicate().flip(), iv);
+        packet.buf().put(encryptedPayload);
+        packet.buf().flip();
 
-        ByteBuffer packet = ByteBuffer.allocate(header.headerLength + encryptedPayload.remaining());
-        packet.put(header.rawData);
-        packet.put(encryptedPayload);
-        packet.flip();
-
-        applyHeaderProtection(packet, header.headerLength, header.pnLength, hp_key);
+        applyHeaderProtection(packet.buf(), header.headerLength, header.pnLength, hp_key);
         return packet;
     }
 
@@ -81,22 +82,19 @@ public class QuicPacketBuilder {
      * @param packetNumber Packet number
      * @param payload Plaintext payload (QUIC frames) to encrypt
      * @param keys Encryption keys (RFC 9001 Section 5.4)
-     * @return Complete Handshake packet ready to send
      * @throws QuicCrypto.CryptoException if encryption fails
      */
-    public static ByteBuffer buildHandshakePacket(byte [] destinationCid, long sourceCid,
+    public static PoolBuffer buildHandshakePacket(byte [] destinationCid, ByteBuffer sourceCid,
                                                   long packetNumber, ByteBuffer payload, QuicCrypto.PacketProtectionKeysWithHP keys)
             throws QuicCrypto.CryptoException {
         int encryptedPayloadSize = payload.remaining() + GCM_TAG_LENGTH; // + GCM tag
         int pnLen = encodedPnLength(packetNumber);
 
         QuicPacketHeader header = new QuicPacketHeader(new QuicPacketHeader.PacketNumber(pnLen, packetNumber, (byte) 0),
-            QUIC_VERSION_1, destinationCid, ByteBuffer.allocate(8).putLong(sourceCid).array(),
+            QUIC_VERSION_1, destinationCid, sourceCid.array(),
             QuicPacketHeader.PacketType.HANDSHAKE, new byte[0], encryptedPayloadSize + pnLen, (byte)0 );
 
-        ByteBuffer byteBuffer = encryptAndProtectQuicPacket(payload, keys.key(), keys.iv(), header, keys.headerProtection());
-        log.info("ADD: {}", HexFormat.of().formatHex(header.rawData));
-        log.info("ENCRYPTED: {}", HexFormat.of().formatHex(byteBuffer.array()));
+        PoolBuffer byteBuffer = encryptAndProtectQuicPacket(payload, keys.key(), keys.iv(), header, keys.headerProtection());
         return byteBuffer;
     }
 
@@ -111,7 +109,7 @@ public class QuicPacketBuilder {
      * @return Complete 1-RTT packet ready to send
      * @throws QuicCrypto.CryptoException if encryption fails
      */
-    public static ByteBuffer build1RttPacket(byte [] destinationCid, long packetNumber,
+    public static PoolBuffer build1RttPacket(byte [] destinationCid, long packetNumber,
                                              ByteBuffer plaintext, QuicCrypto.PacketProtectionKeys keys, byte [] hp_key, byte keyPhase) throws QuicCrypto.CryptoException {
         int pnLen = encodedPnLength(packetNumber);
 
@@ -193,5 +191,37 @@ public class QuicPacketBuilder {
         if (packetNumber <= 0xFFFFL)     return 2;
         if (packetNumber <= 0xFFFFFFL)   return 3;
         return 4;
+    }
+
+    static ByteBuffer writeStatelessResetFrame(long connectionId, int incomingPacketSize) {
+        // RFC 9000: Stateless Reset should be smaller than incoming packet
+        // to avoid amplification attacks, but at least 21 bytes
+        int resetSize = Math.max(MIN_STATELESS_RESET_LENGTH,
+                Math.min(incomingPacketSize - 1, 1200));
+
+        ByteBuffer frameBuffer = ByteBuffer.allocate(resetSize);
+
+        // First byte must have fixed bit (0x40) set to appear as valid short header
+        byte firstByte = (byte) (0x40 | (SECURE_RANDOM.nextInt() & 0x3F));
+        frameBuffer.put(firstByte);
+
+        // Fill with random unpredictable bits (excluding last 16 bytes for token)
+        int randomBytesCount = resetSize - 1 - STATELESS_RESET_TOKEN_LENGTH;
+        byte[] randomBytes = new byte[randomBytesCount];
+        SECURE_RANDOM.nextBytes(randomBytes);
+        frameBuffer.put(randomBytes);
+
+        // Add 16-byte Stateless Reset Token at the end
+        // In a real implementation, this should be a pseudorandom function of the CID
+        // For now, we use random bytes (stateless - doesn't require storing state)
+        byte[] token = QuicCrypto.generateStatelessResetToken(ByteBuffer.allocate(8).putLong(connectionId).array());
+        SECURE_RANDOM.nextBytes(token);
+        frameBuffer.put(token);
+
+        //Add required padding
+        frameBuffer.put(ZERO_BLOCK, 0, resetSize - frameBuffer.position());
+
+        frameBuffer.limit(frameBuffer.position());
+        return frameBuffer.flip();
     }
 }
