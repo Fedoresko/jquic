@@ -384,7 +384,8 @@ public class StreamManager implements ConnectionStreamManager {
             throw new QuicStreamException("Cant write stream data", e);
         }
 
-        for (ByteBuffer buf : outs.readyChunks()) {
+        ByteBuffer buf;
+        while ((buf = outs.pollReadyChunk()) != null) {
             if (!trySendData(streamId, fin, buf, state)) {
                 outbox.push(new FrameRecord(streamId, fin, buf));
             }

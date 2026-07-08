@@ -7,6 +7,7 @@ import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.util.*;
 import java.util.function.BiFunction;
+import java.util.function.Consumer;
 
 /**
  * This class supports writing in a zero-copy buffer with splitting data in chunks
@@ -20,27 +21,36 @@ public class ChunkingOutputStream extends OutputStream {
     private BiFunction<ByteBuffer, Integer, ByteBuffer> chunkWrapper;
     private int chunkStart;
     private int logicalOffset = 0;
-    private TreeMap<Integer, Integer> gaps = new TreeMap<>();
-    private List<ByteBuffer> wrappedChunks = new ArrayList<>();
-    private int originalLimit;
+    private final TreeMap<Integer, Integer> gaps = new TreeMap<>();
+    private final Deque<ReadyChunk> wrappedChunks = new LinkedList<>();
+    private final int capacity;
+    private Consumer<ByteBuffer> chunkConsumer;
+
+    record ReadyChunk(int start, int end) {}
 
     private boolean historyMode = false;
     private int lastPosition = 0;
     private int lastChunkStart = 0;
     private final int firstChunkStart;
+    private int position;
 
     /**
      * Create Stream
-     * @param buffer - underlying buffer
+     *
+     * @param buffer    - underlying buffer
      * @param chinkSize - size of max continuous data block before callback is called.
      */
     public ChunkingOutputStream(ByteBuffer buffer, int chinkSize) {
         this.chunkSize = chinkSize;
         this.buf = buffer;
         chunkStart = buf.position();
+        position = buf.position();
         firstChunkStart = chunkStart;
         lastChunkStart = chunkStart;
-        originalLimit = buffer.limit();
+        capacity = buffer.limit();
+        if (capacity < chinkSize) {
+            throw new IllegalArgumentException("Chunk size is more than buffer size");
+        }
     }
 
     /**
@@ -51,21 +61,57 @@ public class ChunkingOutputStream extends OutputStream {
         this.chunkWrapper = callback;
     }
 
+    public void setChunkConsumer(Consumer<ByteBuffer> consumer) {
+        chunkConsumer = consumer;
+    }
+
     @Override
     public void write(int b) throws IOException {
         buf.put((byte) b);
         if (!historyMode) {
             logicalOffset++;
         }
+        position++;
 
-        if (buf.position() - chunkStart == chunkSize) {
+        if (buf.remaining() == 0) {
+            buf.position(0);
+        }
+
+        if (position - chunkStart == chunkSize) {
             triggerCallback();
+        }
+    }
+
+    @Override
+    public void write(byte @NonNull [] b, int off, int len) throws IOException {
+        int bytesWritten = 0;
+        while (bytesWritten < len) {
+            int spaceLim = buf.remaining();
+
+            int spaceLeft = chunkSize - (position - chunkStart);
+            int bytesToCopy = Math.min(Math.min(spaceLeft, len - bytesWritten), spaceLim);
+
+            buf.put(b, off + bytesWritten, bytesToCopy);
+            bytesWritten += bytesToCopy;
+            position += bytesToCopy;
+            if (!historyMode) {
+                logicalOffset += bytesToCopy;
+            }
+
+            if (position - chunkStart == chunkSize) {
+                triggerCallback();
+            }
+
+            if (buf.remaining() == 0) {
+                buf.position(0);
+            }
         }
     }
 
     /**
      * Go to some previously written position to fill-in placeholder.
      * History mode if ON.
+     *
      * @param position - position in underlying buffer.
      */
     public void goBack(int position) {
@@ -74,10 +120,14 @@ public class ChunkingOutputStream extends OutputStream {
         }
         historyMode = true;
         LogicalPosition pos = getLogicalPosition(position);
+        if (this.position - (pos.chunkStart() + pos.rpos()) > capacity) {
+            throw new IllegalArgumentException("Can't go too way back");
+        }
         lastChunkStart = this.chunkStart;
         this.chunkStart = pos.chunkStart();
-        lastPosition = buf.position();
-        buf.position(pos.chunkStart() + pos.rpos());
+        lastPosition = this.position;
+        this.position = pos.chunkStart() + pos.rpos();
+        buf.position(this.position % capacity);
     }
 
     private @NonNull LogicalPosition getLogicalPosition(int position) {
@@ -107,46 +157,54 @@ public class ChunkingOutputStream extends OutputStream {
     public void toPresent() {
         if (historyMode) {
             historyMode = false;
-            buf.position(lastPosition);
+            position = lastPosition;
+            buf.position(lastPosition % capacity);
             chunkStart = lastChunkStart;
-        }
-    }
-
-    @Override
-    public void write(byte @NonNull [] b, int off, int len) throws IOException {
-        int bytesWritten = 0;
-        while (bytesWritten < len) {
-            int spaceLeft = chunkSize - (buf.position() - chunkStart);
-            int bytesToCopy = Math.min(spaceLeft, len - bytesWritten);
-
-            buf.put(b, off + bytesWritten, bytesToCopy);
-            bytesWritten += bytesToCopy;
-            if (!historyMode) {
-                logicalOffset += bytesToCopy;
-            }
-
-            if (buf.position() - chunkStart == chunkSize) {
-                triggerCallback();
-            }
         }
     }
 
     private void triggerCallback() {
         if (historyMode) {
-            Integer gapEnd = gaps.get(buf.position());
-            if (gapEnd == null) throw new IllegalStateException("Unexpected in history mode at position " + buf.position());
+            Integer gapEnd = gaps.get(position);
+            if (gapEnd == null) throw new IllegalStateException("Unexpected in history mode at position " + position);
             chunkStart = gapEnd;
-            buf.position(chunkStart);
+            position = gapEnd;
+            buf.position(position % capacity);
         } else {
-            int positionBeforeGap = buf.position();
+            int positionBeforeGap = position;
 
             // Invoke user interception code - it must set adjust buffer position and limit back for continuation.
-            if (chunkWrapper != null) {
-                wrappedChunks.add( chunkWrapper.apply(buf.position(chunkStart).limit(positionBeforeGap), logicalOffset - (positionBeforeGap - chunkStart)) );
+            int newLimit = positionBeforeGap % capacity;
+            ByteBuffer chunk = buf.duplicate().position(chunkStart % capacity).limit(newLimit == 0 ? capacity : newLimit);
+            ByteBuffer wrap = (chunkWrapper != null) ?
+                    chunkWrapper.apply(chunk, logicalOffset - (positionBeforeGap - chunkStart))
+                    : chunk;
+
+            int start = chunkStart + (wrap.position() - (chunkStart % capacity));
+            int end = chunkStart + (wrap.limit() - (chunkStart % capacity));
+            int chunkWrappedLen = wrap.remaining();
+
+            if (chunkConsumer != null) {
+                chunkConsumer.accept(wrap);
+            } else {
+                if (!wrappedChunks.isEmpty() && wrappedChunks.peek().start + capacity < end) {
+                    throw new IllegalStateException("Buffer is full");
+                }
+                wrappedChunks.offer(new ReadyChunk(start, end));
             }
 
-            chunkStart = buf.position();
-            buf.limit(originalLimit);
+            int advance = chunkWrappedLen > chunkSize ? chunkWrappedLen - chunkSize : 0;
+
+            if (buf.remaining() < Math.max(chunkWrappedLen, chunkSize)) {
+                int headerSize = Math.max(0, chunkStart - start);
+                advance = buf.remaining() + headerSize;
+            }
+
+            position += advance;
+
+            chunkStart = position;
+            buf.position(position % capacity);
+            buf.limit(capacity);
             gaps.put(positionBeforeGap, chunkStart);
         }
     }
@@ -154,39 +212,45 @@ public class ChunkingOutputStream extends OutputStream {
     // Need to wrap the last data that has not reached chunkSize yet.
     public void flush() {
         toPresent();
-        if (buf.position() > chunkStart) {
+        if (position > chunkStart) {
             triggerCallback();
         }
     }
 
-    public Iterable<ByteBuffer> readyChunks() {
-        return wrappedChunks;
+    public ByteBuffer pollReadyChunk() {
+        ReadyChunk chunk = wrappedChunks.poll();
+        return chunk == null ? null : buf.duplicate().position(chunk.start % capacity).limit(chunk.end % capacity);
     }
 
-    public Iterator<ByteBuffer> readyContentFrom(int position) {
+    public Iterator<ByteBuffer> readyContentFrom(int pos) {
         if (historyMode) throw new IllegalStateException("Cant iterate content while in history mode");
-        return new Iterator<ByteBuffer>() {
+        LogicalPosition lpos = getLogicalPosition(pos);
+        int curPos = lpos.chunkStart() + lpos.rpos();
+        if (position - curPos > capacity) throw new IllegalArgumentException("Start position is too early away.");
 
-            LogicalPosition pos = getLogicalPosition(position);
-            int curPos = pos.chunkStart() + pos.rpos();
+        return new Iterator<ByteBuffer>() {
+            int curPos = lpos.chunkStart() + lpos.rpos();
+
 
             @Override
             public boolean hasNext() {
-                return (curPos < buf.position());
+                return (curPos < position);
             }
 
             @Override
             public ByteBuffer next() {
-                if  (curPos >= buf.position())
+                if (curPos >= position)
                     throw new NoSuchElementException();
-                Map.Entry<Integer, Integer> nextGap = gaps.ceilingEntry(curPos);
+                Map.Entry<Integer, Integer> nextGap = gaps.ceilingEntry(curPos + 1);
 
                 ByteBuffer res;
                 if (nextGap == null) {
-                    res = buf.duplicate().position(curPos).limit(buf.position());
-                    curPos = buf.position();
+                    int newLimit = position % capacity;
+                    res = buf.duplicate().position(curPos % capacity).limit(newLimit == 0 ? capacity : newLimit);
+                    curPos = position;
                 } else {
-                    res = buf.duplicate().position(curPos).limit(nextGap.getKey());
+                    int newLimit = nextGap.getKey() % capacity;
+                    res = buf.duplicate().position(curPos % capacity).limit(newLimit == 0 ? capacity : newLimit);
                     curPos = nextGap.getValue();
                 }
                 return res;

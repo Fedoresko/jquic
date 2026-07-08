@@ -1139,7 +1139,8 @@ public class QuicConnection implements TimeoutHeap.Entry {
         outs.close();
         transcryptHashSupport.finish();
 
-        for (ByteBuffer chunk : outs.readyChunks()) {
+        ByteBuffer chunk;
+        while ((chunk = outs.pollReadyChunk()) != null) {
             sendInitialPacket(chunk);
             logger.debug("Sending ServerHello Initial packet");
         }
@@ -1192,7 +1193,8 @@ public class QuicConnection implements TimeoutHeap.Entry {
         out.close();
         transcryptUpdater.finish();
 
-        for (ByteBuffer chunk : out.readyChunks()) {
+        ByteBuffer chunk;
+        while ((chunk = out.pollReadyChunk()) != null) {
             sendHandshakePacket(chunk);
         }
     }

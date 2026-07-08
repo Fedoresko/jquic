@@ -1,6 +1,5 @@
 package org.fmalyshev.quic.buffers;
 
-import java.io.DataOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.Iterator;
@@ -13,8 +12,8 @@ import java.util.function.Consumer;
  * Data is written using standard java.io.DataOutputStream methods.
  * It calls chunkWrapper callback, that could wrap chunk data with some user headers\trailers, and adjust buffer position to the start of the next chunk.
  * It supports amendAtPos to update reserved placeholder in original data.
- *
- * After the Stream is closed, use readyChunks() to collect all wrapped chunks with final data.
+ * <p>
+ * After the Stream is closed, use pollReadyChunk() to collect all wrapped chunks with final data.
  * Use readyContentFrom() to collect recently written data without wrapping but with all amendments applied.
  */
 public class ChunkedOutputStreamWithAmendmentsImpl extends ChunkedOutputStreamWithAmendments {
@@ -23,8 +22,9 @@ public class ChunkedOutputStreamWithAmendmentsImpl extends ChunkedOutputStreamWi
 
     /**
      * Create new ChunkedOutputStreamWithAmendments
-     * @param buffer - underlying ByteBuffer large enough to accommodate all wrapped chunks.
-     * @param chunkSize - fixed size of chunk for written data to be split into
+     *
+     * @param buffer       - underlying ByteBuffer large enough to accommodate all wrapped chunks.
+     * @param chunkSize    - fixed size of chunk for written data to be split into
      * @param chunkWrapper - callback that wraps a chunk with optional header\footer, returns the result as ButeBuffer,
      *                     and adjusts passed ByteBuffer position where to continue writes (reserve header space).
      */
@@ -37,13 +37,18 @@ public class ChunkedOutputStreamWithAmendmentsImpl extends ChunkedOutputStreamWi
     }
 
     private ByteBuffer sendChunk(ByteBuffer buffer, Integer offset) {
-        return chunkWrapper.apply(this.buffer, offset);
+        return chunkWrapper.apply(buffer, offset);
     }
 
     @Override
     public void close() throws IOException {
         ((ChunkingOutputStream) out).flush();
         super.close();
+    }
+
+    @Override
+    public void setChunkConsumer(Consumer<ByteBuffer> consumer) {
+        ((ChunkingOutputStream) out).setChunkConsumer(consumer);
     }
 
     @Override
@@ -59,8 +64,8 @@ public class ChunkedOutputStreamWithAmendmentsImpl extends ChunkedOutputStreamWi
     }
 
     @Override
-    public Iterable<ByteBuffer> readyChunks() {
-        return ((ChunkingOutputStream) out).readyChunks();
+    public ByteBuffer pollReadyChunk() {
+        return ((ChunkingOutputStream) out).pollReadyChunk();
     }
 
     @Override
