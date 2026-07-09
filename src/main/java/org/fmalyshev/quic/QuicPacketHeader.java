@@ -54,7 +54,7 @@ public class QuicPacketHeader {
         this.sourceCid = sourceCid;
         this.token = token;
         this.payloadLength = payloadLength;
-        this.headerLength = measureHeaderLength();
+        this.headerLength = (rawData == null) ? measureHeaderLength() : rawData.length;
         this.rawData = rawData;
     }
 

@@ -1,7 +1,6 @@
 package org.fmalyshev.quic;
 
 import org.fmalyshev.quic.buffers.BorrowedPoolBuffer;
-import org.fmalyshev.quic.buffers.PoolBuffer;
 import org.fmalyshev.quic.buffers.RootPoolBuffer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -110,7 +109,7 @@ class QuicConnectionPacketTest {
             .thenReturn(true);
 
         // Mock encryption to bypass encryption - symmetrical to decryptAead
-        mockedQuicCrypto.when(() -> QuicCrypto.encryptPacket(any(ByteBuffer.class),
+        mockedQuicCrypto.when(() -> QuicCrypto.encryptPacketInPlace(any(ByteBuffer.class),
                                                              any(SecretKey.class),
                                                              anyLong(),
                                                              any(),

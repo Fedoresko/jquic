@@ -588,8 +588,8 @@ public class QuicCrypto {
      * @return Encrypted ciphertext with GCM tag appended (plaintext.length + 16 bytes)
      * @throws CryptoException if encryption fails
      */
-    public static ByteBuffer encryptPacket(ByteBuffer plaintext, SecretKey secret, long packetNumber,
-                                           ByteBuffer associatedData, byte[] baseIv) throws CryptoException {
+    public static void encryptPacketInPlace(ByteBuffer plaintext, SecretKey secret, long packetNumber,
+                                            ByteBuffer associatedData, byte[] baseIv) throws CryptoException {
         try {
             // RFC 9001 §5.3: nonce = baseIv XOR left-padded(packetNumber)
             byte[] iv = baseIv.clone();
@@ -608,13 +608,10 @@ public class QuicCrypto {
             }
 
             // Encrypt using direct ByteBuffer operations
-            // cipher.getOutputSize() accounts for the 16-byte GCM tag
-            ByteBuffer ciphertext = ByteBuffer.allocate(cipher.getOutputSize(plaintext.remaining()));
-            cipher.doFinal(plaintext, ciphertext);
-            ciphertext.flip();
-
-            return ciphertext;
-
+            ByteBuffer out = plaintext.duplicate().limit(plaintext.limit() + GCM_TAG_LENGTH);
+            cipher.doFinal(plaintext, out);
+            plaintext.limit(out.position());
+            plaintext.position(out.position());
         } catch (GeneralSecurityException e) {
             throw new CryptoException("Encryption failed", e);
         }

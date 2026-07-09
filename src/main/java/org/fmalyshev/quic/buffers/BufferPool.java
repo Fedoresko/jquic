@@ -6,7 +6,7 @@ import java.nio.ByteBuffer;
 
 public class BufferPool {
     public static final int READ_BUFFER_SIZE = 2048;
-    public static final int WRITE_BUFFER_SIZE = 4096;
+    public static final int WRITE_BUFFER_SIZE = 2048;
     public static final int INITIAL_SIZE = 100;
 
     private final MpmcUnboundedXaddArrayQueue<RootPoolBuffer> readBufferPool = new MpmcUnboundedXaddArrayQueue<>(READ_BUFFER_SIZE * 10, 100);

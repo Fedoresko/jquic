@@ -118,7 +118,7 @@ class QuicConnectionTest {
                     "Connection should transition to CLOSING state");
 
             // Verify encryptPacket was called to send CONNECTION_CLOSE
-            cryptoMock.verify(() -> QuicCrypto.encryptPacket(any(), any(), anyLong(), any(), any()), atLeastOnce());
+            cryptoMock.verify(() -> QuicCrypto.encryptPacketInPlace(any(), any(), anyLong(), any(), any()), atLeastOnce());
         }
     }
 
@@ -1206,7 +1206,7 @@ class QuicConnectionTest {
                 });
 
         // Mock encryption
-        mock.when(() -> QuicCrypto.encryptPacket(any(), any(), anyLong(), any(), any()))
+        mock.when(() -> QuicCrypto.encryptPacketInPlace(any(), any(), anyLong(), any(), any()))
                 .thenAnswer(invocation -> {
                     ByteBuffer input = invocation.getArgument(0);
                     ByteBuffer encrypted = ByteBuffer.allocate(input.remaining() + 50);

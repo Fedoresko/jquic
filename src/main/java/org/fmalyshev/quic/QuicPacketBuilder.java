@@ -7,7 +7,6 @@ import org.slf4j.LoggerFactory;
 import javax.crypto.SecretKey;
 import java.nio.ByteBuffer;
 import java.security.SecureRandom;
-import java.util.HexFormat;
 
 import static org.fmalyshev.quic.QuicCrypto.GCM_TAG_LENGTH;
 
@@ -65,10 +64,15 @@ public class QuicPacketBuilder {
 
     private static PoolBuffer encryptAndProtectQuicPacket(ByteBuffer plaintext, SecretKey key, byte[] iv, QuicPacketHeader header, byte[] hp_key) throws QuicCrypto.CryptoException {
         PoolBuffer packet = QuicEngine.getPool().requestWriteBuffer();
+        int headerStart = packet.buf().position();
         header.write(packet.buf());
-        ByteBuffer encryptedPayload = QuicCrypto.encryptPacket(plaintext, key, header.packetNumber, packet.buf().duplicate().flip(), iv);
-        packet.buf().put(encryptedPayload);
-        packet.buf().flip();
+        ByteBuffer headerData = packet.buf().duplicate().position(headerStart).limit(packet.buf().position());
+        int playloadStart = packet.buf().position();
+        packet.buf().put(plaintext);
+        ByteBuffer payloadData = packet.buf().duplicate().position(playloadStart).limit(packet.buf().position());
+        QuicCrypto.encryptPacketInPlace(payloadData, key, header.packetNumber, headerData, iv);
+        packet.buf().limit(payloadData.limit());
+        packet.buf().position(headerStart);
 
         applyHeaderProtection(packet.buf(), header.headerLength, header.pnLength, hp_key);
         return packet;
@@ -147,7 +151,7 @@ public class QuicPacketBuilder {
 
         // RFC 9001 §5.4.2: sample_offset = pn_offset + 4
         // pn_offset is the start of the packet number field = headerLength - pnLen
-        int sampleOffset = (headerLength - pnLen) + 4;
+        int sampleOffset = packet.position() + (headerLength - pnLen) + 4;
         if (packet.limit() < sampleOffset + 16) {
             throw new QuicCrypto.CryptoException(
                     "Packet too short to extract HP sample (limit=" + packet.limit() + ")");
@@ -171,12 +175,12 @@ public class QuicPacketBuilder {
         }
 
         // XOR flags byte (index 0)
-        boolean isLongHeader = (packet.get(0) & 0x80) != 0;
-        byte maskedFlags = (byte) (packet.get(0) ^ (mask[0] & (isLongHeader ? 0x0F : 0x1F)));
-        packet.put(0, maskedFlags);
+        boolean isLongHeader = (packet.get(packet.position()) & 0x80) != 0;
+        byte maskedFlags = (byte) (packet.get(packet.position()) ^ (mask[0] & (isLongHeader ? 0x0F : 0x1F)));
+        packet.put(packet.position(), maskedFlags);
 
         // XOR packet number bytes (last pnLen bytes of the header)
-        int pnOffset = headerLength - pnLen;
+        int pnOffset = packet.position() + headerLength - pnLen;
         for (int i = 0; i < pnLen; i++) {
             packet.put(pnOffset + i, (byte) (packet.get(pnOffset + i) ^ mask[1 + i]));
         }
