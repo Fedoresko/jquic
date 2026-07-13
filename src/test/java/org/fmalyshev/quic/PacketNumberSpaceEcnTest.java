@@ -10,7 +10,8 @@ class PacketNumberSpaceEcnTest {
 
     @Test
     void testEcnCounters() {
-        PacketNumberSpace pns = new PacketNumberSpace(PacketNumberSpace.PacketPhase.APPLICATION, 100_000_000L);
+        PacketNumberSpace pns = new PacketNumberSpace(PacketNumberSpace.PacketPhase.APPLICATION);
+        pns.setTimeWindowNanos(100_000_000L);
         
         // ECN flags: 1 = CE, 2 = ECT(1), 4 = ECT(0) (based on code)
         // bit 0: isCe = (ecnFlags & 1) != 0
@@ -30,7 +31,8 @@ class PacketNumberSpaceEcnTest {
     @Test
     void testIntervalCePacketsThisWindow() throws InterruptedException {
         long windowNanos = 100_000_000L; // 100ms
-        PacketNumberSpace pns = new PacketNumberSpace(PacketNumberSpace.PacketPhase.APPLICATION, windowNanos);
+        PacketNumberSpace pns = new PacketNumberSpace(PacketNumberSpace.PacketPhase.APPLICATION);
+        pns.setTimeWindowNanos(windowNanos);
 
         pns.onAckReceived(0, List.of(), 0, null, 0); // Init
         pns.onAckReceived(0, List.of(), 0, null, 2); // CE increased by 2
@@ -40,8 +42,9 @@ class PacketNumberSpaceEcnTest {
     @Test
     void testAckReceivedWindowCalculations() {
         long windowNanos = 100_000_000L; // 100ms
-        PacketNumberSpace pns = new PacketNumberSpace(PacketNumberSpace.PacketPhase.APPLICATION, windowNanos);
-        
+        PacketNumberSpace pns = new PacketNumberSpace(PacketNumberSpace.PacketPhase.APPLICATION);
+        pns.setTimeWindowNanos(windowNanos);
+
         ByteBuffer data = ByteBuffer.allocate(100);
         pns.onPacketSent(1, data, true);
         pns.onPacketSent(2, data, true);
@@ -56,8 +59,9 @@ class PacketNumberSpaceEcnTest {
     @Test
     void testLostPacketsWindowCalculations() {
         long windowNanos = 100_000_000L; // 100ms
-        PacketNumberSpace pns = new PacketNumberSpace(PacketNumberSpace.PacketPhase.APPLICATION, windowNanos);
-        
+        PacketNumberSpace pns = new PacketNumberSpace(PacketNumberSpace.PacketPhase.APPLICATION);
+        pns.setTimeWindowNanos(windowNanos);
+
         ByteBuffer data = ByteBuffer.allocate(100);
         pns.onPacketSent(1, data, true);
         pns.onPacketSent(2, data, true);
@@ -77,7 +81,8 @@ class PacketNumberSpaceEcnTest {
     @Test
     void testCombinedWindowedStats() {
         long windowNanos = 100_000_000L; // 100ms
-        PacketNumberSpace pns = new PacketNumberSpace(PacketNumberSpace.PacketPhase.APPLICATION, windowNanos);
+        PacketNumberSpace pns = new PacketNumberSpace(PacketNumberSpace.PacketPhase.APPLICATION);
+        pns.setTimeWindowNanos(windowNanos);
 
         ByteBuffer data = ByteBuffer.allocate(100);
         pns.onPacketSent(1, data, true);
@@ -107,7 +112,9 @@ class PacketNumberSpaceEcnTest {
 
     @Test
     void testWriteAckEcnFrame() {
-        PacketNumberSpace pns = new PacketNumberSpace(PacketNumberSpace.PacketPhase.APPLICATION, 100_000_000L);
+        PacketNumberSpace pns = new PacketNumberSpace(PacketNumberSpace.PacketPhase.APPLICATION);
+        pns.setTimeWindowNanos(100_000_000L);
+
         pns.onPacketReceived(10, 1); // CE packet
         pns.clientEct0Counter = 5;
         pns.clientEct1Counter = 7;
