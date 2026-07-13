@@ -33,7 +33,7 @@ public class SelectorThread implements Runnable {
     }
 
     private final int threadId;
-    private final DatagramChannel channel;
+    private final QuicDatagramChannel channel;
     private final SpscLinkedQueue<PacketData> forwardedPackets;
     private final SpscArrayQueue<HandshakeTask> handshakeQueue = new SpscArrayQueue<>(HANDSHAKE_QUEUE_CAP);
     private final MessagePassingQueue<AppDataPacket> applicationQueue = new MpscArrayQueue<>(OUTBOUND_APP_QUEUE_SIZE);
@@ -61,7 +61,7 @@ public class SelectorThread implements Runnable {
 
     public SelectorThread(int threadId, DatagramChannel channel, ConcurrentHashMap<Long, Integer> cidToSelectorMap) {
         this.threadId = threadId;
-        this.channel = channel;
+        this.channel = new QuicDatagramChannel(channel);
         this.forwardedPackets = new SpscLinkedQueue<>();
         this.cidToSelectorMap = cidToSelectorMap;
         this.activeConnections = new HashMap<>();
@@ -100,16 +100,18 @@ public class SelectorThread implements Runnable {
 
             PoolBuffer buffer = QuicEngine.getPool().requestReadBuffer();
 
+            int[] metricsHolder = new int[1];
+
             while (!Thread.currentThread().isInterrupted()) {
                 long now = System.currentTimeMillis();
 
                 boolean hadWork = false;
 
                 // Process packets from socket
-                SocketAddress sender = channel.receive(buffer.buf());
+                SocketAddress sender = channel.receive(buffer.buf(), metricsHolder);
                 if (sender != null) {
                     buffer.buf().flip();
-                    processPacket(buffer, sender, "socket");
+                    processPacket(buffer, sender, "socket", metricsHolder[0]);
                     hadWork = true;
                     buffer = QuicEngine.getPool().requestReadBuffer();
                 }
@@ -118,7 +120,7 @@ public class SelectorThread implements Runnable {
                 // Process forwarded packets
                 PacketData forwarded = forwardedPackets.poll();
                 if (forwarded != null) {
-                    processPacket(forwarded.buffer, forwarded.sender, "forwarded");
+                    processPacket(forwarded.buffer, forwarded.sender, "forwarded", 0);
                     hadWork = true;
                 }
 
@@ -173,7 +175,7 @@ public class SelectorThread implements Runnable {
      * Processes a received datagram which may contain multiple coalesced packets.
      * Routes packets to appropriate connections based on CID.
      */
-    private void processPacket(PoolBuffer datagram, SocketAddress sender, String source) {
+    private void processPacket(PoolBuffer datagram, SocketAddress sender, String source, int ecnFlags) {
         try {
             int packetCount = 0;
 
@@ -234,7 +236,7 @@ public class SelectorThread implements Runnable {
                         }
                         case ONE_RTT -> {
                             log.debug(logColor(), "Selector-{}: Processing 1-RTT packet for CID: {} from: {}", threadId, cid, sender);
-                            connection.process1RttPacket(datagram);
+                            connection.process1RttPacket(datagram, ecnFlags);
                         }
                         case RETRY, ZERO_RTT -> {
                             log.warn(logColor(), "Selector-{}: Processing {} packet for CID: {} not implemented",threadId, packetSummary.type(), cid);
@@ -289,7 +291,7 @@ public class SelectorThread implements Runnable {
             ByteBuffer dcidKey = ByteBuffer.wrap(packetSummary.dcid());
             initializingConnections.put(dcidKey, connection);
 
-            processPacket(task.packet, task.sender, "initial");
+            processPacket(task.packet, task.sender, "initial", 0);
 
             initializingConnections.remove(dcidKey);
 

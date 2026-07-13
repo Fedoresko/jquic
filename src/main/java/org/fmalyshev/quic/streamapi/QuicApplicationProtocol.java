@@ -1,5 +1,7 @@
 package org.fmalyshev.quic.streamapi;
 
+import org.fmalyshev.quic.streamapi.congestion.BBRv3;
+import org.fmalyshev.quic.streamapi.congestion.TcpPrague;
 import org.jspecify.annotations.Nullable;
 
 import java.util.function.Function;
@@ -38,4 +40,12 @@ public interface QuicApplicationProtocol {
      * @param reason - optional human-readable reason for the connection close if closed with CONNECTION_CLOSE frame
      */
     void onConnectionClose(long connectionId, @Nullable Long errorCode, @Nullable String reason);
+
+    /**
+     * Returns Congestion Control algorithm. Use some of the available or create your own.
+     * @return instance of CongestionControl algorithm of choice.
+     */
+    default CongestionControl getCongestionControl() {
+        return new BBRv3();
+    }
 }

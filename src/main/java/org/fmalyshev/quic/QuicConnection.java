@@ -6,6 +6,7 @@ import org.fmalyshev.quic.buffers.ChunkedOutputStreamWithAmendmentsImpl;
 import org.fmalyshev.quic.buffers.PoolBuffer;
 import org.fmalyshev.quic.buffers.TranscryptHashSupport;
 import org.fmalyshev.quic.streamapi.ConnectionStreamManager;
+import org.fmalyshev.quic.streamapi.QuicApplicationProtocol;
 import org.fmalyshev.quic.streamapi.frames.*;
 import org.fmalyshev.quic.streamapi.impl.QuicStreamEngineImpl;
 import org.slf4j.Logger;
@@ -120,13 +121,14 @@ public class QuicConnection implements TimeoutHeap.Entry {
      *
      * @param frame The frame to send (already encoded)
      */
-    void send1RttPacket(ByteBuffer frame) {
+    boolean send1RttPacket(ByteBuffer frame) {
         if (state.get() != State.ESTABLISHED) {
             logger.warn("Cannot send frame, connection not established (state: {})", state);
-            return;
+            return false;
         }
 
         sendApplicationPacket(frame);
+        return true;
     }
 
     /**
@@ -228,6 +230,11 @@ public class QuicConnection implements TimeoutHeap.Entry {
                         QuicEngine.getStreamEngineInternal();
                 if (engine != null) {
                     connectionStreamManager = engine.createConnection(connectionId, this, negotiatedProtocol);
+                    QuicApplicationProtocol protocol = engine.getProtocol(negotiatedProtocol);
+                    if (protocol != null) {
+                        applicationSpace.setTimeWindowNanos(protocol.getCongestionControl().timeWindowNanos());
+                    }
+
                     logger.info("Registered connection {} with stream engine (protocol: {})",
                             connectionId, negotiatedProtocol);
                 } else {
@@ -246,7 +253,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
                 PoolBuffer snapshot;
                 while ((snapshot = earlyOneRttQueue.pollFirst()) != null) {
                     try {
-                        process1RttPacket(snapshot);
+                        process1RttPacket(snapshot, 0);
                         snapshot.release();
                     } catch (Exception ex) {
                         logger.error("Failed to replay early 1-RTT packet for CID: {}", connectionId, ex);
@@ -296,7 +303,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
         return initialSpace;
     }
 
-    PacketNumberSpace getApplicationSpace() {
+    public PacketNumberSpace getApplicationSpace() {
         return applicationSpace;
     }
 
@@ -347,7 +354,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
             return null;
         }
 
-        initialSpace.onPacketReceived(header.packetNumber);
+        initialSpace.onPacketReceived(header.packetNumber, 0);
 
         try {
             return decryptAeadInPlace(packet, header, (int) header.payloadLength - header.pnLength, tlsMetadata.clientInitialKeys);
@@ -438,7 +445,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
         }
 
         // Track received packet in Handshake space
-        handshakeSpace.onPacketReceived(header.packetNumber);
+        handshakeSpace.onPacketReceived(header.packetNumber, 0);
 
         boolean needAck = false;
 
@@ -541,7 +548,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
      * The packet buffer position is advanced as data is read.
      * Stream data is delivered to the payload listener.
      */
-    void process1RttPacket(PoolBuffer packet) {
+    void process1RttPacket(PoolBuffer packet, int ecnFlags) {
         logger.debug("Processing 1-RTT packet for CID: {} in state: {}", connectionId, state);
 
         // If in CLOSING state do nothing
@@ -607,7 +614,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
         }
 
         // Track received packet in Application space
-        applicationSpace.onPacketReceived(header.packetNumber);
+        applicationSpace.onPacketReceived(header.packetNumber, ecnFlags);
 
         boolean needsAck = false;
 
@@ -800,7 +807,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
 
         // Generate ACK packet if needed
         if (needsAck) {
-            send1RttAck();
+            send1RttAck(ecnFlags);
         }
     }
 
@@ -1219,9 +1226,13 @@ public class QuicConnection implements TimeoutHeap.Entry {
         logger.debug("Sending Handshake ACK");
         sendHandshakePacket(frameBuffer);
     }
-    private void send1RttAck() {
+    private void send1RttAck(int ecnFlags) {
         ByteBuffer frameBuffer = ByteBuffer.allocate(256);
-        QuicFrameBuilder.writeAckFrame(applicationSpace, frameBuffer);
+        if  (ecnFlags == 0) {
+            QuicFrameBuilder.writeAckFrame(applicationSpace, frameBuffer);
+        } else {
+            QuicFrameBuilder.writeAckEcnFrame(applicationSpace, frameBuffer);
+        }
         logger.debug("Sending 1-RTT ACK");
         sendApplicationPacket(frameBuffer);
     }
@@ -1275,13 +1286,14 @@ public class QuicConnection implements TimeoutHeap.Entry {
             currentSmallest = rangeSmallest;
         }
 
+        long ceCounter = 0;
         if (frameType == 0x03) {
             QuicVarint.read(buffer); // 1. ECT(0) Packets
             QuicVarint.read(buffer); // 2. ECT(1) Packets
-            QuicVarint.read(buffer); // 3. Congestion Experienced Packets
+            ceCounter = QuicVarint.read(buffer); // 3. Congestion Experienced Packets
         }
 
-        space.onAckReceived(largestAcked, ackRanges, ackDelay, connectionStreamManager);
+        space.onAckReceived(largestAcked, ackRanges, ackDelay, connectionStreamManager, ceCounter);
 
         retransmitLostPackets(space);
     }

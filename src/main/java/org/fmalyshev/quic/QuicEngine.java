@@ -70,6 +70,12 @@ public class QuicEngine {
             logger.info("SO_REUSEPORT is not supported by this JVM");
         }
 
+        if (options.contains(StandardSocketOptions.IP_TOS) ) {
+            channel.setOption(StandardSocketOptions.IP_TOS, 0x03);
+        } else {
+            logger.info("TOS/ECN is not supported by this JVM");
+        }
+
         channel.bind(new InetSocketAddress(PORT));
         return channel;
     }

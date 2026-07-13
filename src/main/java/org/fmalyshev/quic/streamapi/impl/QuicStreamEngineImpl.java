@@ -128,4 +128,8 @@ public class QuicStreamEngineImpl implements QuicStreamEngine {
     public List<QuicApplicationProtocol> getProtocols() {
         return protocols.values().stream().toList();
     }
+
+    public QuicApplicationProtocol getProtocol(String protocolName) {
+        return protocols.get(protocolName);
+    }
 }

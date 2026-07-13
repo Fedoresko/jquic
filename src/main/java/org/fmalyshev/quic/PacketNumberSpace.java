@@ -33,14 +33,36 @@ public class PacketNumberSpace {
     private final TreeMap<Long, SentPacket> sentPackets = new TreeMap<>();
     private long largestAckedPacketNumber = -1;
 
+    // Bytes acked during last RTT tracking
+    private long bytesAckedInLastRtt = 0;
+    private final Deque<PacketEvent> ackRTTWindow = new ArrayDeque<>();
+    private final Deque<PacketEvent> lostRTTWindow = new ArrayDeque<>();
+    private final Deque<PacketEvent> ackWindow = new ArrayDeque<>();
+    private final Deque<PacketEvent> lostWindow = new ArrayDeque<>();
+    private final Deque<Long> packetWindowCE = new ArrayDeque<>();
+
+    private long serverCeCounter = -1;
+
+    private record PacketEvent(long timestamp, int bytes) {};
+
     // RTT tracking (RFC 9002 Section 5)
     private long smoothedRtt = K_INITIAL_RTT_MS;
     private long rttVar = K_INITIAL_RTT_MS / 2;
     private long minRtt = Long.MAX_VALUE;
     private long latestRtt = 0;
+    private long timeWindowNanos = 0;
 
     // Loss detection
     private long lossTime = 0; // Time at which next packet will be considered lost
+
+    long clientEctCeCounter = 0;
+    long clientEct0Counter = 0;
+    long clientEct1Counter = 0;
+    long intervalCePacketsThisWindow = 0;
+    long bytesAckedThisWindow = 0;
+    long packetsAckedThisWindow = 0;
+    long bytesLostInWindow = 0;
+    long bytesLostInLastRtt = 0;
 
     // Min-heap ordered by per-packet loss deadline for O(log n) loss detection.
     private final TimeoutHeap<SentPacket> lossHeap = new TimeoutHeap<>(SentPacket.class);
@@ -54,6 +76,10 @@ public class PacketNumberSpace {
      */
     public synchronized long allocatePacketNumber() {
         return nextPacketNumber++;
+    }
+
+    public void setTimeWindowNanos(long timeWindowNanos) {
+        this.timeWindowNanos = timeWindowNanos;
     }
 
     /**
@@ -88,12 +114,20 @@ public class PacketNumberSpace {
     /**
      * Records that a packet was received.
      */
-    public synchronized void onPacketReceived(long packetNumber) {
+    public synchronized void onPacketReceived(long packetNumber, int ecnFlags) {
         receivedPackets.add(packetNumber);
 
         if (packetNumber > largestReceivedPacketNumber) {
             largestReceivedPacketNumber = packetNumber;
         }
+
+        boolean isCe   = (ecnFlags & (1)) != 0;
+        boolean isEct1 = (ecnFlags & (1 << 1)) != 0;
+        boolean isEct0 = (ecnFlags & (1 << 2)) != 0;
+
+        if (isCe)   clientEctCeCounter++;
+        if (isEct1) clientEct1Counter++;
+        if (isEct0) clientEct0Counter++;
 
         logger.debug("{}: Received packet {}, largest: {}", phase, packetNumber, largestReceivedPacketNumber);
     }
@@ -118,14 +152,29 @@ public class PacketNumberSpace {
     /**
      * Processes received ACK frame and updates RTT, removes acked packets, detects losses.
      * RFC 9002 Section 6: Processing Acknowledgments
-     * 
+     *
      * @param largestAcked Largest acknowledged packet number
-     * @param ackRanges List of acknowledged packet ranges
-     * @param ackDelay ACK delay in microseconds
-     * @param ackCallback Optional callback invoked for each acked packet before removal
+     * @param ackRanges    List of acknowledged packet ranges
+     * @param ackDelay     ACK delay in microseconds
+     * @param ackCallback  Optional callback invoked for each acked packet before removal
+     * @param ceCounter
      */
-    public void onAckReceived(long largestAcked, List<AckRange> ackRanges, long ackDelay, AckCallback ackCallback) {
+    public void onAckReceived(long largestAcked, List<AckRange> ackRanges, long ackDelay, AckCallback ackCallback, long ceCounter) {
         logger.info("{}: ACK received for largest: {}, ranges: {}", phase, largestAcked, ackRanges.size());
+
+        if (serverCeCounter == -1) {
+            serverCeCounter = ceCounter;
+        }
+
+        if (ceCounter > serverCeCounter) {
+            long ceDelta = ceCounter - serverCeCounter;
+            long now = System.nanoTime();
+            for (int i = 0; i < ceDelta; i++) {
+                packetWindowCE.addLast(now);
+                intervalCePacketsThisWindow++;
+            }
+            serverCeCounter = ceCounter;
+        }
 
         // Update largest acked
         if (largestAcked > largestAckedPacketNumber) {
@@ -156,10 +205,14 @@ public class PacketNumberSpace {
             }
         }
 
+        long now = System.nanoTime();
+        int newlyAckedBytes = 0;
+
         // Process and remove acked packets
         for (long pn : newlyAcked) {
             SentPacket packet = sentPackets.remove(pn);
             if (packet != null) {
+                newlyAckedBytes += packet.getSize();
                 if (ackCallback != null) {
                     ackCallback.onPacketAcknowledged(pn, packet);
                 }
@@ -167,6 +220,17 @@ public class PacketNumberSpace {
             }
             logger.debug("{}: Packet {} acked and removed", phase, pn);
         }
+
+        // Update bytesAckedInLastRtt
+        if (newlyAckedBytes > 0) {
+            PacketEvent e = new PacketEvent(now, newlyAckedBytes);
+            ackRTTWindow.addLast(e);
+            ackWindow.addLast(e);
+            bytesAckedThisWindow += newlyAckedBytes;
+            bytesAckedInLastRtt += newlyAckedBytes;
+            packetsAckedThisWindow += newlyAcked.size();
+        }
+        purgeOldEvents();
     }
 
     /**
@@ -266,6 +330,17 @@ public class PacketNumberSpace {
         SentPacket next = lossHeap.peek();
         lossTime = (next != null) ? next.getTimeoutTimestamp() : 0;
 
+
+        long nowNano = System.nanoTime();
+
+        for (SentPacket packet : lostPackets.values()) {
+            lostWindow.addLast(new PacketEvent(nowNano, packet.unencryptedPayload.remaining()));
+            lostRTTWindow.addLast(new PacketEvent(nowNano, packet.unencryptedPayload.remaining()));
+            bytesLostInWindow += packet.unencryptedPayload.remaining();
+            bytesAckedInLastRtt += packet.unencryptedPayload.remaining();
+        }
+        purgeOldEvents();
+
         return lostPackets;
     }
 
@@ -328,6 +403,68 @@ public class PacketNumberSpace {
     public long getLossTime() {
         return lossTime;
     }
+
+    public long getServerCeCounter() {
+        return serverCeCounter;
+    }
+
+    public record WindowedStats(
+            long intervalCePackets,
+            long bytesAcked,
+            long packetsAcked,
+            long bytesLost,
+            long bytesAckedInLastRtt,
+            long bytesLostInLastRtt
+    ) {}
+
+    public WindowedStats getWindowedStats() {
+        purgeOldEvents();
+        return new WindowedStats(
+                intervalCePacketsThisWindow,
+                bytesAckedThisWindow,
+                packetsAckedThisWindow,
+                bytesLostInWindow,
+                bytesAckedInLastRtt,
+                bytesLostInLastRtt
+        );
+    }
+
+    private void purgeOldEvents() {
+        long now = System.nanoTime();
+        long rttWindowStart = now - smoothedRtt * 1_000_000;
+        long statsWindowStart = now - timeWindowNanos;
+
+        // Purge ACK RTT window
+        while (!ackRTTWindow.isEmpty() && ackRTTWindow.peekFirst().timestamp < rttWindowStart) {
+            PacketEvent oldEvent = ackRTTWindow.removeFirst();
+            bytesAckedInLastRtt -= oldEvent.bytes;
+        }
+
+        // Purge ACK stats window
+        while (!ackWindow.isEmpty() && ackWindow.peekFirst().timestamp < statsWindowStart) {
+            PacketEvent oldEvent = ackWindow.removeFirst();
+            packetsAckedThisWindow--;
+            bytesAckedThisWindow -= oldEvent.bytes;
+        }
+
+        // Purge CE window
+        while (!packetWindowCE.isEmpty() && packetWindowCE.peekFirst() < statsWindowStart) {
+            packetWindowCE.removeFirst();
+            intervalCePacketsThisWindow--;
+        }
+
+        // Purge lost window
+        while (!lostWindow.isEmpty() && lostWindow.peekFirst().timestamp < statsWindowStart) {
+            PacketEvent e = lostWindow.removeFirst();
+            bytesLostInWindow -= e.bytes;
+        }
+
+        while (!lostRTTWindow.isEmpty() && lostRTTWindow.peekFirst().timestamp < rttWindowStart) {
+            PacketEvent e = lostRTTWindow.removeFirst();
+            bytesLostInLastRtt -= e.bytes;
+        }
+    }
+
 
     public boolean hasUnackedPackets() {
         return !sentPackets.isEmpty();
@@ -401,6 +538,10 @@ public class PacketNumberSpace {
 
         public ByteBuffer getUnencryptedPayload() {
             return unencryptedPayload;
+        }
+
+        public int getSize() {
+            return unencryptedPayload.remaining();
         }
 
         // ---- TimeoutHeap.Entry ----

@@ -59,8 +59,14 @@ RUN J_HOME=$(java -XshowSettings:properties -version 2>&1 | grep 'java.home' | a
     -I"${J_HOME}/include/linux" \
     javabpf.c -lbpf \
     -o libjavabpf.so && \
+    gcc -shared -fPIC \
+    -I"${J_HOME}/include" \
+    -I"${J_HOME}/include/linux" \
+    quic_ecn.c -lbpf \
+    -o quic_ecn.so && \
     mkdir -p /usr/java/packages/lib && \
-    cp libjavabpf.so /usr/java/packages/lib
+    cp libjavabpf.so /usr/java/packages/lib && \
+    cp quic_ecn.so /usr/java/packages/lib
 
 # Give fedoresko ownership of the app directory for FTP uploads
 RUN chown -R fedoresko:fedoresko /app

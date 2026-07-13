@@ -189,7 +189,7 @@ class QuicConnectionPacketTest {
 
         // Act
         getOutboundPackets(connection);
-        connection.process1RttPacket(new BorrowedPoolBuffer(mock(RootPoolBuffer.class), mock1RttPacket));
+        connection.process1RttPacket(new BorrowedPoolBuffer(mock(RootPoolBuffer.class), mock1RttPacket), 0);
         ByteBuffer ackPacket = connection.pollOutbound().buf();
 
 

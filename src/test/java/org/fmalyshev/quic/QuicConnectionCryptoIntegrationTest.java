@@ -148,7 +148,7 @@ class QuicConnectionCryptoIntegrationTest {
             destinationCidBytes(TEST_CONNECTION_ID), 5, plaintext,
             meta1Rtt.clientApplicationKeys, null, (byte) 0);
 
-        connection.process1RttPacket(new BorrowedPoolBuffer(mock(RootPoolBuffer.class), plaintext.duplicate()));
+        connection.process1RttPacket(new BorrowedPoolBuffer(mock(RootPoolBuffer.class), plaintext.duplicate()), 0);
         List<ByteBuffer> responses = getOutboundPackets(connection);
 
         assertNotNull(responses, "Should process packet with valid GCM tag");
@@ -198,7 +198,7 @@ class QuicConnectionCryptoIntegrationTest {
         tamperedPacket.put(last, (byte) (tamperedPacket.get(last) ^ 0xFF));
         tamperedPacket.rewind();
 
-        connection.process1RttPacket(new BorrowedPoolBuffer(mock(RootPoolBuffer.class), tamperedPacket));
+        connection.process1RttPacket(new BorrowedPoolBuffer(mock(RootPoolBuffer.class), tamperedPacket), 0);
         List<ByteBuffer> responses = getOutboundPackets(connection);
 
         assertEquals(0, responses.size(), "Should reject packet with invalid GCM tag");
@@ -307,7 +307,7 @@ class QuicConnectionCryptoIntegrationTest {
         QuicPacketBuilder.build1RttPacket(
             TEST_CID, 0, pingFrame, meta.clientApplicationKeys, null, (byte) 0);
 
-        connection.process1RttPacket(new BorrowedPoolBuffer(mock(RootPoolBuffer.class), pingFrame));
+        connection.process1RttPacket(new BorrowedPoolBuffer(mock(RootPoolBuffer.class), pingFrame), 0);
         List<ByteBuffer> rttResponses = getOutboundPackets(connection);
 
         assertNotNull(rttResponses, "Should process 1-RTT packet without error");

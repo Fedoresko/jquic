@@ -35,9 +35,19 @@ public interface QuicStreamResponse {
 
     /**
      * Sends data on the specified stream.
+     * This method could block execution if the buffer is full or due to congestion control
      * @param writer - source of data
      * @param fin - true if this is the last frame in the stream (FIN)
      * @throws QuicStreamException
      */
     void sendData(long streamId, Consumer<DataOutputStream> writer, boolean fin) throws QuicStreamException;
+
+    /**
+     * Sends data on the specified stream.
+     * This method is non-blocking still can throw IllegalStateException in writer due to buffer overflow
+     * @param writer - source of data
+     * @param fin - true if this is the last frame in the stream (FIN)
+     * @throws QuicStreamException
+     */
+    void trySendData(long streamId, Consumer<DataOutputStream> writer, boolean fin) throws QuicStreamException;
 }

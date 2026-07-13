@@ -43,3 +43,4 @@ bin/
 .DS_Store
 /.idea/
 /src/main/c/org_fmalyshev_quic_BpfRouting.h
+/src/main/c/org_fmalyshev_quic_LinuxEcnSocket.h

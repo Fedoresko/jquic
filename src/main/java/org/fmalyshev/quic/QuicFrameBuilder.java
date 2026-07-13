@@ -276,4 +276,58 @@ public class QuicFrameBuilder {
             wrt.write((byte) len);
         });
     }
+
+    /**
+     * Creates an ACK frame with ECN fields (RFC 9000 Section 19.3).
+     * Format: type(0x03) | largest_ack(varint) | ack_delay(varint) | ack_range_count(varint) |
+     * first_ack_range(varint) | [gap(varint) | ack_range(varint)]* |
+     * ect0_count(varint) | ect1_count(varint) | ecn_ce_count(varint)
+     */
+    public static void writeAckEcnFrame(PacketNumberSpace space, ByteBuffer out) {
+        int start = out.position();
+        List<PacketNumberSpace.AckRange> ranges = space.getAckRanges();
+        long largestAcknowledged = space.getLargestReceivedPacketNumber();
+
+        out.put((byte) 0x03); // ACK + ECN frame type
+        QuicVarint.write(out, largestAcknowledged);
+        QuicVarint.write(out, 0); // ACK Delay (simplified)
+
+        if (ranges.isEmpty()) {
+            QuicVarint.write(out, 0); // No additional ranges
+            QuicVarint.write(out, 0); // First range length is 0
+        } else {
+            // Range count (excluding first range)
+            QuicVarint.write(out, ranges.size() - 1);
+
+            // First range
+            PacketNumberSpace.AckRange firstRange = ranges.get(0);
+            long firstRangeLength = firstRange.largest - firstRange.smallest;
+            QuicVarint.write(out, firstRangeLength);
+
+            // Additional ranges with gaps
+            long previousSmallest = firstRange.smallest;
+            for (int i = 1; i < ranges.size(); i++) {
+                PacketNumberSpace.AckRange range = ranges.get(i);
+                // Gap = previousSmallest - currentLargest - 2
+                long gap = previousSmallest - range.largest - 2;
+                QuicVarint.write(out, gap);
+                // Range length
+                long rangeLength = range.largest - range.smallest;
+                QuicVarint.write(out, rangeLength);
+                previousSmallest = range.smallest;
+            }
+        }
+
+        // ECN Counts
+        QuicVarint.write(out, space.clientEct0Counter);
+        QuicVarint.write(out, space.clientEct1Counter);
+        QuicVarint.write(out, space.clientEctCeCounter);
+
+        while (out.position() - start < 20) {
+            out.put((byte) 0x00); // PADDING
+        }
+
+        out.limit(out.position());
+        out.position(start);
+    }
 }

@@ -159,7 +159,7 @@ public class BpfRouting {
      * Note: For Java 9+, you must add JVM arguments:
      * --add-opens java.base/sun.nio.ch=ALL-UNNAMED --add-opens java.base/java.io=ALL-UNNAMED
      */
-    private static int getNativeFd(DatagramChannel channel) throws NoSuchFieldException, IllegalAccessException {
+    static int getNativeFd(DatagramChannel channel) throws NoSuchFieldException, IllegalAccessException {
         try {
             Field fdField = channel.getClass().getDeclaredField("fd");
             fdField.setAccessible(true);

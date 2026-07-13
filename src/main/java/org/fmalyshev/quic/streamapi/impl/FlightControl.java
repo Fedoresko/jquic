@@ -93,6 +93,10 @@ class FlightControl {
         updateMaxDataIfNeeded(streamId);
     }
 
+    public long getTotalInFlightBytes() {
+        return totalInFlightBytes;
+    }
+
     /**
      * Called when a stream receives some new data, and it is written to buffer
      * @param dataSize - payload size
@@ -299,7 +303,7 @@ class FlightControl {
         }
         long delta = state.updateMaxOffset(finalSize);
         totalMaxOffsetsSum += delta;
-        if (totalMaxOffsetsSum > maxStreamDataCap) {
+        if (totalMaxOffsetsSum > currentMaxData) {
             streamManager.sendConnectionClose(FLOW_CONTROL_ERROR, "Stream reset final size exceeds max data cap");
             return;
         }
