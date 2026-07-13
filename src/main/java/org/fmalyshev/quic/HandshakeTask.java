@@ -8,7 +8,7 @@ import java.net.SocketAddress;
  * Encapsulates a handshake task to be processed by any available SelectorThread.
  * The CID is pre-allocated by the AcceptorThread.
  */
-class HandshakeTask {
+public class HandshakeTask {
     final PoolBuffer packet;
     final SocketAddress sender;
     final long allocatedCid;

@@ -65,7 +65,7 @@ public class StreamWorker extends Thread {
 
                 StreamWorkerPool.AckTask ackTask;
                 while ((ackTask = ackQueue.poll()) != null) {
-                    ackTask.manager.processAck(ackTask.sreamId, ackTask.totalAckedLength);
+                    ackTask.manager.frameProcessor.processAck(ackTask.sreamId, ackTask.totalAckedLength);
                     didWork = true;
                 }
 
@@ -76,7 +76,7 @@ public class StreamWorker extends Thread {
                 if (currentFrameTask != null) {
                     try {
                         // Process the frame directly - StreamManager handles it
-                        if (currentFrameTask.manager.processFrame(currentFrameTask.frameData)) {
+                        if (currentFrameTask.manager.frameProcessor.processFrame(currentFrameTask.frameData, currentFrameTask.manager)) {
                             currentFrameTask = null;
                             didWork = true;
                         }

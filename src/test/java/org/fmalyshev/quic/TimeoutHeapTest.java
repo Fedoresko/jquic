@@ -8,6 +8,8 @@ import java.net.InetSocketAddress;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import static org.mockito.Mockito.mock;
+
 /**
  * Unit tests for QuicConnectionTimeoutHeap.
  * Tests the min-heap data structure used for efficient timeout-based connection eviction.
@@ -15,10 +17,12 @@ import static org.junit.jupiter.api.Assertions.*;
 class TimeoutHeapTest {
 
     private TimeoutHeap<QuicConnection> timeoutHeap;
+    private SelectorThread selectorMock;
 
     @BeforeEach
     void setUp() {
         timeoutHeap = new TimeoutHeap<>(QuicConnection.class);
+        selectorMock = mock(SelectorThread.class);
     }
 
     @Test
@@ -26,11 +30,11 @@ class TimeoutHeapTest {
     void testBasicHeapInsertion() {
         // Create connections with different timeout values
         QuicConnection conn1 = new QuicConnection(1001L, 
-            new InetSocketAddress("127.0.0.1", 5001));
+            new InetSocketAddress("127.0.0.1", 5001), selectorMock);
         QuicConnection conn2 = new QuicConnection(1002L, 
-            new InetSocketAddress("127.0.0.1", 5002));
+            new InetSocketAddress("127.0.0.1", 5002), selectorMock);
         QuicConnection conn3 = new QuicConnection(1003L, 
-            new InetSocketAddress("127.0.0.1", 5003));
+            new InetSocketAddress("127.0.0.1", 5003), selectorMock);
 
         conn1.setIdleTimeout(1000); // Will timeout first
         conn2.setIdleTimeout(2000);
@@ -58,7 +62,7 @@ class TimeoutHeapTest {
         QuicConnection[] connections = new QuicConnection[5];
         for (int i = 0; i < 5; i++) {
             connections[i] = new QuicConnection(1001L + i, 
-                new InetSocketAddress("127.0.0.1", 5001 + i));
+                new InetSocketAddress("127.0.0.1", 5001 + i), selectorMock);
             connections[i].setIdleTimeout((i + 1) * 1000);
             timeoutHeap.insertOrUpdate(connections[i]);
         }
@@ -88,13 +92,13 @@ class TimeoutHeapTest {
     @DisplayName("Test timeout update via insertOrUpdate maintains heap ordering")
     void testTimeoutUpdateMaintainsOrdering() throws InterruptedException {
         // Create 4 connections with same idle timeout but created at different times
-        QuicConnection conn1 = new QuicConnection(1001L, new InetSocketAddress("127.0.0.1", 5001));
+        QuicConnection conn1 = new QuicConnection(1001L, new InetSocketAddress("127.0.0.1", 5001), selectorMock);
         Thread.sleep(50); // Ensure different creation times
-        QuicConnection conn2 = new QuicConnection(1002L, new InetSocketAddress("127.0.0.1", 5002));
+        QuicConnection conn2 = new QuicConnection(1002L, new InetSocketAddress("127.0.0.1", 5002), selectorMock);
         Thread.sleep(50);
-        QuicConnection conn3 = new QuicConnection(1003L, new InetSocketAddress("127.0.0.1", 5003));
+        QuicConnection conn3 = new QuicConnection(1003L, new InetSocketAddress("127.0.0.1", 5003), selectorMock);
         Thread.sleep(50);
-        QuicConnection conn4 = new QuicConnection(1004L, new InetSocketAddress("127.0.0.1", 5004));
+        QuicConnection conn4 = new QuicConnection(1004L, new InetSocketAddress("127.0.0.1", 5004), selectorMock);
 
         // Set same idle timeout for all
         conn1.setIdleTimeout(1000);
@@ -145,7 +149,7 @@ class TimeoutHeapTest {
         QuicConnection[] connections = new QuicConnection[5];
         for (int i = 0; i < 5; i++) {
             connections[i] = new QuicConnection(1001L + i, 
-                new InetSocketAddress("127.0.0.1", 5001 + i));
+                new InetSocketAddress("127.0.0.1", 5001 + i), selectorMock);
             connections[i].setIdleTimeout((i + 1) * 1000);
             timeoutHeap.insertOrUpdate(connections[i]);
         }
@@ -178,9 +182,9 @@ class TimeoutHeapTest {
     @Test
     @DisplayName("Test connection removal from heap")
     void testConnectionRemoval() {
-        QuicConnection conn1 = new QuicConnection(1001L, new InetSocketAddress("127.0.0.1", 5001));
-        QuicConnection conn2 = new QuicConnection(1002L, new InetSocketAddress("127.0.0.1", 5002));
-        QuicConnection conn3 = new QuicConnection(1003L, new InetSocketAddress("127.0.0.1", 5003));
+        QuicConnection conn1 = new QuicConnection(1001L, new InetSocketAddress("127.0.0.1", 5001), selectorMock);
+        QuicConnection conn2 = new QuicConnection(1002L, new InetSocketAddress("127.0.0.1", 5002), selectorMock);
+        QuicConnection conn3 = new QuicConnection(1003L, new InetSocketAddress("127.0.0.1", 5003), selectorMock);
 
         conn1.setIdleTimeout(1000);
         conn2.setIdleTimeout(2000);
@@ -207,7 +211,7 @@ class TimeoutHeapTest {
     @Test
     @DisplayName("Test connection removed and re-added")
     void testConnectionRemovedAndReAdded() {
-        QuicConnection conn = new QuicConnection(1001L, new InetSocketAddress("127.0.0.1", 5001));
+        QuicConnection conn = new QuicConnection(1001L, new InetSocketAddress("127.0.0.1", 5001), selectorMock);
         conn.setIdleTimeout(1000);
 
         // Add
@@ -232,9 +236,9 @@ class TimeoutHeapTest {
     void testHeapWithExpiredConnections() {
         long baseTime = System.currentTimeMillis();
 
-        QuicConnection conn1 = new QuicConnection(1001L, new InetSocketAddress("127.0.0.1", 5001));
-        QuicConnection conn2 = new QuicConnection(1002L, new InetSocketAddress("127.0.0.1", 5002));
-        QuicConnection conn3 = new QuicConnection(1003L, new InetSocketAddress("127.0.0.1", 5003));
+        QuicConnection conn1 = new QuicConnection(1001L, new InetSocketAddress("127.0.0.1", 5001), selectorMock);
+        QuicConnection conn2 = new QuicConnection(1002L, new InetSocketAddress("127.0.0.1", 5002), selectorMock);
+        QuicConnection conn3 = new QuicConnection(1003L, new InetSocketAddress("127.0.0.1", 5003), selectorMock);
 
         conn1.setIdleTimeout(100);  // Will expire soon
         conn2.setIdleTimeout(200);  // Will expire soon
@@ -263,8 +267,8 @@ class TimeoutHeapTest {
     @Test
     @DisplayName("Test heap index tracking")
     void testHeapIndexTracking() {
-        QuicConnection conn1 = new QuicConnection(1001L, new InetSocketAddress("127.0.0.1", 5001));
-        QuicConnection conn2 = new QuicConnection(1002L, new InetSocketAddress("127.0.0.1", 5002));
+        QuicConnection conn1 = new QuicConnection(1001L, new InetSocketAddress("127.0.0.1", 5001), selectorMock);
+        QuicConnection conn2 = new QuicConnection(1002L, new InetSocketAddress("127.0.0.1", 5002), selectorMock);
 
         // Before insertion, index should be -1
         assertEquals(-1, conn1.getTimeoutHeapIndex(), "Index should be -1 before insertion");
@@ -297,7 +301,7 @@ class TimeoutHeapTest {
     @Test
     @DisplayName("Test single element heap")
     void testSingleElementHeap() {
-        QuicConnection conn = new QuicConnection(1001L, new InetSocketAddress("127.0.0.1", 5001));
+        QuicConnection conn = new QuicConnection(1001L, new InetSocketAddress("127.0.0.1", 5001), selectorMock);
         conn.setIdleTimeout(1000);
 
         timeoutHeap.insertOrUpdate(conn);

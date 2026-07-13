@@ -60,48 +60,12 @@ public class StreamFrameProcessor {
         return buffer;
     }
 
-
-    /**
-     * Quickly extracts stream ID and data length from STREAM frame for flow control tracking.
-     * Does not extract the actual data payload.
-     * Buffer position is restored after extraction.
-     * 
-     * @return array with [streamId, dataLength], or null if parsing fails
-     */
-    public static long[] extractStreamIdAndLength(ByteBuffer buffer, byte frameType) {
-        int savedPosition = buffer.position();
-        try {
-            boolean hasOffset = (frameType & 0x04) != 0;
-            boolean hasLength = (frameType & 0x02) != 0;
-
-            long streamId = QuicVarint.read(buffer);
-
-            // Skip offset if present
-            if (hasOffset) {
-                QuicVarint.read(buffer);
-            }
-
-            long dataLength;
-            if (hasLength) {
-                dataLength = QuicVarint.read(buffer);
-            } else {
-                // Length is remaining bytes
-                dataLength = buffer.remaining();
-            }
-
-            return new long[] { streamId, dataLength };
-        } catch (Exception e) {
-            return null;
-        } finally {
-            buffer.position(savedPosition);
-        }
-    }
-
     /**
      * Encodes a RESET_STREAM frame (RFC 9000 Section 19.4).
      * Format: type(0x04) | stream_id | error_code | final_size
      */
     public static ByteBuffer encodeResetStreamFrame(long streamId, long errorCode, long finalSize) {
+        logger.debug("Encoding reset stream frame for stream id {}", streamId);
         ByteBuffer buffer = ByteBuffer.allocate(1 + 24);
         buffer.put(FRAME_TYPE_RESET_STREAM);
         QuicVarint.write(buffer, streamId);
@@ -127,6 +91,7 @@ public class StreamFrameProcessor {
      * Format: type(0x10) | maximum_data
      */
     public static ByteBuffer encodeMaxDataFrame(long maximumData) {
+        logger.warn("maximum data frame is {}", maximumData);
         ByteBuffer buffer = ByteBuffer.allocate(1 + 8);
         buffer.put(FRAME_TYPE_MAX_DATA);
         QuicVarint.write(buffer, maximumData);
@@ -139,6 +104,7 @@ public class StreamFrameProcessor {
      * Frame type: 0x14
      */
     public static ByteBuffer encodeDataBlockedFrame(long limit) {
+        logger.warn("Encoding data blocked frame");
         ByteBuffer buffer = ByteBuffer.allocate(128);
         buffer.put((byte) 0x14); // DATA_BLOCKED frame type
         QuicVarint.write(buffer, limit);
@@ -151,6 +117,7 @@ public class StreamFrameProcessor {
      * Format: type(0x05) | stream_id | error_code
      */
     public static ByteBuffer encodeStopSendingFrame(long streamId, long errorCode) {
+        logger.warn("Stream {} has stop sending", streamId);
         ByteBuffer buffer = ByteBuffer.allocate(1 + 16);
         buffer.put(FRAME_TYPE_STOP_SENDING);
         QuicVarint.write(buffer, streamId);
@@ -173,6 +140,7 @@ public class StreamFrameProcessor {
      * Format: type(0x11) | stream_id | maximum_data
      */
     public static ByteBuffer encodeMaxStreamDataFrame(long streamId, long maximumData) {
+        logger.warn("Stream {} has stream data", streamId);
         ByteBuffer buffer = ByteBuffer.allocate(1 + 16);
         buffer.put(FRAME_TYPE_MAX_STREAM_DATA);
         QuicVarint.write(buffer, streamId);
@@ -214,6 +182,7 @@ public class StreamFrameProcessor {
      * Format: type(0x15) | stream_id | limit
      */
     public static ByteBuffer encodeStreamDataBlockedFrame(long streamId, long limit) {
+        logger.warn("Stream {} has stream data", streamId);
         ByteBuffer buffer = ByteBuffer.allocate(1 + 16);
         buffer.put(FRAME_TYPE_STREAM_DATA_BLOCKED);
         QuicVarint.write(buffer, streamId);

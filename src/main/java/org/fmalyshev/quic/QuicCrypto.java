@@ -75,24 +75,6 @@ public class QuicCrypto {
 
     /**
      * TLS metadata associated with a QUIC connection.
-     */
-    /**
-     * TLS metadata associated with a QUIC connection.
-     *
-     * <p>Populated in two stages matching the TLS 1.3 key schedule (RFC 8446 Section 7):
-     * <ol>
-     *   <li>After processing ClientHello: Handshake-level secrets are available.</li>
-     *   <li>After the handshake transcript is complete (client Finished verified):
-     *       1-RTT secrets are derived and set via {@link #setApplicationKeys}.</li>
-     * </ol>
-     *
-     * <p>A running SHA-256 transcript hash is maintained via {@link #updateTranscript(byte[])}.
-     * Call it with the raw body bytes of each TLS handshake message in order:
-     * ClientHello, ServerHello, EncryptedExtensions, Certificate, CertificateVerify, Finished.
-     * Use {@link #transcriptHash()} to snapshot the current digest at any point.
-     */
-    /**
-     * TLS metadata associated with a QUIC connection.
      *
      * <p>Acts as the running state object across the entire TLS 1.3 key schedule
      * (RFC 8446 Section 7). It is created first — before any crypto — and then
@@ -126,10 +108,6 @@ public class QuicCrypto {
 
         // ---- Set during stage 1 (processClientHello) ----
 
-        public byte[] clientRandom;
-        public byte[] serverRandom;
-        public String selectedCipherSuite;
-        public String alpn;
         public byte [] originalDCid;
         public long negotiatedIdleTimeoutMs;
 
@@ -154,7 +132,7 @@ public class QuicCrypto {
         public byte currentPhase;
         public long lastPhaseSwitchPacketNumber = -1;
 
-        public ParsedClientHello clientMetadata;
+        public ClientMetadataNegotiated clientMetadata;
 
         /**
          * Server's ephemeral public key bytes (32 bytes).
@@ -247,7 +225,7 @@ public class QuicCrypto {
         SecretKey key,           // Encryption/decryption key
         byte[] iv,               // Initialization vector
         byte[] headerProtection  // Header protection key
-    ) {};
+    ) {}
 
     /**
      * Packet protection keys for a specific encryption level.
@@ -255,29 +233,9 @@ public class QuicCrypto {
     public record PacketProtectionKeys (
         SecretKey key,          // Encryption/decryption key
         byte[] iv               // Initialization vector
-    ) {};
+    ) {}
 
-    /**
-     * Result of decrypting a QUIC packet.
-     */
-    public static class DecryptionResult {
-        public final ByteBuffer plaintext;
-        public final TlsMetadata tlsMetadata;
-        public final boolean isHandshakeComplete;
-        public final PacketProtectionKeysWithHP clientKeys;
-        public final PacketProtectionKeysWithHP serverKeys;
-
-        public DecryptionResult(ByteBuffer plaintext, TlsMetadata tlsMetadata, boolean isHandshakeComplete,
-                                PacketProtectionKeysWithHP clientKeys, PacketProtectionKeysWithHP serverKeys) {
-            this.plaintext = plaintext;
-            this.tlsMetadata = tlsMetadata;
-            this.isHandshakeComplete = isHandshakeComplete;
-            this.clientKeys = clientKeys;
-            this.serverKeys = serverKeys;
-        }
-    }
-
-    private static final ThreadLocal<SecureRandom> secureRandom = 
+    public static final ThreadLocal<SecureRandom> secureRandom =
         ThreadLocal.withInitial(SecureRandom::new);
 
     private static KeystoreManager keystoreManager;
@@ -304,7 +262,7 @@ public class QuicCrypto {
     /**
      * All data extracted from a ClientHello message.
      */
-    public static class ParsedClientHello {
+    public static class ClientMetadataNegotiated {
         /** Negotiated ALPN protocol (e.g. "h3"), or null if not provided. */
         public final String alpn;
         /** max_idle_timeout from QUIC transport parameters (0 if absent). */
@@ -312,15 +270,26 @@ public class QuicCrypto {
 
         public final long maxUdpPayloadSize;
         public final long initialMaxData;
+        public final long initialMaxStreamDataBidiLocal;
+        public final long initialMaxStreamDataBidiRemote;
+        public final long initialMaxStreamDataUni;
+        public final long initialMaxStreamsBidi;
+        public final long initialMaxStreamsUni;
         public final List<Short> supportedSignatures;
         public final List<Short> supportedGroups;
         public final Map<Short, byte[]> clientKeys;
+        public final String selectedCipherSuite = CIPHER_SUITE;
 
-        public ParsedClientHello(String alpn, long maxIdleTimeoutMs, List<Short> supportedGroups, Map<Short, byte[]> clientKeys, long maxUdpPayloadSize, long initialMaxData, List<Short> supportedSignatures) {
+        public ClientMetadataNegotiated(String alpn, long maxIdleTimeoutMs, List<Short> supportedGroups, Map<Short, byte[]> clientKeys, long maxUdpPayloadSize, long initialMaxData, long initialMaxStreamDataBidiLocal, long initialMaxStreamDataBidiRemote, long initialMaxStreamDataUni, long initialMaxStreamsBidi, long initialMaxStreamsUni, List<Short> supportedSignatures) {
             this.alpn = alpn;
             this.maxIdleTimeoutMs = maxIdleTimeoutMs;
             this.maxUdpPayloadSize = maxUdpPayloadSize;
             this.initialMaxData = initialMaxData;
+            this.initialMaxStreamDataBidiLocal = initialMaxStreamDataBidiLocal;
+            this.initialMaxStreamDataBidiRemote = initialMaxStreamDataBidiRemote;
+            this.initialMaxStreamDataUni = initialMaxStreamDataUni;
+            this.initialMaxStreamsBidi = initialMaxStreamsBidi;
+            this.initialMaxStreamsUni = initialMaxStreamsUni;
             this.supportedSignatures = supportedSignatures;
             this.supportedGroups = supportedGroups;
             this.clientKeys = clientKeys;
@@ -343,7 +312,7 @@ public class QuicCrypto {
      * @return Parsed and validated ClientHello data
      * @throws CryptoException if a required field is missing or unsupported
      */
-    private static ParsedClientHello parseClientHello(ByteBuffer clientHello) throws CryptoException {
+    private static ClientMetadataNegotiated parseClientHello(ByteBuffer clientHello) throws CryptoException {
         ByteBuffer buf = clientHello.duplicate();
 
         try {
@@ -396,6 +365,11 @@ public class QuicCrypto {
             long maxIdleTimeout = 0;
             long maxUdpPayloadSize = 1300;
             long initialMaxData = 0;
+            long initialMaxStreamDataBidiLocal = 0;
+            long initialMaxStreamDataBidiRemote = 0;
+            long initialMaxStreamDataUni = 0;
+            long initialMaxStreamsBidi = 0;
+            long initialMaxStreamsUni = 0;
             List<Short> signatures = new ArrayList<>();
             List<Short> supportedGroups = new ArrayList<>();
             Map<Short, byte[]> clientKeys = new HashMap<>();
@@ -476,18 +450,28 @@ public class QuicCrypto {
                         while (buf.position() < paramsEnd && buf.remaining() > 0) {
                             long paramId  = QuicVarint.read(buf);
                             long paramLen = QuicVarint.read(buf);
+                            long startPos = buf.position();
+
                             if (paramId == 0x01) { // max_idle_timeout
                                 maxIdleTimeout = QuicVarint.read(buf);
-                                logger.debug("ClientHello max_idle_timeout: {} ms", maxIdleTimeout);
-                            } if (paramId == 0x03) {
+                            } else if (paramId == 0x03) {
                                 maxUdpPayloadSize = QuicVarint.read(buf);
-                            } if (paramId == 0x04) {
+                            } else if (paramId == 0x04) {
                                 initialMaxData = QuicVarint.read(buf);
-                            } else {
-                                if (buf.remaining() >= paramLen) {
-                                    buf.position(buf.position() + (int) paramLen);
-                                } else break;
+                            } else if (paramId == 0x05) {
+                                initialMaxStreamDataBidiLocal = QuicVarint.read(buf);
+                            } else if (paramId == 0x06) {
+                                initialMaxStreamDataBidiRemote = QuicVarint.read(buf);
+                            } else if (paramId == 0x07) {
+                                initialMaxStreamDataUni = QuicVarint.read(buf);
+                            } else if (paramId == 0x08) {
+                                initialMaxStreamsBidi = QuicVarint.read(buf);
+                            } else if (paramId == 0x09) {
+                                initialMaxStreamsUni = QuicVarint.read(buf);
                             }
+                            
+                            // Ensure we consume exactly paramLen bytes
+                            buf.position((int)(startPos + paramLen));
                         }
                         break;
                     }
@@ -510,25 +494,15 @@ public class QuicCrypto {
                 logger.warn("ClientHello: no ALPN extension present");
             }
 
-            return new ParsedClientHello(alpn, maxIdleTimeout, supportedGroups, clientKeys, maxUdpPayloadSize, initialMaxData, signatures);
+            logger.warn("Initials negotiated max_data {}, max stream data bidi local {}, max stream data bidi remote {}, max stream data uni {}, max streams bidi {}, max streams uni {}", initialMaxData, initialMaxStreamDataBidiLocal, initialMaxStreamDataBidiRemote, initialMaxStreamDataUni, initialMaxStreamsBidi, initialMaxStreamsUni);
+
+            return new ClientMetadataNegotiated(alpn, maxIdleTimeout, supportedGroups, clientKeys, maxUdpPayloadSize, initialMaxData, initialMaxStreamDataBidiLocal, initialMaxStreamDataBidiRemote, initialMaxStreamDataUni, initialMaxStreamsBidi, initialMaxStreamsUni, signatures);
 
         } catch (CryptoException ce) {
             throw ce;
         } catch (Exception e) {
             throw new CryptoException("Failed to parse ClientHello: " + e.getMessage(), e);
         }
-    }
-
-    /**
-     * Configures the keystore manager with custom settings.
-     * Must be called before any QUIC connections are created.
-     * 
-     * @param config Server configuration containing keystore settings
-     * @throws java.security.KeyStoreException if keystore loading fails
-     */
-    public static void configureKeystore(QuicServerConfig config) throws java.security.KeyStoreException {
-        keystoreManager = new KeystoreManager(config);
-        logger.info("Configured KeystoreManager with custom settings");
     }
 
     /**
@@ -571,21 +545,17 @@ public class QuicCrypto {
 
     /**
      * Encrypts a QUIC packet with AES-128-GCM AEAD. Uses direct ByteBuffer for efficiency.
-     * 
      * RFC 9001 Section 5.3: AEAD function usage in QUIC
      * The AEAD function protects packet payloads and authenticates packet headers.
-     * 
      * Associated Data (AD) = packet header (from first byte through unprotected packet number)
      * Plaintext = packet payload (QUIC frames)
      * Output = ciphertext + 16-byte GCM authentication tag
-     * 
      * The GCM tag authenticates BOTH the header (via AD) and the encrypted payload.
      * 
      * @param plaintext The plaintext data to encrypt (QUIC frames)
      * @param secret The encryption key (AES-128)
      * @param packetNumber QUIC packet number (used to construct nonce via XOR with base IV)
      * @param associatedData Packet header bytes to authenticate (RFC 9001 Section 5.4.1)
-     * @return Encrypted ciphertext with GCM tag appended (plaintext.length + 16 bytes)
      * @throws CryptoException if encryption fails
      */
     public static void encryptPacketInPlace(ByteBuffer plaintext, SecretKey secret, long packetNumber,
@@ -652,12 +622,10 @@ public class QuicCrypto {
             metadata.updateTranscript(clientHelloBytes);
 
             // ── Step 3: Parse and validate the ClientHello.
-            ParsedClientHello parsed = parseClientHello(clientHello);
-
+            ClientMetadataNegotiated parsed = parseClientHello(clientHello);
             metadata.clientMetadata = parsed;
+
             // ── Step 4: Set negotiated application-level parameters.
-            metadata.alpn = parsed.alpn;
-            metadata.selectedCipherSuite = CIPHER_SUITE;
 
             if (parsed.supportedSignatures.isEmpty()) {
                 throw new CryptoException("No signature_algorithms found are in ClientHello!");
@@ -671,16 +639,11 @@ public class QuicCrypto {
 
             logger.info("Negotiated idle timeout: {} ms (client: {}, server: {})",
                     metadata.negotiatedIdleTimeoutMs, parsed.maxIdleTimeoutMs, serverIdleTimeout);
-            if (metadata.alpn != null) {
-                logger.info("ALPN negotiated: {}", metadata.alpn);
+            if (metadata.clientMetadata.alpn != null) {
+                logger.info("ALPN negotiated: {}", metadata.clientMetadata.alpn);
             } else {
                 logger.warn("ClientHello: no ALPN provided");
             }
-
-            // ── Step 5: Generate server random.
-            byte[] serverRandom = new byte[32];
-            secureRandom.get().nextBytes(serverRandom);
-            metadata.serverRandom = serverRandom;
 
             // ── Step 6: X25519 ECDHE — compute the shared secret.
             logger.info("Client supported groups {}.", parsed.supportedGroups.stream().map(String::valueOf).collect(Collectors.joining(", ")));
@@ -700,8 +663,7 @@ public class QuicCrypto {
                 // ── Step 7: Derive Handshake Secret and traffic secrets.
                 byte[] derivedFromEarly = hkdfExpandLabel(earlySecret, "derived", sha256(new byte[0]), 32);
 
-                byte[] handshakeSecret  = hkdfExtract(derivedFromEarly, sharedSecret);
-                metadata.handshakeSecretBytes = handshakeSecret;
+                metadata.handshakeSecretBytes = hkdfExtract(derivedFromEarly, sharedSecret);
 
                 logger.debug("Handshake traffic secrets derived");
             }
@@ -808,16 +770,15 @@ public class QuicCrypto {
      * </ul>
      */
     private static int rawPublicKeyLength(TlsGroupMapping.JcaGroupInfo groupInfo) {
-        switch (groupInfo.standardName) {
-            case "X25519":      return 32;
-            case "X448":        return 56;
-            case "secp256r1":   return 65;
-            case "secp384r1":   return 97;
-            case "secp521r1":   return 133;
-            case "brainpoolP256r1": return 65;
-            default:
-                throw new IllegalArgumentException("Unknown group: " + groupInfo.standardName);
-        }
+        return switch (groupInfo.standardName) {
+            case "X25519" -> 32;
+            case "X448" -> 56;
+            case "secp256r1" -> 65;
+            case "secp384r1" -> 97;
+            case "secp521r1" -> 133;
+            case "brainpoolP256r1" -> 65;
+            default -> throw new IllegalArgumentException("Unknown group: " + groupInfo.standardName);
+        };
     }
 
     /**
@@ -832,36 +793,27 @@ public class QuicCrypto {
         final byte[] oidBytes;
         final boolean isXdh = "XDH".equals(groupInfo.keyPairGeneratorAlgorithm);
 
-        switch (groupInfo.standardName) {
+        oidBytes = switch (groupInfo.standardName) {
             // XDH OIDs (RFC 8410)
-            case "X25519":
-                oidBytes = new byte[]{ 0x06, 0x03, 0x2B, 0x65, 0x6E };
-                break;
-            case "X448":
-                oidBytes = new byte[]{ 0x06, 0x03, 0x2B, 0x65, 0x6F };
-                break;
+            case "X25519" -> new byte[]{0x06, 0x03, 0x2B, 0x65, 0x6E};
+            case "X448" -> new byte[]{0x06, 0x03, 0x2B, 0x65, 0x6F};
             // EC OIDs — namedCurve OID wrapped inside AlgorithmIdentifier
             // Outer OID = id-ecPublicKey (1.2.840.10045.2.1): 06 07 2A 86 48 CE 3D 02 01
             // Inner OID = curve OID
-            case "secp256r1":
+            case "secp256r1" ->
                 // curve OID: 1.2.840.10045.3.1.7 → 06 08 2A 86 48 CE 3D 03 01 07
-                oidBytes = new byte[]{ 0x06, 0x08, 0x2A, (byte)0x86, 0x48, (byte)0xCE, 0x3D, 0x03, 0x01, 0x07 };
-                break;
-            case "secp384r1":
+                    new byte[]{0x06, 0x08, 0x2A, (byte) 0x86, 0x48, (byte) 0xCE, 0x3D, 0x03, 0x01, 0x07};
+            case "secp384r1" ->
                 // curve OID: 1.3.132.0.34 → 06 05 2B 81 04 00 22
-                oidBytes = new byte[]{ 0x06, 0x05, 0x2B, (byte)0x81, 0x04, 0x00, 0x22 };
-                break;
-            case "secp521r1":
+                    new byte[]{0x06, 0x05, 0x2B, (byte) 0x81, 0x04, 0x00, 0x22};
+            case "secp521r1" ->
                 // curve OID: 1.3.132.0.35 → 06 05 2B 81 04 00 23
-                oidBytes = new byte[]{ 0x06, 0x05, 0x2B, (byte)0x81, 0x04, 0x00, 0x23 };
-                break;
-            case "brainpoolP256r1":
+                    new byte[]{0x06, 0x05, 0x2B, (byte) 0x81, 0x04, 0x00, 0x23};
+            case "brainpoolP256r1" ->
                 // OID: 1.3.36.3.3.2.8.1.1.7 → 06 09 2B 24 03 03 02 08 01 01 07
-                oidBytes = new byte[]{ 0x06, 0x09, 0x2B, 0x24, 0x03, 0x03, 0x02, 0x08, 0x01, 0x01, 0x07 };
-                break;
-            default:
-                throw new IllegalArgumentException("Unsupported group for SPKI: " + groupInfo.standardName);
-        }
+                    new byte[]{0x06, 0x09, 0x2B, 0x24, 0x03, 0x03, 0x02, 0x08, 0x01, 0x01, 0x07};
+            default -> throw new IllegalArgumentException("Unsupported group for SPKI: " + groupInfo.standardName);
+        };
 
         if (isXdh) {
             // AlgorithmIdentifier = SEQUENCE { OID }  (no parameters for XDH)
@@ -906,51 +858,6 @@ public class QuicCrypto {
         }
     }
 
-
-    /**
-     * Wraps a raw 32-byte X25519 public key in a SubjectPublicKeyInfo (SPKI) structure
-     * so that Java's {@link java.security.KeyFactory} can reconstruct a {@link java.security.PublicKey}.
-     *
-     * <p>SPKI for X25519 (OID 1.3.101.110, RFC 8410):
-     * <pre>
-     *   SEQUENCE {
-     *     SEQUENCE { OID 1.3.101.110 }
-     *     BIT STRING { 0x00 || rawKey[32] }
-     *   }
-     * </pre>
-     */
-    private static byte[] buildX25519SubjectPublicKeyInfo(byte[] rawKey) {
-        // OID 1.3.101.110 in DER: 06 03 2B 65 6E
-        byte[] oidBytes    = { 0x06, 0x03, 0x2B, 0x65, 0x6E };
-        // AlgorithmIdentifier: SEQUENCE { OID }
-        byte[] algId       = new byte[2 + oidBytes.length];
-        algId[0] = 0x30; algId[1] = (byte) oidBytes.length;
-        System.arraycopy(oidBytes, 0, algId, 2, oidBytes.length);
-        // BIT STRING: 0x03 | len | 0x00 (no unused bits) | rawKey
-        byte[] bitString   = new byte[3 + rawKey.length];
-        bitString[0] = 0x03; bitString[1] = (byte)(rawKey.length + 1); bitString[2] = 0x00;
-        System.arraycopy(rawKey, 0, bitString, 3, rawKey.length);
-        // SEQUENCE { algId | bitString }
-        int totalLen = algId.length + bitString.length;
-        byte[] spki = new byte[2 + totalLen];
-        spki[0] = 0x30; spki[1] = (byte) totalLen;
-        System.arraycopy(algId,    0, spki, 2,                    algId.length);
-        System.arraycopy(bitString,0, spki, 2 + algId.length,     bitString.length);
-        return spki;
-    }
-
-    /**
-     * Stage 2 of the TLS 1.3 key schedule: derives the Master Secret and
-     * 1-RTT (application) traffic secrets once the handshake transcript is complete.
-     *
-     * <p>Must be called after the client's Finished message has been verified,
-     * at which point the full transcript hash is known.
-     *
-     * @param metadata     The {@link TlsMetadata} returned by {@link #processClientHello}
-     * @param transcriptHash SHA-256 hash of all handshake messages up to and including
-     *                       the client's Finished (simplified: empty array uses ClientHello hash)
-     * @throws CryptoException if key derivation fails
-     */
     /**
      * Stage 2 of the TLS 1.3 key schedule: derives the Master Secret and
      * 1-RTT (application) traffic secrets once the handshake transcript is complete.
@@ -1120,7 +1027,6 @@ public class QuicCrypto {
      * </pre>
      *
      * @param metadata the live {@link TlsMetadata} for this connection
-     * @return serialised EncryptedExtensions bytes ready to wrap in a TLS CRYPTO frame
      */
     public static void putEncryptedExtensions(TlsMetadata metadata, long cid, ChunkedOutputStreamWithAmendments output) throws IOException {
         // Zero-copy: single pre-allocated buffer, all lengths back-filled in place.
@@ -1369,7 +1275,7 @@ public class QuicCrypto {
         toSign[64 + contextString.length] = 0x00;
         System.arraycopy(transcriptHash, 0, toSign, 64 + contextString.length + 1, transcriptHash.length);
 
-        byte[] signature = null;
+        byte[] signature;
         try {
             signature = signData(toSign, metadata.selectedSignatureScheme);
         } catch (GeneralSecurityException e) {
@@ -1396,21 +1302,17 @@ public class QuicCrypto {
             return (short) 0x1301;
         }
 
-        switch (cipherSuite) {
-            case "TLS_AES_128_GCM_SHA256":
-                return (short) 0x1301;
-            case "TLS_AES_256_GCM_SHA384":
-                return (short) 0x1302;
-            case "TLS_CHACHA20_POLY1305_SHA256":
-                return (short) 0x1303;
-            case "TLS_AES_128_CCM_SHA256":
-                return (short) 0x1304;
-            case "TLS_AES_128_CCM_8_SHA256":
-                return (short) 0x1305;
-            default:
+        return switch (cipherSuite) {
+            case "TLS_AES_128_GCM_SHA256" -> (short) 0x1301;
+            case "TLS_AES_256_GCM_SHA384" -> (short) 0x1302;
+            case "TLS_CHACHA20_POLY1305_SHA256" -> (short) 0x1303;
+            case "TLS_AES_128_CCM_SHA256" -> (short) 0x1304;
+            case "TLS_AES_128_CCM_8_SHA256" -> (short) 0x1305;
+            default -> {
                 logger.warn("Unknown cipher suite: {}, defaulting to TLS_AES_128_GCM_SHA256", cipherSuite);
-                return (short) 0x1301;
-        }
+                yield (short) 0x1301;
+            }
+        };
     }
 
     // ========== HKDF Implementation ==========
@@ -1427,7 +1329,7 @@ public class QuicCrypto {
     /**
      * HKDF-Expand-Label as per RFC 8446 for TLS 1.3.
      */
-    private static byte[] hkdfExpandLabel(byte[] secret, String label, byte[] context, int length)
+    public static byte[] hkdfExpandLabel(byte[] secret, String label, byte[] context, int length)
             throws GeneralSecurityException {
         byte[] hkdfLabel = buildHkdfLabel(length, "tls13 " + label, context);
         return hkdfExpand(secret, hkdfLabel, length);
@@ -1550,11 +1452,9 @@ public class QuicCrypto {
 
     /**
      * Verifies the client's TLS Finished message.
-     * 
      * RFC 8446 Section 4.4.4:
      * The Finished message contains verify_data which is computed as:
      *   verify_data = HMAC(finished_key, transcript_hash)
-     * 
      * Where:
      *   finished_key = HKDF-Expand-Label(client_handshake_secret, "finished", "", Hash.length)
      *   transcript_hash = Hash(all handshake messages up to but not including Finished)

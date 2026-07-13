@@ -1,7 +1,6 @@
 package org.fmalyshev.quic;
 
 import org.fmalyshev.quic.buffers.ChunkedOutputStreamWithAmendments;
-import org.fmalyshev.quic.buffers.PoolBuffer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -134,12 +133,11 @@ public class QuicFrameBuilder {
         data.position(data.position() - headerLen);
     }
 
-    public static ByteBuffer createHandshakeDoneFrame(ByteBuffer frame) {
+    public static void writeHandshakeDoneFrame(ByteBuffer frame) {
         frame.put((byte) 0x1e);
         frame.put((byte) 0x0);
         frame.put((byte) 0x0);
         frame.put((byte) 0x0);
-        return frame;
     }
 
     /**
@@ -223,18 +221,18 @@ public class QuicFrameBuilder {
      * so the client can complete its side of the ECDHE exchange.
      *
      * @param metadata the live {@link QuicCrypto.TlsMetadata} for this connection
-     * @return serialised ServerHello bytes ready to wrap in a TLS CRYPTO frame
      */
     public static void writeServerHello(ChunkedOutputStreamWithAmendments out, QuicCrypto.TlsMetadata metadata) throws IOException {
         // ServerHello wire layout (RFC 8446 §4.1.3):
         //   ProtocolVersion(2) + Random(32) + session_id_len(1)
         //   + CipherSuite(2) + compression(1) + extensions_len(2) + extensions
 
-        short cipherSuiteId = QuicCrypto.getCipherSuiteId(metadata.selectedCipherSuite);
+        short cipherSuiteId = QuicCrypto.getCipherSuiteId(metadata.clientMetadata.selectedCipherSuite);
 
         byte[] keyShare = metadata.serverEphemeralPublicKey;
 
-        byte[] serverRandom = metadata.serverRandom != null ? metadata.serverRandom : new byte[32];
+        byte[] serverRandom = new byte[32];
+        QuicCrypto.secureRandom.get().nextBytes(serverRandom);
 
         out.write((byte) 0x02); //Server Hello
 

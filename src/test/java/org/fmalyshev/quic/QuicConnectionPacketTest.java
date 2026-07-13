@@ -26,13 +26,15 @@ import static org.mockito.Mockito.*;
 class QuicConnectionPacketTest {
 
     private QuicConnection connection;
+    private SelectorThread selectorMock;
     private static final long TEST_CONNECTION_ID = 0x00239L;
     private static final InetSocketAddress TEST_ADDRESS = new InetSocketAddress("127.0.0.1", 4433);
     private MockedStatic<QuicCrypto> mockedQuicCrypto;
 
     @BeforeEach
     void setUp() {
-        connection = new QuicConnection(TEST_CONNECTION_ID, TEST_ADDRESS);
+        selectorMock = mock(SelectorThread.class);
+        connection = new QuicConnection(TEST_CONNECTION_ID, TEST_ADDRESS, selectorMock);
 
         // Mock QuicCrypto static methods to bypass actual cryptographic operations
         mockedQuicCrypto = mockStatic(QuicCrypto.class);
@@ -57,43 +59,32 @@ class QuicConnectionPacketTest {
             .thenReturn(new QuicCrypto.PacketProtectionKeysWithHP[]{mockKeys, mockKeys});
 
         // Mock decryption to bypass encryption - just copy input to output
-        mockedQuicCrypto.when(() -> QuicCrypto.decryptAead(any(ByteBuffer.class), any(SecretKey.class), 
-                                                           any(byte[].class), anyLong(), any(ByteBuffer.class), any()))
+        mockedQuicCrypto.when(() -> QuicCrypto.decryptAead(any(), any(),
+                                                           any(), anyLong(), any(), any()))
             .thenAnswer(invocation -> {
-                ByteBuffer input = invocation.getArgument(0);
-                ByteBuffer output = invocation.getArgument(4);
-                // Bypass encryption: copy available input to output
-                int bytesToCopy = Math.min(input.remaining(), output.remaining());
-                if (bytesToCopy > 0) {
-                    byte[] data = new byte[bytesToCopy];
-                    input.get(data);
-                    output.put(data);
-                }
                 return null;
             });
 
         // Mock ClientHello processing — use new single-arg constructor, set fields directly
         QuicCrypto.TlsMetadata mockMetadata = new QuicCrypto.TlsMetadata();
-        mockMetadata.clientRandom            = new byte[32];
-        mockMetadata.serverRandom            = new byte[32];
-        mockMetadata.selectedCipherSuite     = "TLS_AES_128_GCM_SHA256";
-        mockMetadata.alpn                    = "h3";
         mockMetadata.negotiatedIdleTimeoutMs = 10_000;
         mockMetadata.serverEphemeralPublicKey = new byte[32];
-        mockMetadata.clientMetadata = new QuicCrypto.ParsedClientHello("h3", 1000, List.of(), Map.of(), 10000, 1000, List.of());
+        mockMetadata.clientMetadata = new QuicCrypto.ClientMetadataNegotiated("h3", 1000, List.of(), Map.of(), 10000, 1000, 0, 0, 0, 0, 0, List.of());
         QuicCrypto.PacketProtectionKeysWithHP mockKeyss = new QuicCrypto.PacketProtectionKeysWithHP(mockKey, new byte[16], null);
 
         mockMetadata.setApplicationKeys(new QuicCrypto.PacketProtectionKeys(mockKey, new byte[16]), new QuicCrypto.PacketProtectionKeys(mockKey, new byte[16]));
         mockMetadata.serverHandshakeKeys = mockKeyss;
         mockMetadata.clientHandshakeKeys = mockKeyss;
 
-        mockedQuicCrypto.when(() -> QuicCrypto.getCryptoFrameLength(any())).thenCallRealMethod();
-        mockedQuicCrypto.when(() -> QuicCrypto.processClientHello(any(), any(ByteBuffer.class)))
+        mockedQuicCrypto.when(() -> QuicCrypto.getCryptoFrameLength(any(ByteBuffer.class))).thenCallRealMethod();
+        mockedQuicCrypto.when(() -> QuicCrypto.processClientHello(any(QuicCrypto.TlsMetadata.class), any(ByteBuffer.class)))
             .thenReturn(mockMetadata);
 
         // Mock ServerHello creation — single TlsMetadata arg
-        mockedQuicCrypto.when(() -> QuicFrameBuilder.writeServerHello(any(), any(QuicCrypto.TlsMetadata.class)))
-            .thenReturn(ByteBuffer.wrap(new byte[100]));
+        mockedQuicCrypto.when(() -> QuicFrameBuilder.writeServerHello(any(org.fmalyshev.quic.buffers.ChunkedOutputStreamWithAmendments.class), any(QuicCrypto.TlsMetadata.class)))
+            .thenAnswer(inv -> {
+                return null;
+            });
 
         // Mock deriveApplicationKeys (called inside processHandshakePacket after Finished)
         mockedQuicCrypto.when(() -> QuicCrypto.createApplicationKeys(any(QuicCrypto.TlsMetadata.class)))
@@ -103,16 +94,16 @@ class QuicConnectionPacketTest {
             });
 
         // Mock client Finished verification
-        mockedQuicCrypto.when(() -> QuicCrypto.verifyClientFinished(any(),
-                                                                    any(),
-                                                                    any()))
+        mockedQuicCrypto.when(() -> QuicCrypto.verifyClientFinished(any(ByteBuffer.class),
+                                                                    any(byte[].class),
+                                                                    any(byte[].class)))
             .thenReturn(true);
 
         // Mock encryption to bypass encryption - symmetrical to decryptAead
         mockedQuicCrypto.when(() -> QuicCrypto.encryptPacketInPlace(any(ByteBuffer.class),
-                                                             any(SecretKey.class),
+                                                             any(javax.crypto.SecretKey.class),
                                                              anyLong(),
-                                                             any(),
+                                                             nullable(ByteBuffer.class),
                                                              any(byte[].class)))
             .thenAnswer(invocation -> {
                 ByteBuffer plaintext = invocation.getArgument(0);

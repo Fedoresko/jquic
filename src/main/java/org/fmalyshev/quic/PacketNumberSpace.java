@@ -41,7 +41,6 @@ public class PacketNumberSpace {
 
     // Loss detection
     private long lossTime = 0; // Time at which next packet will be considered lost
-    private long lastAckElicitingSentTime = 0;
 
     // Min-heap ordered by per-packet loss deadline for O(log n) loss detection.
     private final TimeoutHeap<SentPacket> lossHeap = new TimeoutHeap<>(SentPacket.class);
@@ -74,10 +73,6 @@ public class PacketNumberSpace {
         SentPacket packet = new SentPacket(packetNumber, sentTime, unencryptedPayload.duplicate(),
                 phase, ackEliciting);
         sentPackets.put(packetNumber, packet);
-
-        if (ackEliciting) {
-            lastAckElicitingSentTime = sentTime;
-        }
 
         // Insert into the loss heap with an initial deadline based on the current RTT estimate.
         long initialLossDelay = Math.max(
@@ -128,7 +123,6 @@ public class PacketNumberSpace {
      * @param ackRanges List of acknowledged packet ranges
      * @param ackDelay ACK delay in microseconds
      * @param ackCallback Optional callback invoked for each acked packet before removal
-     * @return Map of lost packet numbers to SentPacket metadata (for retransmission with new PN)
      */
     public void onAckReceived(long largestAcked, List<AckRange> ackRanges, long ackDelay, AckCallback ackCallback) {
         logger.info("{}: ACK received for largest: {}, ranges: {}", phase, largestAcked, ackRanges.size());
@@ -145,9 +139,8 @@ public class PacketNumberSpace {
         // malicious enormous range costs nothing beyond a single O(log n) tree seek.
         Set<Long> newlyAcked = new HashSet<>();
         for (AckRange range : ackRanges) {
-            sentPackets.subMap(range.smallest, true, range.largest, true)
-                       .keySet()
-                       .forEach(newlyAcked::add);
+            newlyAcked.addAll(sentPackets.subMap(range.smallest, true, range.largest, true)
+                    .keySet());
         }
 
         if (newlyAcked.isEmpty()) {
@@ -165,14 +158,13 @@ public class PacketNumberSpace {
 
         // Process and remove acked packets
         for (long pn : newlyAcked) {
-            SentPacket packet = sentPackets.get(pn);
+            SentPacket packet = sentPackets.remove(pn);
             if (packet != null) {
                 if (ackCallback != null) {
                     ackCallback.onPacketAcknowledged(pn, packet);
                 }
                 lossHeap.remove(packet);
             }
-            sentPackets.remove(pn);
             logger.debug("{}: Packet {} acked and removed", phase, pn);
         }
     }
@@ -288,7 +280,7 @@ public class PacketNumberSpace {
 
         List<AckRange> ranges = new ArrayList<>();
         List<Long> sorted = new ArrayList<>(receivedPackets);
-        Collections.sort(sorted, Collections.reverseOrder());
+        sorted.sort(Collections.reverseOrder());
 
         long rangeStart = sorted.get(0);
         long rangeEnd = sorted.get(0);
@@ -365,28 +357,22 @@ public class PacketNumberSpace {
 
     /**
      * Metadata about a sent packet for loss detection and retransmission.
-     * 
      * FIELD EXPLANATION (RFC 9002):
-     * 
      * 1. packetNumber: The original packet number when this packet was first sent.
      *    - Used for: ACK matching, loss detection thresholds, tracking
      *    - NOT used for: Retransmission (retransmissions get NEW packet numbers)
-     * 
      * 2. sentTime: Timestamp when packet was sent (milliseconds).
      *    - Used for: RTT calculation, time-based loss detection
      *    - Per RFC 9002 Section 6.1.2: packets sent before (now - loss_delay) are declared lost
-     * 
      * 3. unencryptedPayload: The QUIC frames BEFORE encryption (CRYPTO, STREAM, ACK, etc.).
      *    - Used for: Retransmission with a NEW packet number and NEW encryption
      *    - Per RFC 9002 Section 6.2: "Packets that are declared lost are not retransmitted whole.
      *      The same applies to frames that are never declared lost. Instead, the information
      *      that might be carried in frames is sent again in new frames as needed."
      *    - We store the frames (payload) so we can wrap them in a new packet with new PN
-     * 
      * 4. packetType: Type of packet (INITIAL, HANDSHAKE, APPLICATION).
      *    - Used for: Selecting correct encryption keys and header format during retransmission
      *    - Different packet types use different key materials and header structures
-     * 
      * 5. ackEliciting: Whether this packet requires an ACK from peer.
      *    - Used for: RTT measurement (only ack-eliciting packets update RTT)
      *    - Per RFC 9002 Section 5: ACK-only packets don't trigger ACKs or RTT updates

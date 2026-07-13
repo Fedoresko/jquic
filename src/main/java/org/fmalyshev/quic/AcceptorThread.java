@@ -69,7 +69,7 @@ class AcceptorThread implements Runnable {
 
                     SelectorCID assignedSelectorId = initialSelectorMap.get(ByteBuffer.wrap(dcid));
                     if (assignedSelectorId != null) {
-                        log.debug(ANSIConstants.RED_FG, "[Acceptor] Packet in initialization mapping  CID: {}, enqueueing for handshake", assignedSelectorId.cid);
+                        log.warn(ANSIConstants.RED_FG, "[Acceptor] Packet in initialization mapping  CID: {}, enqueueing for handshake", assignedSelectorId.cid);
 
                         buffer.buf().rewind();
                         selectors[assignedSelectorId.selectorId].forwardHandshake(
@@ -88,7 +88,7 @@ class AcceptorThread implements Runnable {
                             if (packetSummary.type() == QuicPacketHeader.PacketType.INITIAL && buffer.buf().remaining() >= MINIMUM_INITIAL_PACKET) {
                                 // LONG HEADER: Generate CID and enqueue for handshake processing
                                 long newCid = cidGenerator.getAndIncrement();
-                                log.debug(ANSIConstants.RED_FG, "[Acceptor] First initial packet, allocated CID: {}, enqueueing for handshake", newCid);
+                                log.warn(ANSIConstants.RED_FG, "[Acceptor] First initial packet, allocated CID: {}, enqueueing for handshake", newCid);
 
                                 int selectorId = (int) (getLongHash(dcid) % selectors.length);
 
@@ -116,17 +116,15 @@ class AcceptorThread implements Runnable {
         }
     }
 
-    private boolean forwardToSelector(Integer assignedSelectorId, PoolBuffer buffer, SocketAddress sender) {
+    private void forwardToSelector(Integer assignedSelectorId, PoolBuffer buffer, SocketAddress sender) {
         if (selectors != null && assignedSelectorId < selectors.length) {
             SelectorThread targetSelector = selectors[assignedSelectorId];
             if (targetSelector != null) {
                 // Transfer ownership of buffer to selector thread
                 buffer.buf().rewind();
                 targetSelector.forwardPacket(buffer.borrow(), sender);
-                return true;
             }
         }
-        return false;
     }
 
 }

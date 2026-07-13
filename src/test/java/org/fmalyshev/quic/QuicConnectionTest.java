@@ -45,10 +45,12 @@ class QuicConnectionTest {
     private static final SocketAddress TEST_ADDRESS = new InetSocketAddress("127.0.0.1", 8080);
 
     private QuicConnection connection;
+    private SelectorThread selectorMock;
 
     @BeforeEach
     void setUp() throws Exception {
-        connection = new QuicConnection(TEST_CID, TEST_ADDRESS);
+        selectorMock = mock(SelectorThread.class);
+        connection = new QuicConnection(TEST_CID, TEST_ADDRESS, selectorMock);
         Field streamEngineInternal = QuicEngine.class.getDeclaredField("streamEngineInternal");
         streamEngineInternal.setAccessible(true);
         QuicStreamEngineImpl value = new QuicStreamEngineImpl(0);
@@ -934,10 +936,6 @@ class QuicConnectionTest {
         QuicCrypto.PacketProtectionKeysWithHP[] initialProtectionKeys = QuicCrypto.deriveInitialKeys(ByteBuffer.allocate(8).putLong(TEST_CID).array());
 
         QuicCrypto.TlsMetadata mockMetadata = new QuicCrypto.TlsMetadata();
-        mockMetadata.clientRandom = new byte[32];
-        mockMetadata.serverRandom = new byte[32];
-        mockMetadata.selectedCipherSuite = "TLS_AES_128_GCM_SHA256";
-        mockMetadata.alpn = "h3";
         mockMetadata.negotiatedIdleTimeoutMs = 10_000;
         mockMetadata.clientInitialKeys = new QuicCrypto.PacketProtectionKeysWithHP(initialProtectionKeys[0].key(), initialProtectionKeys[0].iv(), null);
         mockMetadata.serverInitialKeys = new QuicCrypto.PacketProtectionKeysWithHP(initialProtectionKeys[1].key(), initialProtectionKeys[1].iv(), null);
@@ -1167,10 +1165,6 @@ class QuicConnectionTest {
         SecretKey server1RttSecret = new SecretKeySpec(new byte[16], "AES");
 
         QuicCrypto.TlsMetadata mockMetadata = new QuicCrypto.TlsMetadata();
-        mockMetadata.clientRandom = new byte[32];
-        mockMetadata.serverRandom = new byte[32];
-        mockMetadata.selectedCipherSuite = "TLS_AES_128_GCM_SHA256";
-        mockMetadata.alpn = "h3";
         mockMetadata.negotiatedIdleTimeoutMs = 10_000;
         mockMetadata.serverEphemeralPublicKey = new byte[32];
         mockMetadata.clientHandshakeKeys = new QuicCrypto.PacketProtectionKeysWithHP(clientHandshakeSecret, new byte[12], null);
@@ -1178,35 +1172,25 @@ class QuicConnectionTest {
         mockMetadata.setApplicationKeys(
                 new QuicCrypto.PacketProtectionKeys(client1RttSecret, new byte[12]),
                 new QuicCrypto.PacketProtectionKeys(server1RttSecret, new byte[12]));
-        mockMetadata.clientMetadata = new QuicCrypto.ParsedClientHello("h3", 1000, List.of(), Map.of(), 10000, 1000, List.of());
+        mockMetadata.clientMetadata = new QuicCrypto.ClientMetadataNegotiated("h3", 1000, List.of(), Map.of(), 10000, 1000, 0, 0, 0, 0, 0, List.of());
         mockMetadata.handshakeSecretBytes = new byte[32];
         mockMetadata.selectedSignatureScheme = 0x0403;
         mockMetadata.serverHandshakeTrafficSecret = new byte[32];
         mockMetadata.clientApplicationHeaderProtection = null;
 
-        mock.when(() -> QuicCrypto.processClientHello(any(), any()))
+        mock.when(() -> QuicCrypto.processClientHello(any(QuicCrypto.TlsMetadata.class), any(ByteBuffer.class)))
                 .thenReturn(mockMetadata);
 
-        mock.when(() -> QuicCrypto.createApplicationKeys(any())).thenAnswer(inv -> null);
+        mock.when(() -> QuicCrypto.createApplicationKeys(any(QuicCrypto.TlsMetadata.class))).thenAnswer(inv -> null);
 
         // Mock decryption - simply copy input to output (simulating pass-through decryption)
-        mock.when(() -> QuicCrypto.decryptAead(any(), any(), any(), anyLong(), any(), any()))
+        mock.when(() -> QuicCrypto.decryptAead(any(ByteBuffer.class), any(javax.crypto.SecretKey.class), any(byte[].class), anyLong(), any(ByteBuffer.class), nullable(byte[].class)))
                 .thenAnswer(invocation -> {
-                    ByteBuffer packet = invocation.getArgument(0);
-                    ByteBuffer output = invocation.getArgument(4);
-
-                    // Copy available data from packet to output (excluding auth tag which is already accounted for)
-                    int bytesToCopy = Math.min(packet.remaining(), output.remaining());
-                    if (bytesToCopy > 0) {
-                        byte[] data = new byte[bytesToCopy];
-                        packet.get(data);
-                        output.put(data);
-                    }
                     return null;
                 });
 
         // Mock encryption
-        mock.when(() -> QuicCrypto.encryptPacketInPlace(any(), any(), anyLong(), any(), any()))
+        mock.when(() -> QuicCrypto.encryptPacketInPlace(any(ByteBuffer.class), any(javax.crypto.SecretKey.class), anyLong(), nullable(ByteBuffer.class), any(byte[].class)))
                 .thenAnswer(invocation -> {
                     ByteBuffer input = invocation.getArgument(0);
                     ByteBuffer encrypted = ByteBuffer.allocate(input.remaining() + 50);
@@ -1216,11 +1200,13 @@ class QuicConnectionTest {
                 });
 
         // Mock ServerHello creation (single TlsMetadata arg)
-        mock.when(() -> QuicFrameBuilder.writeServerHello(any(), any(QuicCrypto.TlsMetadata.class)))
-                .thenReturn(ByteBuffer.allocate(64));
+        mock.when(() -> QuicFrameBuilder.writeServerHello(any(org.fmalyshev.quic.buffers.ChunkedOutputStreamWithAmendments.class), any(QuicCrypto.TlsMetadata.class)))
+                .thenAnswer(inv -> {
+                    return null;
+                });
 
         // Mock client Finished verification - return true for valid Finished message
-        mock.when(() -> QuicCrypto.verifyClientFinished(any(), any(), any(byte[].class)))
+        mock.when(() -> QuicCrypto.verifyClientFinished(any(ByteBuffer.class), any(byte[].class), any(byte[].class)))
                 .thenReturn(true);
 
         return mock;

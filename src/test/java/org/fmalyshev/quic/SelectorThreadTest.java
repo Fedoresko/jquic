@@ -17,7 +17,6 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import static org.fmalyshev.quic.QuicConnectionCryptoIntegrationTest.destinationCidBytes;
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.mock;
 
 /**
  * Integration tests for SelectorThread.
@@ -62,7 +61,7 @@ class SelectorThreadTest {
     @DisplayName("Test connection timeout is updated when processing 1-RTT packets")
     void testTimeoutUpdatedOnPacketProcessing() throws Exception {
         // Create and setup connection in ESTABLISHED state
-        QuicConnection connection = new QuicConnection(TEST_CID, TEST_ADDRESS);
+        QuicConnection connection = new QuicConnection(TEST_CID, TEST_ADDRESS, selectorThread);
         connection.setState(QuicConnection.State.ESTABLISHED);
         QuicCrypto.TlsMetadata tlsMetadata = setupRealTlsMetadata(connection);
         connection.setIdleTimeout(100); // Short timeout for testing
@@ -98,9 +97,9 @@ class SelectorThreadTest {
     @DisplayName("Test connections are evicted in correct order based on timeout")
     void testConnectionsEvictedInTimeoutOrder() throws Exception {
         // Create 3 connections with different timeouts
-            QuicConnection conn1 = new QuicConnection(1001L, new InetSocketAddress("127.0.0.1", 5001));
-            QuicConnection conn2 = new QuicConnection(1002L, new InetSocketAddress("127.0.0.1", 5002));
-            QuicConnection conn3 = new QuicConnection(1003L, new InetSocketAddress("127.0.0.1", 5003));
+            QuicConnection conn1 = new QuicConnection(1001L, new InetSocketAddress("127.0.0.1", 5001), selectorThread);
+            QuicConnection conn2 = new QuicConnection(1002L, new InetSocketAddress("127.0.0.1", 5002), selectorThread);
+            QuicConnection conn3 = new QuicConnection(1003L, new InetSocketAddress("127.0.0.1", 5003), selectorThread);
 
             // Set very short timeouts for testing
             conn1.setIdleTimeout(50);  // Will timeout first
@@ -141,7 +140,7 @@ class SelectorThreadTest {
     @DisplayName("Test packet activity prevents timeout eviction")
     void testPacketActivityPreventsEviction() throws Exception {
         // Create connection with short timeout
-        QuicConnection connection = new QuicConnection(TEST_CID, TEST_ADDRESS);
+        QuicConnection connection = new QuicConnection(TEST_CID, TEST_ADDRESS, selectorThread);
         connection.setState(QuicConnection.State.ESTABLISHED);
         QuicCrypto.TlsMetadata tlsMetadata = setupRealTlsMetadata(connection);
         connection.setIdleTimeout(100); // 100ms timeout
@@ -178,7 +177,7 @@ class SelectorThreadTest {
     @DisplayName("Test CONNECTION_CLOSE triggers immediate eviction")
     void testConnectionCloseTriggersEviction() throws Exception {
         // Create connection in ESTABLISHED state
-        QuicConnection connection = new QuicConnection(TEST_CID, TEST_ADDRESS);
+        QuicConnection connection = new QuicConnection(TEST_CID, TEST_ADDRESS, selectorThread);
         connection.setState(QuicConnection.State.ESTABLISHED);
         QuicCrypto.TlsMetadata tlsMetadata = setupRealTlsMetadata(connection);
 
@@ -205,9 +204,9 @@ class SelectorThreadTest {
     @DisplayName("Test multiple connections timeout in correct order with interleaved activity")
     void testMultipleConnectionsWithInterleavedActivity() throws Exception {
         // Create 3 connections with same timeout
-        QuicConnection conn1 = new QuicConnection(2001L, new InetSocketAddress("127.0.0.1", 6001));
-        QuicConnection conn2 = new QuicConnection(2002L, new InetSocketAddress("127.0.0.1", 6002));
-        QuicConnection conn3 = new QuicConnection(2003L, new InetSocketAddress("127.0.0.1", 6003));
+        QuicConnection conn1 = new QuicConnection(2001L, new InetSocketAddress("127.0.0.1", 6001), selectorThread);
+        QuicConnection conn2 = new QuicConnection(2002L, new InetSocketAddress("127.0.0.1", 6002), selectorThread);
+        QuicConnection conn3 = new QuicConnection(2003L, new InetSocketAddress("127.0.0.1", 6003), selectorThread);
 
         QuicCrypto.TlsMetadata metadata1 = setupRealTlsMetadata(conn1);
         QuicCrypto.TlsMetadata metadata2 = setupRealTlsMetadata(conn2);
@@ -281,10 +280,6 @@ class SelectorThreadTest {
         byte[] server1RttIv = QuicCrypto.deriveIv(server1RttSecret.getEncoded());
 
         QuicCrypto.TlsMetadata metadata = new QuicCrypto.TlsMetadata();
-        metadata.clientRandom            = new byte[32];
-        metadata.serverRandom            = new byte[32];
-        metadata.selectedCipherSuite     = "TLS_AES_128_GCM_SHA256";
-        metadata.alpn                    = "h3";
         metadata.negotiatedIdleTimeoutMs = 100;
         metadata.serverHandshakeKeys = new QuicCrypto.PacketProtectionKeysWithHP(serverHandshakeSecret, new byte[16], new byte[16]);
         metadata.clientHandshakeKeys = new QuicCrypto.PacketProtectionKeysWithHP(clientHandshakeSecret, new byte[16], new byte[16]);

@@ -1,5 +1,6 @@
 # Agent Guidelines
 
+**Junie** Hi Junie! Never modify implementation code until explicitlety asked! If some test fail you must only suggest a fix by default, note make it.   
 **Context analysis.** Do not spend tokens to analyze the whole project context of not asked explicitly, take what is sufficient only.
 
 ## Buffer Handling: Zero-Copy Policy

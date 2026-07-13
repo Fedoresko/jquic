@@ -3,12 +3,13 @@ package org.fmalyshev.quic;
 import ch.qos.logback.core.pattern.color.ANSIConstants;
 import org.fmalyshev.LogTool;
 import org.fmalyshev.quic.buffers.PoolBuffer;
+import org.jctools.queues.MessagePassingQueue;
+import org.jctools.queues.MpscArrayQueue;
 import org.jctools.queues.SpscArrayQueue;
 import org.jctools.queues.SpscLinkedQueue;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.DatagramChannel;
@@ -19,15 +20,23 @@ import java.util.concurrent.ConcurrentHashMap;
 // =========================================================================
 // SELECTOR THREAD LOGIC
 // =========================================================================
-class SelectorThread implements Runnable {
+public class SelectorThread implements Runnable {
     private static final Logger logger = LoggerFactory.getLogger(SelectorThread.class);
     private static final LogTool log = new LogTool(logger);
-
+    public static final int OUTBOUND_APP_QUEUE_SIZE = 1000;
     public static final int HANDSHAKE_QUEUE_CAP = 1000;
+
+    public record AppDataPacket(long cid, ByteBuffer data) {}
+
+    public void enqueueApplicationData(long cid, ByteBuffer data) {
+        applicationQueue.offer(new AppDataPacket(cid, data));
+    }
+
     private final int threadId;
     private final DatagramChannel channel;
     private final SpscLinkedQueue<PacketData> forwardedPackets;
     private final SpscArrayQueue<HandshakeTask> handshakeQueue = new SpscArrayQueue<>(HANDSHAKE_QUEUE_CAP);
+    private final MessagePassingQueue<AppDataPacket> applicationQueue = new MpscArrayQueue<>(OUTBOUND_APP_QUEUE_SIZE);
     private final ConcurrentHashMap<Long, Integer> cidToSelectorMap;
     private final Map<Long, QuicConnection> activeConnections;
     private final Map<ByteBuffer, QuicConnection> initializingConnections = new HashMap<>();
@@ -58,7 +67,7 @@ class SelectorThread implements Runnable {
         this.activeConnections = new HashMap<>();
     }
 
-    private static String[] COLORS = new String[] { ANSIConstants.GREEN_FG, ANSIConstants.MAGENTA_FG, ANSIConstants.BLUE_FG, ANSIConstants.CYAN_FG};
+    private static final String[] COLORS = new String[] { ANSIConstants.GREEN_FG, ANSIConstants.MAGENTA_FG, ANSIConstants.BLUE_FG, ANSIConstants.CYAN_FG};
     private String logColor() {
         return COLORS[threadId % COLORS.length];
     }
@@ -119,6 +128,30 @@ class SelectorThread implements Runnable {
                     hadWork = true;
                 }
 
+                // Drain application queue and process packages for all active connections.
+                AppDataPacket appPacket;
+                while ((appPacket = applicationQueue.poll()) != null) {
+                    QuicConnection conn = activeConnections.get(appPacket.cid());
+                    if (conn != null) {
+                        logger.debug("Polled application data frame cid {}", conn.getConnectionId());
+                        conn.send1RttPacket(appPacket.data());
+                        // Update timeout in heap after processing
+                        timeoutHeap.insertOrUpdate(conn);
+
+                        PoolBuffer outbound;
+                        if (conn.outboundQueueSize() > 0) {
+                            log.debug(logColor(), "Selector-{}: Connection CID: {} sending {} response packets.", threadId, conn.getConnectionId(), conn.outboundQueueSize());
+                        }
+
+                        while ((outbound = conn.pollOutbound()) != null) {
+                            channel.send(outbound.buf(), conn.getRemoteAddress());
+                            outbound.release();
+                        }
+
+                        hadWork = true;
+                    }
+                }
+
                 // Check for timed out connections periodically
                 if (now - lastTimeoutCheck > TIMEOUT_CHECK_INTERVAL_MS) {
                     evictTimedOutConnections();
@@ -134,6 +167,7 @@ class SelectorThread implements Runnable {
             log.error(logColor(), "Selector-{}: Error in selector thread", threadId, e);
         }
     }
+
 
     /**
      * Processes a received datagram which may contain multiple coalesced packets.
@@ -206,17 +240,9 @@ class SelectorThread implements Runnable {
                             log.warn(logColor(), "Selector-{}: Processing {} packet for CID: {} not implemented",threadId, packetSummary.type(), cid);
                             skipPacket(datagram.buf());
                         }
-                    };
-
+                    }
                     // Update timeout in heap after processing (remove-add pattern)
                     timeoutHeap.insertOrUpdate(connection);
-
-                    // Drain application queue and process packages.
-                    ByteBuffer appData;
-                    while( (appData = connection.applicationQueue().poll()) != null) {
-                        logger.debug("Polled application data frame cid {}", connection.getConnectionId());
-                        connection.send1RttPacket(appData);
-                    }
 
                     // Drain any packets the connection produced internally (e.g. early-1RTT
                     // replay triggered by the ESTABLISHED transition, or sendFrame() calls).
@@ -256,7 +282,7 @@ class SelectorThread implements Runnable {
             }
 
             QuicConnection connection = activeConnections.computeIfAbsent(task.allocatedCid,
-                    cid -> new QuicConnection(task.allocatedCid, task.sender));
+                    cid -> new QuicConnection(task.allocatedCid, task.sender, this));
 
             assignConnectionToSelector(connection.getConnectionId());
 

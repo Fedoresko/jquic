@@ -2,16 +2,12 @@ package org.fmalyshev.quic;
 
 import ch.qos.logback.core.pattern.color.ANSIConstants;
 import org.fmalyshev.LogTool;
-import org.fmalyshev.quic.buffers.PoolBuffer;
 import org.fmalyshev.quic.buffers.ChunkedOutputStreamWithAmendmentsImpl;
-import org.fmalyshev.quic.buffers.RootPoolBuffer;
+import org.fmalyshev.quic.buffers.PoolBuffer;
 import org.fmalyshev.quic.buffers.TranscryptHashSupport;
 import org.fmalyshev.quic.streamapi.ConnectionStreamManager;
 import org.fmalyshev.quic.streamapi.frames.*;
 import org.fmalyshev.quic.streamapi.impl.QuicStreamEngineImpl;
-import org.jctools.queues.MessagePassingQueue;
-import org.jctools.queues.SpscArrayQueue;
-import org.jspecify.annotations.NonNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -62,7 +58,6 @@ public class QuicConnection implements TimeoutHeap.Entry {
     private final SocketAddress remoteAddress;
     private final AtomicReference<State> state = new AtomicReference<>(State.INITIAL);
     public QuicCrypto.TlsMetadata tlsMetadata = new QuicCrypto.TlsMetadata();
-    private final long creationTime;
     private int timeoutHeapIndex = -1;
     ConnectionStreamManager connectionStreamManager;
 
@@ -96,19 +91,27 @@ public class QuicConnection implements TimeoutHeap.Entry {
      * single consumer (the selector thread).
      */
     private final Deque<PoolBuffer> outboundQueue = new ArrayDeque<>();
-
-    private final MessagePassingQueue<ByteBuffer> applicationQueue = new SpscArrayQueue<>(OUTBOUND_APP_QUEUE_SIZE);
-
     private CryptoFrameRebuilder cryptoFrameRebuilder;
     byte[] clientCid;
+    private final SelectorThread selector;
 
 
-    public void enqueueApplicationData(ByteBuffer applicationData) {
-        applicationQueue.offer(applicationData);
+    public QuicConnection(long connectionId, SocketAddress remoteAddress, SelectorThread selector) {
+        this.connectionId = connectionId;
+        this.connectionIdBytes = ByteBuffer.allocate(8).putLong(connectionId);
+        this.remoteAddress = remoteAddress;
+        this.state.set(State.INITIAL);
+        this.timeoutTimestamp = System.currentTimeMillis() + idleTimeoutMs;
+        this.selector = selector;
+        logger.info("Connection {} initial tiemout set to {}", connectionId, timeoutTimestamp);
     }
 
-    MessagePassingQueue<ByteBuffer> applicationQueue() {
-        return applicationQueue;
+    public void enqueueApplicationData(ByteBuffer applicationData) {
+        if (selector != null) {
+            selector.enqueueApplicationData(connectionId, applicationData);
+        } else {
+            logger.warn("No selector assigned to connection {}, dropping application data", connectionId);
+        }
     }
 
     /**
@@ -116,7 +119,6 @@ public class QuicConnection implements TimeoutHeap.Entry {
      * Wraps the frame in a 1-RTT packet, encrypts it, updates PacketNumberSpace, and sends to socket.
      *
      * @param frame The frame to send (already encoded)
-     * @throws Exception if sending fails
      */
     void send1RttPacket(ByteBuffer frame) {
         if (state.get() != State.ESTABLISHED) {
@@ -163,15 +165,6 @@ public class QuicConnection implements TimeoutHeap.Entry {
         }
     }
 
-    public QuicConnection(long connectionId, SocketAddress remoteAddress) {
-        this.connectionId = connectionId;
-        this.connectionIdBytes = ByteBuffer.allocate(8).putLong(connectionId);
-        this.remoteAddress = remoteAddress;
-        this.state.set(State.INITIAL);
-        this.creationTime = System.currentTimeMillis();
-        this.timeoutTimestamp = creationTime + idleTimeoutMs;
-        logger.info("Connection {} initial tiemout set to {}", connectionId, timeoutTimestamp);
-    }
 
     public void setTimeoutHeapIndex(int index) {
         this.timeoutHeapIndex = index;
@@ -303,10 +296,6 @@ public class QuicConnection implements TimeoutHeap.Entry {
         return initialSpace;
     }
 
-    PacketNumberSpace getHandshakeSpace() {
-        return handshakeSpace;
-    }
-
     PacketNumberSpace getApplicationSpace() {
         return applicationSpace;
     }
@@ -409,9 +398,6 @@ public class QuicConnection implements TimeoutHeap.Entry {
      * Processes client's Handshake packet and generates server's Handshake response.
      * This completes the QUIC handshake (RFC 9000 Section 7).
      * The packet buffer position is advanced as data is read.
-     *
-     * @return List containing Handshake response (Certificate/Finished) and HANDSHAKE_DONE packets,
-     * or empty list if connection not in HANDSHAKE state or packet is malformed
      */
     void processHandshakePacket(PoolBuffer packet) {
         logger.debug("Processing Handshake packet for CID: {} in state: {}", connectionId, state);
@@ -554,8 +540,6 @@ public class QuicConnection implements TimeoutHeap.Entry {
      * Processes 1-RTT (Short Header) packet: decrypts and parses frames.
      * The packet buffer position is advanced as data is read.
      * Stream data is delivered to the payload listener.
-     *
-     * @return List of packets to send (ACKs and retransmissions), or empty list
      */
     void process1RttPacket(PoolBuffer packet) {
         logger.debug("Processing 1-RTT packet for CID: {} in state: {}", connectionId, state);
@@ -739,17 +723,18 @@ public class QuicConnection implements TimeoutHeap.Entry {
                 long tokenLength = QuicVarint.read(plaintext.buf());
                 int tokenDataLen = (int) Math.min(tokenLength, plaintext.buf().remaining());
                 plaintext.buf().position(plaintext.buf().position() + tokenDataLen);
-                logger.info("Received NEW_TOKEN CID={} tokenLength={}", connectionId, tokenLength);
+                logger.warn("Received NEW_TOKEN CID={} tokenLength={}", connectionId, tokenLength);
                 needsAck = true;
             } else if (frameType == 0x10) { // MAX_DATA
                 // RFC 9000 Section 19.9: maximum_data(varint)
                 long maxData = QuicVarint.read(plaintext.buf());
-                logger.info("Received MAX_DATA CID={} maxData={}", connectionId, maxData);
+                logger.warn("Received MAX_DATA CID={} maxData={}", connectionId, maxData);
+                connectionStreamManager.onStreamFrame(new MaxDataFrameData(maxData));
                 needsAck = true;
             } else if (frameType == FRAME_TYPE_DATA_BLOCKED) { // DATA_BLOCKED
                 // RFC 9000 Section 19.12: maximum_data(varint)
                 long dataLimit = QuicVarint.read(plaintext.buf());
-                logger.info("Received DATA_BLOCKED CID={} dataLimit={}", connectionId, dataLimit);
+                logger.warn("Received DATA_BLOCKED CID={} dataLimit={}", connectionId, dataLimit);
                 needsAck = true;
             } else if (frameType == 0x18) { // NEW_CONNECTION_ID
                 // RFC 9000 Section 19.15: sequence_number(varint) + retire_prior_to(varint) +
@@ -766,20 +751,20 @@ public class QuicConnection implements TimeoutHeap.Entry {
             } else if (frameType == 0x19) { // RETIRE_CONNECTION_ID
                 // RFC 9000 Section 19.16: sequence_number(varint)
                 long seqNum = QuicVarint.read(plaintext.buf());
-                logger.info("Received RETIRE_CONNECTION_ID CID={} seqNum={}", connectionId, seqNum);
+                logger.warn("Received RETIRE_CONNECTION_ID CID={} seqNum={}", connectionId, seqNum);
                 needsAck = true;
             } else if (frameType == 0x1a) { // PATH_CHALLENGE
                 // RFC 9000 Section 19.17: data(8 bytes)
                 plaintext.buf().position(plaintext.buf().position() + 8);
-                logger.info("Received PATH_CHALLENGE CID={}", connectionId);
+                logger.warn("Received PATH_CHALLENGE CID={}", connectionId);
                 needsAck = true;
             } else if (frameType == 0x1b) { // PATH_RESPONSE
                 // RFC 9000 Section 19.18: data(8 bytes)
                 plaintext.buf().position(plaintext.buf().position() + 8);
-                logger.info("Received PATH_RESPONSE CID={}", connectionId);
+                logger.warn("Received PATH_RESPONSE CID={}", connectionId);
                 needsAck = true;
             } else if (frameType == 0x1e) { // HANDSHAKE_DONE
-                logger.debug("Received HANDSHAKE_DONE from client (unexpected)");
+                logger.warn("Received HANDSHAKE_DONE from client (unexpected)");
                 needsAck = true;
             } else if (frameType == 0x30 || frameType == 0x31) { // DATAGRAM
                 // RFC 9221: optional length(varint) + data(*)
@@ -788,11 +773,11 @@ public class QuicConnection implements TimeoutHeap.Entry {
                     long datagramLength = QuicVarint.read(plaintext.buf());
                     int datagramDataLen = (int) Math.min(datagramLength, plaintext.buf().remaining());
                     plaintext.buf().position(plaintext.buf().position() + datagramDataLen);
-                    logger.info("Received DATAGRAM CID={} length={}", connectionId, datagramLength);
+                    logger.warn("Received DATAGRAM CID={} length={}", connectionId, datagramLength);
                 } else {
                     int datagramDataLen = plaintext.buf().remaining();
                     plaintext.buf().position(plaintext.buf().position() + datagramDataLen);
-                    logger.info("Received DATAGRAM (no-length) CID={} length={}", connectionId, datagramDataLen);
+                    logger.warn("Received DATAGRAM (no-length) CID={} length={}", connectionId, datagramDataLen);
                 }
                 needsAck = true;
             } else if (frameType == 0x00) { // PADDING
@@ -963,16 +948,16 @@ public class QuicConnection implements TimeoutHeap.Entry {
             QuicCrypto.TlsMetadata derivedMetadata = QuicCrypto.processClientHello(tlsMetadata, frame);
 
             // Extract ALPN from TLS metadata
-            if (derivedMetadata.alpn != null) {
-                this.negotiatedProtocol = derivedMetadata.alpn;
-                logger.info("ALPN negotiated: {} for CID: {}", derivedMetadata.alpn, connectionId);
+            if (derivedMetadata.clientMetadata.alpn != null) {
+                this.negotiatedProtocol = derivedMetadata.clientMetadata.alpn;
+                logger.info("ALPN negotiated: {} for CID: {}", derivedMetadata.clientMetadata.alpn, connectionId);
             } else {
                 logger.warn("No ALPN negotiated for CID: {}", connectionId);
             }
 
             copyNewFields(tlsMetadata, derivedMetadata);
 
-            logger.debug("TLS keys derived, cipher: {}", derivedMetadata.selectedCipherSuite);
+            logger.debug("TLS keys derived, cipher: {}", derivedMetadata.clientMetadata.selectedCipherSuite);
         }  catch (QuicCrypto.CryptoException e) {
             if (e.getDemandedGroupId() != null) {
                 logger.warn("ClientHello does not contain Key for supported KPG algorithms. Requesting another one {}", e.getDemandedGroupId());
@@ -1199,10 +1184,6 @@ public class QuicConnection implements TimeoutHeap.Entry {
         }
     }
 
-    private static @NonNull ByteBuffer lastPutPart(PoolBuffer poolBuffer, int pos) {
-        return poolBuffer.buf().duplicate().position(pos).limit(poolBuffer.buf().position());
-    }
-
     /**
      * Feeds a TLS handshake message into the running transcript hash and logs it.
      * The buffer's position is not advanced (uses a duplicate for reading).
@@ -1215,10 +1196,10 @@ public class QuicConnection implements TimeoutHeap.Entry {
      * Creates 1-RTT (Short Header) packet with HANDSHAKE_DONE frame.
      * This signals to the client that the handshake is complete.
      */
-    private void sendHandshakeDonePacket() throws Exception {
+    private void sendHandshakeDonePacket() {
         // Create HANDSHAKE_DONE frame (type 0x1e)
         ByteBuffer frame =  ByteBuffer.allocate(OUTBOUND_APP_QUEUE_SIZE);
-        QuicFrameBuilder.createHandshakeDoneFrame(frame);
+        QuicFrameBuilder.writeHandshakeDoneFrame(frame);
         frame.put((byte) 0x01); // PING
         frame.flip();
 
@@ -1248,8 +1229,6 @@ public class QuicConnection implements TimeoutHeap.Entry {
     /**
      * Processes ACK frame and updates packet number space.
      * RFC 9000 Section 19.3: ACK Frame Format
-     *
-     * @return List of retransmission packets to send (re-wrapped with NEW packet numbers), or empty list
      */
     private void processAckFrame(ByteBuffer buffer, PacketNumberSpace space, byte frameType) {
         long largestAcked = QuicVarint.read(buffer);
@@ -1265,9 +1244,9 @@ public class QuicConnection implements TimeoutHeap.Entry {
                 QuicVarint.read(buffer);
             }
             if (frameType == 0x03) {
-                long ect0 = QuicVarint.read(buffer); // 1. ECT(0) Packets
-                long ect1 = QuicVarint.read(buffer); // 2. ECT(1) Packets
-                long ce   = QuicVarint.read(buffer); // 3. Congestion Experienced Packets
+                QuicVarint.read(buffer); // 1. ECT(0) Packets
+                QuicVarint.read(buffer); // 2. ECT(1) Packets
+                QuicVarint.read(buffer); // 3. Congestion Experienced Packets
             }
             return;
         }
@@ -1297,9 +1276,9 @@ public class QuicConnection implements TimeoutHeap.Entry {
         }
 
         if (frameType == 0x03) {
-            long ect0 = QuicVarint.read(buffer); // 1. ECT(0) Packets
-            long ect1 = QuicVarint.read(buffer); // 2. ECT(1) Packets
-            long ce   = QuicVarint.read(buffer); // 3. Congestion Experienced Packets
+            QuicVarint.read(buffer); // 1. ECT(0) Packets
+            QuicVarint.read(buffer); // 2. ECT(1) Packets
+            QuicVarint.read(buffer); // 3. Congestion Experienced Packets
         }
 
         space.onAckReceived(largestAcked, ackRanges, ackDelay, connectionStreamManager);

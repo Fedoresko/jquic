@@ -16,7 +16,14 @@ public class StreamState {
         HALF_CLOSED_REMOTE,  // Remote side sent FIN
         CLOSED,         // Stream fully closed
         RESET_SENT,     // RESET_STREAM sent
-        RESET_RECEIVED  // RESET_STREAM received
+        RESET_RECEIVED;  // RESET_STREAM received
+
+        public boolean canReceive() {
+            return this == State.OPEN || this == State.HALF_CLOSED_LOCAL || this == State.RESET_SENT;
+        }
+        public boolean canSend() {
+            return this == State.OPEN || this == State.HALF_CLOSED_REMOTE;
+        }
     }
 
     private final long streamId;
@@ -28,7 +35,7 @@ public class StreamState {
     private long maxStreamData;        // Maximum data we can send (peer's limit)
     private long remoteMaxStreamData;  // Maximum data remote can send (our limit)
     private long sentBytes;            // Total bytes sent (cumulative)
-    private long receivedBytes;        // Total bytes received (cumulative)
+    private long maxOffset;        // Total bytes received (cumulative)
     private long inFlightBytes;        // Bytes sent but not yet acknowledged
 
     // Error codes
@@ -44,20 +51,12 @@ public class StreamState {
         this.maxStreamData = initialMaxStreamData;
         this.remoteMaxStreamData = initialMaxStreamData;
         this.sentBytes = 0;
-        this.receivedBytes = 0;
+        this.maxOffset = 0;
         this.inFlightBytes = 0;
     }
 
     public long getStreamId() {
         return streamId;
-    }
-
-    public boolean isServerInitiated() {
-        return isServerInitiated;
-    }
-
-    public QuicStreamResponse.StreamType getStreamType() {
-        return streamType;
     }
 
     public State getState() {
@@ -70,14 +69,6 @@ public class StreamState {
 
     public boolean isBidirectional() {
         return streamType == QuicStreamResponse.StreamType.Bidirectional;
-    }
-
-    public boolean canSend() {
-        return state == State.OPEN || state == State.HALF_CLOSED_REMOTE;
-    }
-
-    public boolean canReceive() {
-        return state == State.OPEN || state == State.HALF_CLOSED_LOCAL;
     }
 
     public long getMaxStreamData() {
@@ -105,12 +96,14 @@ public class StreamState {
         this.inFlightBytes += bytes;
     }
 
-    public long getReceivedBytes() {
-        return receivedBytes;
+    public long getMaxOffset() {
+        return maxOffset;
     }
 
-    public void addReceivedBytes(long bytes) {
-        this.receivedBytes += bytes;
+    public long updateMaxOffset(long offset) {
+        long prevOffset = maxOffset;
+        maxOffset = Math.max(maxOffset, offset);
+        return maxOffset - prevOffset;
     }
 
     public long getInFlightBytes() {
@@ -131,20 +124,8 @@ public class StreamState {
         return (inFlightBytes + bytes) <= maxStreamData;
     }
 
-    public long getAvailableWindow() {
-        return Math.max(0, maxStreamData - sentBytes);
-    }
-
-    public Long getResetErrorCode() {
-        return resetErrorCode;
-    }
-
     public void setResetErrorCode(Long resetErrorCode) {
         this.resetErrorCode = resetErrorCode;
-    }
-
-    public Long getStopSendingErrorCode() {
-        return stopSendingErrorCode;
     }
 
     public void setStopSendingErrorCode(Long stopSendingErrorCode) {
