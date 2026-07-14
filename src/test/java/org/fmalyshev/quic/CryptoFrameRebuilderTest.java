@@ -37,7 +37,7 @@ class CryptoFrameRebuilderTest {
 
     /** Wrap a plain byte array in a ByteBuffer positioned at 0. */
     private static PoolBuffer buf(byte... bytes) {
-        return new BorrowedPoolBuffer(mock(RootPoolBuffer.class), ByteBuffer.wrap(bytes));
+        return new RootPoolBuffer(ByteBuffer.wrap(bytes), true);
     }
 
     /** Create a sequential payload of {@code length} bytes starting at {@code start}. */

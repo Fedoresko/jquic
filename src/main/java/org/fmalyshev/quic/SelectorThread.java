@@ -10,6 +10,7 @@ import org.jctools.queues.SpscLinkedQueue;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.DatagramChannel;
@@ -59,7 +60,7 @@ public class SelectorThread implements Runnable {
         }
     }
 
-    public SelectorThread(int threadId, DatagramChannel channel, ConcurrentHashMap<Long, Integer> cidToSelectorMap) {
+    public SelectorThread(int threadId, DatagramChannel channel, ConcurrentHashMap<Long, Integer> cidToSelectorMap) throws IOException {
         this.threadId = threadId;
         this.channel = new QuicDatagramChannel(channel);
         this.forwardedPackets = new SpscLinkedQueue<>();
@@ -96,8 +97,6 @@ public class SelectorThread implements Runnable {
     public void run() {
         try {
             // Configure channel for non-blocking to allow polling forwarded queue
-            channel.configureBlocking(false);
-
             PoolBuffer buffer = QuicEngine.getPool().requestReadBuffer();
 
             int[] metricsHolder = new int[1];

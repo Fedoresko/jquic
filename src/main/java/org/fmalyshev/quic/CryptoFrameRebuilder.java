@@ -106,10 +106,10 @@ public class CryptoFrameRebuilder {
                 }
                 // Extract the slice of `incoming` that covers [gapStart, gapEnd)
                 int sliceOffset = gapStart - offset;
-                int sliceLen    = gapEnd - gapStart;
                 PoolBuffer fragment = data.borrow();
+                int sliceLen  = Math.min(gapEnd - gapStart, fragment.buf().remaining() - sliceOffset);
                 fragment.buf().position(fragment.buf().position() + sliceOffset);
-                fragment.buf().limit(fragment.buf().position() + sliceOffset + sliceLen);
+                fragment.buf().limit(fragment.buf().position() + sliceLen);
                 earlyFragments.put(gapStart, fragment);
                 segments.put(gapStart, gapEnd);
             }

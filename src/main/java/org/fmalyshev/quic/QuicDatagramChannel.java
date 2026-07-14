@@ -18,8 +18,9 @@ public class QuicDatagramChannel {
     private final DatagramChannel channel;
     private final LinuxEcnSocket socket;
 
-    public QuicDatagramChannel(DatagramChannel channel) {
+    public QuicDatagramChannel(DatagramChannel channel) throws IOException {
         this.channel = channel;
+        channel.configureBlocking(false);
         socket = getLinuxEcnSocket(channel);
     }
 
@@ -27,15 +28,9 @@ public class QuicDatagramChannel {
         try {
             return new LinuxEcnSocket(getNativeFd(channel));
         } catch (Exception e) {
-            logger.warn("Failed to open Linux EcnSocket. ECN is not supported.", e);
+            logger.warn("Failed to open Linux EcnSocket. ECN is not supported.");
             return null;
         }
-    }
-
-    public final SelectableChannel configureBlocking(boolean block)
-            throws IOException
-    {
-        return channel.configureBlocking(block);
     }
 
     public int send(ByteBuffer src, SocketAddress target)

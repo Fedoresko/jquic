@@ -4,6 +4,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.lang.foreign.*;
+import java.lang.invoke.MethodHandle;
 import java.lang.reflect.Field;
 import java.lang.reflect.InaccessibleObjectException;
 import java.nio.channels.DatagramChannel;
@@ -21,56 +23,137 @@ public class BpfRouting {
     private static boolean isReady = false;
     private static boolean initialized;
 
+    private static final MethodHandle bpf_update_map_i;
+    private static final MethodHandle bpf_update_map_l;
+    private static final MethodHandle bpf_delete_map_i;
+    private static final MethodHandle bpf_delete_map_l;
+    private static final MethodHandle bpf_check_map;
+    private static final MethodHandle bpf_attach_socket;
+    private static final MethodHandle bpf_set_affinity;
+
     static {
+        MethodHandle update_i = null;
+        MethodHandle update_l = null;
+        MethodHandle delete_i = null;
+        MethodHandle delete_l = null;
+        MethodHandle check = null;
+        MethodHandle attach = null;
+        MethodHandle affinity = null;
         try {
             System.loadLibrary("javabpf");
+            SymbolLookup lookup = SymbolLookup.loaderLookup();
+            Linker linker = Linker.nativeLinker();
+
+            update_i = linker.downcallHandle(
+                lookup.find("bpf_update_map_i").orElseThrow(),
+                FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT),
+                Linker.Option.critical(true)
+            );
+            update_l = linker.downcallHandle(
+                lookup.find("bpf_update_map_l").orElseThrow(),
+                FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT),
+                Linker.Option.critical(true)
+            );
+            delete_i = linker.downcallHandle(
+                lookup.find("bpf_delete_map_i").orElseThrow(),
+                FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_INT),
+                Linker.Option.critical(true)
+            );
+            delete_l = linker.downcallHandle(
+                lookup.find("bpf_delete_map_l").orElseThrow(),
+                FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG),
+                Linker.Option.critical(true)
+            );
+            check = linker.downcallHandle(
+                lookup.find("bpf_check_map").orElseThrow(),
+                FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS)
+            );
+            attach = linker.downcallHandle(
+                lookup.find("bpf_attach_socket").orElseThrow(),
+                FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_INT)
+            );
+            affinity = linker.downcallHandle(
+                lookup.find("bpf_set_affinity").orElseThrow(),
+                FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_INT)
+            );
+
             initialized = true;
-        } catch (UnsatisfiedLinkError e) {
+        } catch (Throwable e) {
             initialized = false;
         }
+        bpf_update_map_i = update_i;
+        bpf_update_map_l = update_l;
+        bpf_delete_map_i = delete_i;
+        bpf_delete_map_l = delete_l;
+        bpf_check_map = check;
+        bpf_attach_socket = attach;
+        bpf_set_affinity = affinity;
     }
-
-    // Native declaration matching the Linux bpf_map_update_elem system call
-    private static native int nativeUpdateBpfMapI(String mapPath, int key, int socketFd);
-
-    private static native int nativeUpdateBpfMapL(String mapPath, long key, int socketFd);
-
-    private static native int nativeDeleteFromBpfMapI(String mapPath, int key);
-
-    private static native int nativeDeleteFromBpfMapL(String mapPath, long key);
-
-    private static native int checkBpfMap(String mapPath);
-
-    private static native int attachEBpfToSocket(String progPath, int socketFd);
-
-    private static native int setAffinity(int pid, long[] mask);
 
     private static void setDedicatedCpu(int pid, int cpu) {
         long[] mask = new long[cpu / 64 + 1];
         mask[cpu / 64] = 1L << cpu;
-        setAffinity(pid, mask);
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment maskSegment = arena.allocateFrom(ValueLayout.JAVA_LONG, mask);
+            bpf_set_affinity.invokeExact(pid, maskSegment, (int) mask.length);
+        } catch (Throwable t) {
+            logger.error("Failed to set CPU affinity", t);
+        }
     }
 
     private static void registerSocketInBpf(int fd, int mapIndex) {
-        // 3. Insert Java's own FD directly into the pinned BPF map
-        int result = nativeUpdateBpfMapI(BPF_MAP_SOCKARRAY, mapIndex, fd);
-        if (result < 0) {
-            throw new RuntimeException("Failed to register runtime socket in eBPF map. Error code: " + result);
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment pathSegment = arena.allocateFrom(BPF_MAP_SOCKARRAY);
+            int result = (int) bpf_update_map_i.invokeExact(pathSegment, mapIndex, fd);
+            if (result < 0) {
+                throw new RuntimeException("Failed to register runtime socket in eBPF map. Error code: " + result);
+            }
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Throwable t) {
+            throw new RuntimeException(t);
         }
     }
 
     private static void updateRouteMapping(long cid, int selectorId) {
-        // 3. Insert Java's own FD directly into the pinned BPF map
-        int result = nativeUpdateBpfMapL(BPF_MAP_ROUTES, cid, selectorId);
-        if (result < 0) {
-            throw new RuntimeException("Failed to register BPF update route mapping. Error code: " + result);
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment pathSegment = arena.allocateFrom(BPF_MAP_ROUTES);
+            int result = (int) bpf_update_map_l.invokeExact(pathSegment, cid, selectorId);
+            if (result < 0) {
+                throw new RuntimeException("Failed to register BPF update route mapping. Error code: " + result);
+            }
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Throwable t) {
+            throw new RuntimeException(t);
         }
     }
 
     private static void removeRouteMapping(long cid) {
-        int result = nativeDeleteFromBpfMapL(BPF_MAP_ROUTES, cid);
-        if (result < 0) {
-            throw new RuntimeException("Failed to remove BPF route mapping. Error code: " + result);
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment pathSegment = arena.allocateFrom(BPF_MAP_ROUTES);
+            int result = (int) bpf_delete_map_l.invokeExact(pathSegment, cid);
+            if (result < 0) {
+                throw new RuntimeException("Failed to remove BPF route mapping. Error code: " + result);
+            }
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Throwable t) {
+            throw new RuntimeException(t);
+        }
+    }
+
+    private static void attachEBpfToSocket(String progPath, int socketFd) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment pathSegment = arena.allocateFrom(progPath);
+            int result = (int) bpf_attach_socket.invokeExact(pathSegment, socketFd);
+            if (result < 0) {
+                throw new RuntimeException("Failed to attach eBPF program. Error code: " + result);
+            }
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Throwable t) {
+            throw new RuntimeException(t);
         }
     }
 
@@ -83,8 +166,16 @@ public class BpfRouting {
         if (initialized) {
             logger.info("Initializing BPF routing...");
 
-            isReady = checkBpfMap(BPF_MAP_ROUTES) == 0 &&
-                    checkBpfMap(BPF_MAP_SOCKARRAY) == 0;
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment routesPath = arena.allocateFrom(BPF_MAP_ROUTES);
+                MemorySegment sockarrayPath = arena.allocateFrom(BPF_MAP_SOCKARRAY);
+                
+                isReady = (int) bpf_check_map.invokeExact(routesPath) == 0 &&
+                        (int) bpf_check_map.invokeExact(sockarrayPath) == 0;
+            } catch (Throwable t) {
+                isReady = false;
+                logger.error("Failed to check BPF maps", t);
+            }
 
             logger.info("Available routing: " + isReady);
         }

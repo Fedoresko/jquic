@@ -1,11 +1,16 @@
 # Use the official minimal Debian slim image
+FROM azul/zulu-openjdk:22-latest AS java-vendor
 FROM debian:stable-slim
+
+ENV JAVA_HOME=/usr/lib/jvm/zulu22-ca
+ENV PATH="${JAVA_HOME}/bin:${PATH}"
+COPY --from=java-vendor /usr/lib/jvm/zulu22-ca-amd64 $JAVA_HOME
+
 LABEL authors="fmmalyshev"
 
-# Install OpenJDK, vsftpd (FTP server), and clean cache to keep the image slim
+# Install vsftpd (FTP server), and clean cache to keep the image slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
     lsof \
-    openjdk-21-jdk-headless \
     vsftpd \
     curl \
     ca-certificates \
@@ -52,17 +57,15 @@ COPY src/main/c/ /app/
 RUN gcc -O2 /app/loader.c -o /app/loader -lbpf -lelf && \
     clang -O2 -g -target bpf -I/usr/include/x86_64-linux-gnu -c quic_router.bpf.c -o quic_router.bpf.o
 
-RUN echo "export J_HOME=$(java -XshowSettings:properties -version 2>&1 | grep 'java.home' | awk '{print $3}')" >> /etc/build_env
-
-RUN  . /etc/build_env && gcc -shared -fPIC \
-    -I"${J_HOME}/include" \
-    -I"${J_HOME}/include/linux" \
+RUN  gcc -shared -fPIC \
+    -I"${JAVA_HOME}/include" \
+    -I"${JAVA_HOME}/include/linux" \
     javabpf.c -lbpf \
     -o libjavabpf.so
 
-RUN  . /etc/build_env && gcc -shared -fPIC \
-    -I"${J_HOME}/include" \
-    -I"${J_HOME}/include/linux" \
+RUN  gcc -shared -fPIC \
+    -I"${JAVA_HOME}/include" \
+    -I"${JAVA_HOME}/include/linux" \
     quic_ecn.c -lbpf \
     -o libquic_ecn.so
 
@@ -88,7 +91,7 @@ echo "Starting compiled BPF C program with root privileges..."\n\
 strace -e bpf /app/loader &&\n\
 \n\
 # Start the Java application in the background and capture its PID\n\
-su - fedoresko -c "cd /app && java -XX:+UnlockDiagnosticVMOptions -XX:+DebugNonSafepoints -Djava.net.preferIPv4Stack=true\
+su - fedoresko -c "cd /app && ${JAVA_HOME}/bin/java -XX:+UnlockDiagnosticVMOptions -XX:+DebugNonSafepoints -Djava.net.preferIPv4Stack=true\
    --add-opens java.base/sun.nio.ch=ALL-UNNAMED --add-opens java.base/java.io=ALL-UNNAMED -Dlog.level=WARN\
    -agentpath:/opt/async-profiler/lib/libasyncProfiler.so=start,event=cpu,alloc=2m,loop=1m,file=/home/fedoresko/profile-%t.jfr\
    -jar jquic.jar" &\n\
