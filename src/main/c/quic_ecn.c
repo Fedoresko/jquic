@@ -1,3 +1,5 @@
+#define _GNU_SOURCE
+
 #include <jni.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -117,7 +119,7 @@ JNIEXPORT jobject JNICALL Java_org_fmalyshev_quic_LinuxEcnSocket_nativeReceive(
 
     // Instantiate and return the matching Java InetSocketAddress instance
     jclass inet_sock_addr_clazz = (*env)->FindClass(env, "java/net/InetSocketAddress");
-    jmethodID isa_constructor = (*env)->GetMethodID(env, inet_sock_addr_clazz, "<init>", "(Ljava/net/InetAddress;I)V");
+        jmethodID isa_constructor = (*env)->GetMethodID(env, inet_sock_addr_clazz, "<init>", "(Ljava/net/InetAddress;I)V");
 
     return (*env)->NewObject(env, inet_sock_addr_clazz, isa_constructor, ip_address_obj, port);
 }

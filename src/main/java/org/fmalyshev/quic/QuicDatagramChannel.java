@@ -27,7 +27,7 @@ public class QuicDatagramChannel {
         try {
             return new LinuxEcnSocket(getNativeFd(channel));
         } catch (Exception e) {
-            logger.warn("Failed to open Linux EcnSocket. ECN is not supported.");
+            logger.warn("Failed to open Linux EcnSocket. ECN is not supported.", e);
             return null;
         }
     }

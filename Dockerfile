@@ -52,21 +52,23 @@ COPY src/main/c/ /app/
 RUN gcc -O2 /app/loader.c -o /app/loader -lbpf -lelf && \
     clang -O2 -g -target bpf -I/usr/include/x86_64-linux-gnu -c quic_router.bpf.c -o quic_router.bpf.o
 
-RUN J_HOME=$(java -XshowSettings:properties -version 2>&1 | grep 'java.home' | awk '{print $3}') && \
-    echo "java home: ${J_HOME}" && \
-    gcc -shared -fPIC \
+RUN echo "export J_HOME=$(java -XshowSettings:properties -version 2>&1 | grep 'java.home' | awk '{print $3}')" >> /etc/build_env
+
+RUN  . /etc/build_env && gcc -shared -fPIC \
     -I"${J_HOME}/include" \
     -I"${J_HOME}/include/linux" \
     javabpf.c -lbpf \
-    -o libjavabpf.so && \
-    gcc -shared -fPIC \
+    -o libjavabpf.so
+
+RUN  . /etc/build_env && gcc -shared -fPIC \
     -I"${J_HOME}/include" \
     -I"${J_HOME}/include/linux" \
     quic_ecn.c -lbpf \
-    -o quic_ecn.so && \
-    mkdir -p /usr/java/packages/lib && \
+    -o libquic_ecn.so
+
+RUN mkdir -p /usr/java/packages/lib && \
     cp libjavabpf.so /usr/java/packages/lib && \
-    cp quic_ecn.so /usr/java/packages/lib
+    cp libquic_ecn.so /usr/java/packages/lib
 
 # Give fedoresko ownership of the app directory for FTP uploads
 RUN chown -R fedoresko:fedoresko /app

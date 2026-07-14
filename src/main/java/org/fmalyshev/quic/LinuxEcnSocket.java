@@ -1,10 +1,14 @@
 package org.fmalyshev.quic;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.IOException;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 
 public class LinuxEcnSocket {
+    private static final Logger log = LoggerFactory.getLogger(LinuxEcnSocket.class);
     private static boolean isJniLibraryLoaded = false;
 
     static {
@@ -12,6 +16,7 @@ public class LinuxEcnSocket {
             System.loadLibrary("quic_ecn");
             isJniLibraryLoaded = true;
         } catch (Throwable t) {
+            log.error("Failed to load quic_ecn", t);
             isJniLibraryLoaded = false;
         }
     }
