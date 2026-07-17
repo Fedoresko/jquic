@@ -42,7 +42,7 @@ public class QuicCrypto {
         (byte)0xcc, (byte)0xbb, (byte)0x7f, (byte)0x0a
     };
 
-    private static final String CIPHER_SUITE = "TLS_AES_128_GCM_SHA256";
+    public static final String CIPHER_SUITE = "TLS_AES_128_GCM_SHA256";
     private static final int AES_128_KEY_LENGTH = 16;
 
     // TLS 1.3 identifiers used during ClientHello parsing and ServerHello construction
@@ -72,151 +72,6 @@ public class QuicCrypto {
      */
     public static final int GCM_TAG_LENGTH = 16;
     public static final int GCM_NONCE_LENGTH = 12;
-
-    /**
-     * TLS metadata associated with a QUIC connection.
-     *
-     * <p>Acts as the running state object across the entire TLS 1.3 key schedule
-     * (RFC 8446 Section 7). It is created first — before any crypto — and then
-     * populated gradually as the handshake progresses:
-     * <ol>
-     *   <li>Constructed with the Early Secret.</li>
-     *   <li>Stage 1 ({@link QuicCrypto#processClientHello}): Handshake secrets,
-     *       ALPN, randoms, and HP keys are set.</li>
-     *   <li>Stage 2 ({@link QuicCrypto#createApplicationKeys}): 1-RTT secrets
-     *       are derived once the full transcript is available.</li>
-     * </ol>
-     *
-     * <p>A running SHA-256 transcript hash is maintained by calling
-     * {@link #updateTranscript(byte[])} with each TLS handshake message in wire order:
-     * ClientHello → ServerHello → EncryptedExtensions → Certificate →
-     * CertificateVerify → (server) Finished → (client) Finished.
-     * Snapshot the current hash at any time via {@link #transcriptHash()}.
-     */
-    public static class TlsMetadata {
-
-        // ---- Set at construction (always present) ----
-
-        /**
-         * Early Secret = HKDF-Extract(salt=0, IKM=0) without PSK.
-         * Retained so future PSK support only needs to change the derivation here.
-         */
-        public byte[] earlySecret;
-
-        /** Running SHA-256 digest of handshake messages in wire order. */
-        private final java.security.MessageDigest transcriptDigest;
-
-        // ---- Set during stage 1 (processClientHello) ----
-
-        public byte [] originalDCid;
-        public long negotiatedIdleTimeoutMs;
-
-        /** Handshake secret bytes retained for Master Secret derivation in stage 2. */
-        byte[] handshakeSecretBytes;
-
-        public PacketProtectionKeysWithHP clientInitialKeys;
-        public PacketProtectionKeysWithHP serverInitialKeys;
-        public PacketProtectionKeysWithHP clientHandshakeKeys;
-        public byte [] clientHandshakeTrafficSecret;
-        public PacketProtectionKeysWithHP serverHandshakeKeys;
-        public byte [] serverHandshakeTrafficSecret;
-        public PacketProtectionKeys clientApplicationKeys;
-        public PacketProtectionKeys serverApplicationKeys;
-        public PacketProtectionKeys prevClientApplicationKeys;
-        public PacketProtectionKeys prevServerApplicationKeys;
-        public byte [] clientApplicationTrafficSecret;
-        public byte [] serverApplicationTrafficSecret;
-        public byte[] clientApplicationHeaderProtection;
-        public byte[] serverApplicationHeaderProtection;
-
-        public byte currentPhase;
-        public long lastPhaseSwitchPacketNumber = -1;
-
-        public ClientMetadataNegotiated clientMetadata;
-
-        /**
-         * Server's ephemeral public key bytes (32 bytes).
-         * Set during stage 1; included in the ServerHello key_share extension.
-         */
-        public byte[] serverEphemeralPublicKey;
-        public short selectedKeyScheme;
-
-        /**
-         * Selected signature algorithm
-         */
-        public Short selectedSignatureScheme;
-
-        /**
-         * Creates a fresh {@code TlsMetadata} seeded with the Early Secret.
-         * All other fields are set by the processing methods as the handshake progresses.
-         */
-        public TlsMetadata() {
-            try {
-                this.transcriptDigest = java.security.MessageDigest.getInstance("SHA-256");
-            } catch (java.security.NoSuchAlgorithmException e) {
-                throw new IllegalStateException("SHA-256 not available", e);
-            }
-        }
-
-        /**
-         * Feeds raw TLS handshake message bytes into the running transcript hash.
-         * Must be called in wire order:
-         * ClientHello → ServerHello → EncryptedExtensions → Certificate →
-         * CertificateVerify → (server) Finished → (client) Finished.
-         *
-         * @param message raw TLS handshake message bytes (including 4-byte header:
-         *                msg_type + 3-byte length)
-         */
-        public synchronized void updateTranscript(ByteBuffer message) {
-            message.mark();
-            transcriptDigest.update(message);
-            message.reset();
-        }
-
-        public synchronized void updateTranscript(byte[] message) {
-            transcriptDigest.update(message);
-        }
-
-        /**
-         * Resets the running transcript digest to its initial (empty) state.
-         *
-         * <p>Used during HelloRetryRequest processing (RFC 8446 §4.4.1): after sending
-         * an HRR the transcript must be replaced with a synthetic {@code message_hash}
-         * record followed by the HRR itself. Call this method, then feed the synthetic
-         * record and the HRR via {@link #updateTranscript}.
-         */
-        public synchronized void resetTranscript() {
-            transcriptDigest.reset();
-        }
-        /**
-         * Returns a non-destructive snapshot of the current transcript hash.
-         *
-         * @return 32-byte SHA-256 digest of all messages fed so far
-         */
-        public synchronized byte[] transcriptHash() {
-            try {
-                return ((java.security.MessageDigest) transcriptDigest.clone()).digest();
-            } catch (CloneNotSupportedException e) {
-                throw new IllegalStateException("MessageDigest.clone() not supported", e);
-            }
-        }
-
-        /**
-         * Returns {@code true} if 1-RTT keys have been derived (stage 2 complete).
-         */
-        public boolean hasApplicationKeys() {
-            return clientApplicationKeys != null;
-        }
-
-        /**
-         * Sets the 1-RTT application keys.
-         * Called by {@link QuicCrypto#createApplicationKeys} once the transcript is complete.
-         */
-        void setApplicationKeys(PacketProtectionKeys clientApplicationKeys, PacketProtectionKeys serverApplicationKeys) {
-            this.clientApplicationKeys = clientApplicationKeys;
-            this.serverApplicationKeys = serverApplicationKeys;
-        }
-    }
 
     /**
      * Packet protection keys with the header protection key for a specific encryption level.
@@ -260,43 +115,6 @@ public class QuicCrypto {
     }
 
     /**
-     * All data extracted from a ClientHello message.
-     */
-    public static class ClientMetadataNegotiated {
-        /** Negotiated ALPN protocol (e.g. "h3"), or null if not provided. */
-        public final String alpn;
-        /** max_idle_timeout from QUIC transport parameters (0 if absent). */
-        public final long maxIdleTimeoutMs;
-
-        public final long maxUdpPayloadSize;
-        public final long initialMaxData;
-        public final long initialMaxStreamDataBidiLocal;
-        public final long initialMaxStreamDataBidiRemote;
-        public final long initialMaxStreamDataUni;
-        public final long initialMaxStreamsBidi;
-        public final long initialMaxStreamsUni;
-        public final List<Short> supportedSignatures;
-        public final List<Short> supportedGroups;
-        public final Map<Short, byte[]> clientKeys;
-        public final String selectedCipherSuite = CIPHER_SUITE;
-
-        public ClientMetadataNegotiated(String alpn, long maxIdleTimeoutMs, List<Short> supportedGroups, Map<Short, byte[]> clientKeys, long maxUdpPayloadSize, long initialMaxData, long initialMaxStreamDataBidiLocal, long initialMaxStreamDataBidiRemote, long initialMaxStreamDataUni, long initialMaxStreamsBidi, long initialMaxStreamsUni, List<Short> supportedSignatures) {
-            this.alpn = alpn;
-            this.maxIdleTimeoutMs = maxIdleTimeoutMs;
-            this.maxUdpPayloadSize = maxUdpPayloadSize;
-            this.initialMaxData = initialMaxData;
-            this.initialMaxStreamDataBidiLocal = initialMaxStreamDataBidiLocal;
-            this.initialMaxStreamDataBidiRemote = initialMaxStreamDataBidiRemote;
-            this.initialMaxStreamDataUni = initialMaxStreamDataUni;
-            this.initialMaxStreamsBidi = initialMaxStreamsBidi;
-            this.initialMaxStreamsUni = initialMaxStreamsUni;
-            this.supportedSignatures = supportedSignatures;
-            this.supportedGroups = supportedGroups;
-            this.clientKeys = clientKeys;
-        }
-    }
-
-    /**
      * Fully parses a ClientHello message, validating required TLS 1.3 fields
      * and extracting the data needed for key derivation.
      *
@@ -312,7 +130,7 @@ public class QuicCrypto {
      * @return Parsed and validated ClientHello data
      * @throws CryptoException if a required field is missing or unsupported
      */
-    private static ClientMetadataNegotiated parseClientHello(ByteBuffer clientHello) throws CryptoException {
+    public static ConnectionMetadata.ClientMetadataNegotiated parseClientHello(ByteBuffer clientHello) throws CryptoException {
         ByteBuffer buf = clientHello.duplicate();
 
         try {
@@ -370,6 +188,8 @@ public class QuicCrypto {
             long initialMaxStreamDataUni = 0;
             long initialMaxStreamsBidi = 0;
             long initialMaxStreamsUni = 0;
+            long ackDelayExponent = 0;
+            long activeConnectionIdLimit = 0;
             List<Short> signatures = new ArrayList<>();
             List<Short> supportedGroups = new ArrayList<>();
             Map<Short, byte[]> clientKeys = new HashMap<>();
@@ -468,6 +288,10 @@ public class QuicCrypto {
                                 initialMaxStreamsBidi = QuicVarint.read(buf);
                             } else if (paramId == 0x09) {
                                 initialMaxStreamsUni = QuicVarint.read(buf);
+                            } else if (paramId == 0x0A) {
+                                ackDelayExponent = QuicVarint.read(buf);
+                            } else if (paramId == 0x0E) {
+                                activeConnectionIdLimit = QuicVarint.read(buf);
                             }
                             
                             // Ensure we consume exactly paramLen bytes
@@ -496,7 +320,7 @@ public class QuicCrypto {
 
             logger.warn("Initials negotiated max_data {}, max stream data bidi local {}, max stream data bidi remote {}, max stream data uni {}, max streams bidi {}, max streams uni {}", initialMaxData, initialMaxStreamDataBidiLocal, initialMaxStreamDataBidiRemote, initialMaxStreamDataUni, initialMaxStreamsBidi, initialMaxStreamsUni);
 
-            return new ClientMetadataNegotiated(alpn, maxIdleTimeout, supportedGroups, clientKeys, maxUdpPayloadSize, initialMaxData, initialMaxStreamDataBidiLocal, initialMaxStreamDataBidiRemote, initialMaxStreamDataUni, initialMaxStreamsBidi, initialMaxStreamsUni, signatures);
+            return new ConnectionMetadata.ClientMetadataNegotiated(alpn, maxIdleTimeout, supportedGroups, clientKeys, maxUdpPayloadSize, initialMaxData, initialMaxStreamDataBidiLocal, initialMaxStreamDataBidiRemote, initialMaxStreamDataUni, initialMaxStreamsBidi, initialMaxStreamsUni, signatures, ackDelayExponent, activeConnectionIdLimit);
 
         } catch (CryptoException ce) {
             throw ce;
@@ -591,7 +415,7 @@ public class QuicCrypto {
      * Stage 1 of the TLS 1.3 key schedule: processes a ClientHello and derives
      * Handshake-level traffic secrets.
      *
-     * <p>{@link TlsMetadata} is created first — seeded with the Early Secret —
+     * <p>{@link ConnectionMetadata} is created first — seeded with the Early Secret —
      * and used as the running state object throughout. Each derived value is stored
      * into it immediately, making the metadata the authoritative source of truth.
      *
@@ -600,15 +424,14 @@ public class QuicCrypto {
      * a fresh server ephemeral key pair is generated, and the shared secret is computed.
      *
      * <p>The 1-RTT keys are not produced here; call
-     * {@link #createApplicationKeys(TlsMetadata)} after the client Finished is verified.
+     * {@link #createApplicationKeys(ConnectionMetadata)} after the client Finished is verified.
      *
      * @param clientHello The raw ClientHello bytes (including the 4-byte TLS header)
-     * @return {@link TlsMetadata} with Handshake secrets and running transcript;
-     *         {@link TlsMetadata#hasApplicationKeys()} returns {@code false}
+     * @return {@link ConnectionMetadata} with Handshake secrets and running transcript;
      * @throws CryptoException if the ClientHello is malformed, missing required extensions,
      *         advertises unsupported parameters, or key derivation fails
      */
-    public static TlsMetadata processClientHello(TlsMetadata metadata, ByteBuffer clientHello) throws CryptoException {
+    public static ConnectionMetadata processClientHello(ConnectionMetadata metadata, ByteBuffer clientHello) throws CryptoException {
         try {
             // ── Step 1: Create TlsMetadata — the golden source of state.
             // Early Secret = HKDF-Extract(salt=0, IKM=0) [RFC 8446 §7.1, no PSK]
@@ -622,7 +445,7 @@ public class QuicCrypto {
             metadata.updateTranscript(clientHelloBytes);
 
             // ── Step 3: Parse and validate the ClientHello.
-            ClientMetadataNegotiated parsed = parseClientHello(clientHello);
+            ConnectionMetadata.ClientMetadataNegotiated parsed = parseClientHello(clientHello);
             metadata.clientMetadata = parsed;
 
             // ── Step 4: Set negotiated application-level parameters.
@@ -674,7 +497,7 @@ public class QuicCrypto {
         }
     }
 
-    public static void generateHandshakeSecrets(TlsMetadata metadata) throws GeneralSecurityException {
+    public static void generateHandshakeSecrets(ConnectionMetadata metadata) throws GeneralSecurityException {
         // Context = transcript hash up to and including ClientHello.
         // ServerHello is appended later by createInitialResponse.
         byte[] transcriptSoFar = metadata.transcriptHash();
@@ -862,15 +685,15 @@ public class QuicCrypto {
      * Stage 2 of the TLS 1.3 key schedule: derives the Master Secret and
      * 1-RTT (application) traffic secrets once the handshake transcript is complete.
      *
-     * <p>The transcript hash is taken directly from {@link TlsMetadata#transcriptHash()},
+     * <p>The transcript hash is taken directly from {@link ConnectionMetadata#transcriptHash()},
      * which must have been updated with all messages up to and including the client
      * Finished before this method is called.
      *
-     * @param metadata The {@link TlsMetadata} returned by {@link #processClientHello},
+     * @param metadata The {@link ConnectionMetadata} returned by {@link #processClientHello},
      *                 whose transcript digest must be fully up-to-date
      * @throws CryptoException if key derivation fails
      */
-    public static void createApplicationKeys(TlsMetadata metadata) throws CryptoException {
+    public static void createApplicationKeys(ConnectionMetadata metadata) throws CryptoException {
         try {
             // Master Secret = HKDF-Extract(Derive-Secret(Handshake Secret, "derived", ""), 0)
             byte[] derivedFromHandshake = hkdfExpandLabel(
@@ -907,7 +730,7 @@ public class QuicCrypto {
         }
     }
 
-    public static void rotateApplicationKeys(TlsMetadata metadata) throws CryptoException {
+    public static void rotateApplicationKeys(ConnectionMetadata metadata) throws CryptoException {
         try {
             metadata.prevClientApplicationKeys = metadata.clientApplicationKeys;
             metadata.prevServerApplicationKeys = metadata.serverApplicationKeys;
@@ -971,11 +794,11 @@ public class QuicCrypto {
      *
      * <p>After this call the transcript is ready to receive ClientHello2.
      *
-     * @param metadata live {@link TlsMetadata}; its transcript is updated in-place
+     * @param metadata live {@link ConnectionMetadata}; its transcript is updated in-place
      * @param hrrCryptoFrame the QUIC CRYPTO frame returned by
      *                       is extracted from it (bytes after the 3-varint CRYPTO header)
      */
-    public static void applyHelloRetryRequestToTranscript(TlsMetadata metadata, ByteBuffer hrrCryptoFrame) {
+    public static void applyHelloRetryRequestToTranscript(ConnectionMetadata metadata, ByteBuffer hrrCryptoFrame) {
         // ── Step 1: snapshot Hash(ClientHello1) before we touch anything ─────────
         byte[] ch1Hash = metadata.transcriptHash();
 
@@ -1026,9 +849,9 @@ public class QuicCrypto {
      *   ExtensionType (2) | data_length (2) | data
      * </pre>
      *
-     * @param metadata the live {@link TlsMetadata} for this connection
+     * @param metadata the live {@link ConnectionMetadata} for this connection
      */
-    public static void putEncryptedExtensions(TlsMetadata metadata, long cid, ChunkedOutputStreamWithAmendments output) throws IOException {
+    public static void putEncryptedExtensions(ConnectionMetadata metadata, long cid, ChunkedOutputStreamWithAmendments output) throws IOException {
         // Zero-copy: single pre-allocated buffer, all lengths back-filled in place.
         // Layout:
         //   [0]      HandshakeType (1)          = 0x08
@@ -1091,38 +914,38 @@ public class QuicCrypto {
 
         // initial_max_data  (param id 0x04)
         QuicVarint.write(output, 0x04);
-        QuicVarint.write(output, QuicVarint.sizeOf(10485760));
-        QuicVarint.write(output,10485760);
+        QuicVarint.write(output, QuicVarint.sizeOf(metadata.serverInitialStreamLimits.maxData));
+        QuicVarint.write(output,metadata.serverInitialStreamLimits.maxData);
 
         //initial_max_stream_data_bidi_local: 0x05
         QuicVarint.write(output, 0x05);
-        QuicVarint.write(output, QuicVarint.sizeOf(10485760));
-        QuicVarint.write(output,10485760);
+        QuicVarint.write(output, QuicVarint.sizeOf(metadata.serverInitialStreamLimits.maxStreamDataBidiLocal));
+        QuicVarint.write(output,metadata.serverInitialStreamLimits.maxStreamDataBidiLocal);
 
         //initial_max_stream_data_bidi_remote: 0x06
         QuicVarint.write(output, 0x06);
-        QuicVarint.write(output, QuicVarint.sizeOf(10485760));
-        QuicVarint.write(output,10485760);
+        QuicVarint.write(output, QuicVarint.sizeOf(metadata.serverInitialStreamLimits.maxStreamDataBidiRemote));
+        QuicVarint.write(output,metadata.serverInitialStreamLimits.maxStreamDataBidiRemote);
 
         //initial_max_stream_data_uni: 0x07
         QuicVarint.write(output, 0x07);
-        QuicVarint.write(output, QuicVarint.sizeOf(10485760));
-        QuicVarint.write(output,10485760);
+        QuicVarint.write(output, QuicVarint.sizeOf(metadata.serverInitialStreamLimits.maxStreamDataUni));
+        QuicVarint.write(output, metadata.serverInitialStreamLimits.maxStreamDataUni);
 
         // initial_max_streams_bidi (param id 0x08)
         QuicVarint.write(output, 0x08);
-        QuicVarint.write(output, QuicVarint.sizeOf(100));
-        QuicVarint.write(output,100);
+        QuicVarint.write(output, QuicVarint.sizeOf(metadata.serverInitialStreamLimits.maxBidi));
+        QuicVarint.write(output,metadata.serverInitialStreamLimits.maxBidi);
 
         // initial_max_streams_uni  (param id 0x09)
         QuicVarint.write(output, 0x09);
-        QuicVarint.write(output, QuicVarint.sizeOf(100));
-        QuicVarint.write(output,100);
+        QuicVarint.write(output, QuicVarint.sizeOf(metadata.serverInitialStreamLimits.maxUni));
+        QuicVarint.write(output,metadata.serverInitialStreamLimits.maxUni);
 
         // max_udp_payload_size
         QuicVarint.write(output, 0x03);
-        QuicVarint.write(output, QuicVarint.sizeOf(metadata.clientMetadata.maxUdpPayloadSize));
-        QuicVarint.write(output, metadata.clientMetadata.maxUdpPayloadSize);
+        QuicVarint.write(output, QuicVarint.sizeOf(1400));
+        QuicVarint.write(output, 1400);
 
 
         // max_idle_timeout (param id 0x01)
@@ -1168,10 +991,10 @@ public class QuicCrypto {
      * </pre>
      * where {@code finished_key = HKDF-Expand-Label(server_hs_secret, "finished", "", 32)}.
      *
-     * @param metadata the live {@link TlsMetadata}; its transcript must be fully up-to-date
+     * @param metadata the live {@link ConnectionMetadata}; its transcript must be fully up-to-date
      * @throws CryptoException if HMAC computation fails
      */
-    public static void createServerFinished(TlsMetadata metadata, ChunkedOutputStreamWithAmendments output) throws CryptoException, IOException {
+    public static void createServerFinished(ConnectionMetadata metadata, ChunkedOutputStreamWithAmendments output) throws CryptoException, IOException {
         try {
             byte[] finishedKey = hkdfExpandLabel(metadata.serverHandshakeTrafficSecret, "finished", new byte[0], 32);
             byte[] transcriptHash = metadata.transcriptHash();
@@ -1262,10 +1085,10 @@ public class QuicCrypto {
      *
      * <p>If no keystore is configured an empty CertificateVerify stub is returned.
      *
-     * @param metadata the live {@link TlsMetadata}; transcript must include Certificate
+     * @param metadata the live {@link ConnectionMetadata}; transcript must include Certificate
      * @throws CryptoException if signing fails unexpectedly
      */
-    public static void putCertificateVerify(TlsMetadata metadata, ChunkedOutputStreamWithAmendments output) throws CryptoException, IOException {
+    public static void putCertificateVerify(ConnectionMetadata metadata, ChunkedOutputStreamWithAmendments output) throws CryptoException, IOException {
         byte[] contextString = "TLS 1.3, server CertificateVerify"
                 .getBytes(java.nio.charset.StandardCharsets.US_ASCII);
         byte[] transcriptHash = metadata.transcriptHash();
@@ -1389,7 +1212,7 @@ public class QuicCrypto {
      * Derives the QUIC header protection key from a traffic secret.
      * Equivalent to the "quic hp" HKDF-Expand-Label step used in {@link #deriveInitialKeys}.
      * Use this to obtain the handshake (or 1-RTT) HP key when only the traffic
-     * {@link SecretKey} is available (e.g. from {@link TlsMetadata}).
+     * {@link SecretKey} is available (e.g. from {@link ConnectionMetadata}).
      *
      * @param trafficSecret The traffic secret (e.g. {@code TlsMetadata.clientHandshakeSecret})
      * @return Raw 16-byte header-protection key bytes suitable for passing to
@@ -1557,8 +1380,6 @@ public class QuicCrypto {
             demandedGroupId = null;
         }
     }
-
-
 
     public static byte[] generateStatelessResetToken(byte[] connectionId) {
         try {

@@ -21,10 +21,10 @@ public class TcpCubic implements CongestionControl {
     private long ssthresh = Long.MAX_VALUE;
     private long wMax = 0;
     private long lastWMax = 0;
-    
+
     private long lastLossTimeMs = -1;
     private long epochStartMs = -1;
-    
+
     private long lastSendTimeNs = -1;
     private long lastUpdateTimeMs = -1;
 
@@ -39,9 +39,9 @@ public class TcpCubic implements CongestionControl {
         }
 
         // 1. Loss detection and Multiplicative Decrease
-        if (bytesLostInWindow > 0 && lastLostTimeMs > this.lastLossTimeMs) {
+        if (currentTimeMs - lastLostTimeMs < smoothedRtt && lastLostTimeMs > this.lastLossTimeMs) {
             this.lastLossTimeMs = lastLostTimeMs;
-            
+
             // Fast Convergence
             if (cwnd < lastWMax) {
                 lastWMax = cwnd;
@@ -50,12 +50,12 @@ public class TcpCubic implements CongestionControl {
                 lastWMax = cwnd;
                 wMax = cwnd;
             }
-            
+
             cwnd = (long) (cwnd * BETA);
             ssthresh = cwnd;
             epochStartMs = -1; // Reset cubic epoch
-            
-            logger.debug("Loss detected on connection {}. CWND reduced to {}, wMax {}, ssthresh {}", 
+
+            logger.debug("Loss detected on connection {}. CWND reduced to {}, wMax {}, ssthresh {}",
                     connectionId, cwnd, wMax, ssthresh);
         }
 
@@ -65,8 +65,7 @@ public class TcpCubic implements CongestionControl {
             if (deltaT > 0) {
                 if (cwnd < ssthresh) {
                     // Slow Start: increase by estimated amount acked since last update
-                    long timeWindowMs = timeWindowNanos() / 1_000_000L;
-                    double ackRate = (double) bytesAckedInWindow / timeWindowMs;
+                    double ackRate = (double) bytesAckedInWindow / timeWindowMs();
                     long estimatedAckedDelta = (long) (ackRate * deltaT);
                     cwnd += estimatedAckedDelta;
                 } else {
@@ -77,12 +76,12 @@ public class TcpCubic implements CongestionControl {
                             wMax = cwnd;
                         }
                     }
-                    
+
                     double t = (currentTimeMs - epochStartMs) / 1000.0;
                     double K = Math.pow(wMax / (double) MSS * (1.0 - BETA) / C, 1.0 / 3.0);
                     double target = C * Math.pow(t - K, 3) + (wMax / (double) MSS);
                     long cubicCwnd = (long) (target * MSS);
-                    
+
                     if (cubicCwnd > cwnd) {
                         cwnd = cubicCwnd;
                     } else {
@@ -93,7 +92,7 @@ public class TcpCubic implements CongestionControl {
                 }
             }
         }
-        
+
         lastUpdateTimeMs = currentTimeMs;
         cwnd = Math.max(cwnd, MIN_CWND);
 
@@ -101,7 +100,7 @@ public class TcpCubic implements CongestionControl {
         long rtt = smoothedRtt > 0 ? smoothedRtt : 100;
         // Pacing rate: 1.25 * cwnd / RTT (standard QUIC pacing for Cubic)
         double pacingRate = 1.25 * cwnd / rtt; // bytes per ms
-        
+
         long delayNs = 0;
 
         // CWND check
@@ -137,15 +136,15 @@ public class TcpCubic implements CongestionControl {
     }
 
     @Override
-    public long timeWindowNanos() {
-        return 100_000_000L; // 100ms
+    public int timeWindowMs() {
+        return 10; // 10ms
     }
-    
+
     // Package-private for testing
     long getCwnd() {
         return cwnd;
     }
-    
+
     long getSsthresh() {
         return ssthresh;
     }

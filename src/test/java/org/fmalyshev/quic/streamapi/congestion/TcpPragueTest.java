@@ -26,18 +26,19 @@ class TcpPragueTest {
     @Test
     void testSlowStartGrowth() {
         long initialCwnd = prague.getCwnd();
+        int window = prague.timeWindowMs();
         
-        // Simulate ACK of 10000 bytes over 100ms
+        // Simulate ACK of 10000 bytes over window ms
         prague.canSend(currentTime, 1200, 1, 0, 100, 100, 100, 
                       10000, 0, 10000, 0, 8, 0, 0, 10000, 0, 0, 0);
         
-        currentTime += 100; // After 1 RTT
+        currentTime += window; // After some time
         prague.canSend(currentTime, 1200, 1, 0, 100, 100, 100, 
                       10000, 0, 10000, 0, 8, 0, 0, 10000, 0, 0, 0);
         
         long newCwnd = prague.getCwnd();
         assertTrue(newCwnd > initialCwnd);
-        // initialCwnd=12000, ackRate=100b/ms, deltaT=100ms -> +10000
+        // initialCwnd=12000, ackRate=10000/window, deltaT=window -> +10000
         assertEquals(22000, newCwnd);
     }
 
@@ -55,6 +56,7 @@ class TcpPragueTest {
     void testEcnAlphaUpdate() {
         // Initial alpha is 0
         assertEquals(0.0, prague.getAlpha());
+        int window = prague.timeWindowMs();
 
         // ACK 10 packets, 2 marked with CE
         // ceCounter should be at least as large as cePacketsInWindow
@@ -70,8 +72,8 @@ class TcpPragueTest {
                       12000, 0, 12000, 0, 10, 0, 0, 10000, 0, 4, 2);
         assertEquals(alpha, prague.getAlpha(), "Alpha should not update before window passes");
 
-        // Call again after 100ms - should update alpha
-        prague.canSend(currentTime + 110, 1200, 1, 0, 100, 100, 100, 
+        // Call again after window + 10ms - should update alpha
+        prague.canSend(currentTime + window + 10, 1200, 1, 0, 100, 100, 100, 
                       12000, 0, 12000, 0, 10, 0, 0, 10000, 0, 6, 2);
         assertTrue(prague.getAlpha() > alpha, "Alpha should update after window passes");
     }
@@ -90,6 +92,7 @@ class TcpPragueTest {
         // Reset and do it step by step.
         prague = new TcpPrague();
         currentTime = 1000;
+        int window = prague.timeWindowMs();
         
         // 1. Update Alpha and trigger ECN reduction
         // First call initializes lastUpdateTimeMs and lastCeCounterAtLastReaction
@@ -116,6 +119,7 @@ class TcpPragueTest {
     void testEcnReactionGating() {
         prague = new TcpPrague();
         currentTime = 1000;
+        int window = prague.timeWindowMs();
         
         // Initialize
         prague.canSend(currentTime, 1200, 1, 0, 100, 100, 100, 

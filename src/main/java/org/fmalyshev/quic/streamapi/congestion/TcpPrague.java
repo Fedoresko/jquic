@@ -45,8 +45,7 @@ public class TcpPrague implements CongestionControl {
 
         // 1. Update Alpha (EWMA of fraction of CE-marked packets)
         // Update at most once per window to avoid over-sampling the same window stats
-        long windowMs = timeWindowNanos() / 1_000_000L;
-        if (currentTimeMs - lastAlphaUpdateTimeMs >= windowMs) {
+        if (currentTimeMs - lastAlphaUpdateTimeMs >= timeWindowMs()) {
             if (packetsAckedInWindow > 0) {
                 double fraction = (double) cePacketsInWindow / packetsAckedInWindow;
                 alpha = (1.0 - G) * alpha + G * fraction;
@@ -85,7 +84,7 @@ public class TcpPrague implements CongestionControl {
             if (deltaT > 0) {
                 if (cwnd < ssthresh) {
                     // Slow Start
-                    double ackRate = (double) bytesAckedInWindow / windowMs;
+                    double ackRate = (double) bytesAckedInWindow / timeWindowMs();
                     long estimatedAckedDelta = (long) (ackRate * deltaT);
                     cwnd += estimatedAckedDelta;
                 } else {
@@ -137,8 +136,8 @@ public class TcpPrague implements CongestionControl {
     }
 
     @Override
-    public long timeWindowNanos() {
-        return 100_000_000L; // 100ms
+    public int timeWindowMs() {
+        return 32; // 32ms
     }
 
     // For testing

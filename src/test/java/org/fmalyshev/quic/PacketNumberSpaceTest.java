@@ -42,8 +42,8 @@ class PacketNumberSpaceTest {
         PacketNumberSpace space = new PacketNumberSpace(PacketNumberSpace.PacketPhase.INITIAL);
         ByteBuffer frames = ByteBuffer.wrap(new byte[10]);
 
-        space.onPacketSent(0, frames,  true);
-        space.onPacketSent(1, frames,  true);
+        space.onPacketSent(0, 0, frames,  true);
+        space.onPacketSent(0, 1, frames,  true);
 
         assertEquals(2, space.getUnackedPacketCount());
         assertTrue(space.hasUnackedPackets());
@@ -55,9 +55,9 @@ class PacketNumberSpaceTest {
         ByteBuffer frames = ByteBuffer.wrap(new byte[10]);
 
         // Send packets 0, 1, 2
-        space.onPacketSent(0, frames,  true);
-        space.onPacketSent(1, frames,  true);
-        space.onPacketSent(2, frames,  true);
+        space.onPacketSent(0, 0, frames,  true);
+        space.onPacketSent(0, 1, frames,  true);
+        space.onPacketSent(0, 2, frames,  true);
 
         assertEquals(3, space.getUnackedPacketCount());
 
@@ -65,8 +65,8 @@ class PacketNumberSpaceTest {
         List<PacketNumberSpace.AckRange> ackRanges = Arrays.asList(
             new PacketNumberSpace.AckRange(0, 1)
         );
-        space.onAckReceived(1, ackRanges, 0, null, 0);
-        java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = space.detectLostPackets();
+        space.onAckReceived(0, 1, ackRanges, 0, null, 0);
+        java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = space.detectLostPackets(0);
 
         // Only packet 2 should remain
         assertEquals(1, space.getUnackedPacketCount());
@@ -74,48 +74,42 @@ class PacketNumberSpaceTest {
     }
 
     @Test
-    void testOnAckReceived_UpdatesRTT() throws InterruptedException {
+    void testOnAckReceived_UpdatesRTT() {
         PacketNumberSpace space = new PacketNumberSpace(PacketNumberSpace.PacketPhase.INITIAL);
         ByteBuffer frames = ByteBuffer.wrap(new byte[10]);
 
-        // Send packet 0
-        space.onPacketSent(0, frames,  true);
+        // Send packet 0 at T=0
+        space.onPacketSent(0, 0, frames,  true);
 
-        // Wait a bit to simulate network delay
-        Thread.sleep(50);
-
-        // ACK packet 0
+        // ACK packet 0 at T=50
         List<PacketNumberSpace.AckRange> ackRanges = Arrays.asList(
             new PacketNumberSpace.AckRange(0, 0)
         );
-        space.onAckReceived(0, ackRanges, 0, null, 0);
-        java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = space.detectLostPackets();
+        space.onAckReceived(50, 0, ackRanges, 0, null, 0);
+        java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = space.detectLostPackets(50);
 
         // RTT should be updated
         long rtt = space.getLatestRtt();
-        assertTrue(rtt >= 50, "RTT should be at least 50ms, got: " + rtt);
-        assertTrue(rtt < 1000, "RTT should be reasonable, got: " + rtt);
+        assertEquals(50, rtt, "RTT should be exactly 50ms, got: " + rtt);
         assertTrue(lostPackets.isEmpty(), "No packets should be lost");
     }
 
     @Test
-    void testDetectLostPackets_PacketThreshold() throws InterruptedException {
+    void testDetectLostPackets_PacketThreshold() {
         PacketNumberSpace space = new PacketNumberSpace(PacketNumberSpace.PacketPhase.INITIAL);
         ByteBuffer frames = ByteBuffer.wrap(new byte[10]);
 
-        // Send packets 0-10
+        // Send packets 0-10 at T=0
         for (int i = 0; i <= 10; i++) {
-            space.onPacketSent(i, frames,  true);
+            space.onPacketSent(0, i, frames,  true);
         }
 
-        Thread.sleep(10);
-
-        // ACK packet 10 (leaving 0-9 unacked)
+        // ACK packet 10 at T=10 (leaving 0-9 unacked)
         List<PacketNumberSpace.AckRange> ackRanges = Arrays.asList(
             new PacketNumberSpace.AckRange(10, 10)
         );
-        space.onAckReceived(10, ackRanges, 0, null, 0);
-        java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = space.detectLostPackets();
+        space.onAckReceived(10, 10, ackRanges, 0, null, 0);
+        java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = space.detectLostPackets(10);
 
         // Packets 0-6 should be declared lost (more than 3 below largest acked)
         assertTrue(lostPackets.containsKey(0L), "Packet 0 should be lost");
@@ -126,36 +120,31 @@ class PacketNumberSpaceTest {
     }
 
     @Test
-    void testDetectLostPackets_TimeThreshold() throws InterruptedException {
+    void testDetectLostPackets_TimeThreshold() {
         PacketNumberSpace space = new PacketNumberSpace(PacketNumberSpace.PacketPhase.INITIAL);
         ByteBuffer frames = ByteBuffer.wrap(new byte[10]);
 
-        // Send packet 0
-        space.onPacketSent(0, frames,  true);
+        // Send packet 0 at T=0
+        space.onPacketSent(0, 0, frames,  true);
 
-
-        // Send and ACK packet 1 to establish RTT
-        space.onPacketSent(1, frames,  true);
-
-        // Wait for RTT to pass
-        Thread.sleep(200);
-
+        // Send and ACK packet 1 at T=100 to establish RTT=100
+        space.onPacketSent(100, 1, frames,  true);
         List<PacketNumberSpace.AckRange> ackRanges1 = Arrays.asList(
             new PacketNumberSpace.AckRange(1, 1)
         );
-        space.onAckReceived(1, ackRanges1, 0, null, 0);
+        space.onAckReceived(200, 1, ackRanges1, 0, null, 0);
 
-
-        // Send and ACK packet 2 to trigger loss detection for packet 0
-        space.onPacketSent(2, frames,  true);
-
-        // Wait for loss delay threshold (9/8 * RTT)
-        Thread.sleep(300);
+        // Send and ACK packet 2 at T=300 to trigger loss detection for packet 0
+        space.onPacketSent(300, 2, frames,  true);
         List<PacketNumberSpace.AckRange> ackRanges2 = Arrays.asList(
             new PacketNumberSpace.AckRange(2, 2)
         );
-        space.onAckReceived(2, ackRanges2, 0, null, 0);
-        java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = space.detectLostPackets();
+        space.onAckReceived(400, 2, ackRanges2, 0, null, 0);
+        
+        // Wait for loss delay threshold (9/8 * RTT)
+        // RTT is ~100ms. Loss delay is 125ms.
+        // Packet 0 sent at 0. Deadline was ~125. At T=400 it should be lost.
+        java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = space.detectLostPackets(400);
 
         // Packet 0 should be lost due to time threshold
         assertTrue(lostPackets.containsKey(0L), "Packet 0 should be lost due to time threshold");
@@ -233,27 +222,28 @@ class PacketNumberSpaceTest {
     }
 
     @Test
-    void testRTT_MinRttTracking() throws InterruptedException {
+    void testRTT_MinRttTracking() {
         PacketNumberSpace space = new PacketNumberSpace(PacketNumberSpace.PacketPhase.INITIAL);
         ByteBuffer frames = ByteBuffer.wrap(new byte[10]);
 
+        long currentTime = 0;
         // Send multiple packets and ACK them with different delays
         for (int i = 0; i < 3; i++) {
-            space.onPacketSent(i, frames,  true);
-            Thread.sleep(10 + i * 10); // Increasing delays
+            space.onPacketSent(currentTime, i, frames,  true);
+            long delay = 10 + i * 10;
+            currentTime += delay;
 
             List<PacketNumberSpace.AckRange> ackRanges = Arrays.asList(
                 new PacketNumberSpace.AckRange(i, i)
             );
-            space.onAckReceived(i, ackRanges, 0, null, 0);
-            java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = space.detectLostPackets();
+            space.onAckReceived(currentTime, i, ackRanges, 0, null, 0);
+            java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = space.detectLostPackets(currentTime);
             assertTrue(lostPackets.isEmpty(), "No packets should be lost during RTT tracking");
         }
 
-        // Min RTT should be close to the first (shortest) sample
+        // Min RTT should be the shortest sample (10ms)
         long minRtt = space.getMinRtt();
-        assertTrue(minRtt >= 10, "Min RTT should be at least 10ms");
-        assertTrue(minRtt <= 50, "Min RTT should capture minimum delay");
+        assertEquals(10, minRtt, "Min RTT should be exactly 10ms");
     }
 
     @Test
@@ -270,14 +260,14 @@ class PacketNumberSpaceTest {
         ByteBuffer frames = ByteBuffer.wrap(new byte[10]);
 
         // Send non-ack-eliciting packet (e.g., ACK-only packet)
-        space.onPacketSent(0, frames, false);
+        space.onPacketSent(0, 0, frames, false);
 
         // ACK it
         List<PacketNumberSpace.AckRange> ackRanges = Arrays.asList(
             new PacketNumberSpace.AckRange(0, 0)
         );
-        space.onAckReceived(0, ackRanges, 0, null, 0);
-        java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = space.detectLostPackets();
+        space.onAckReceived(0, 0, ackRanges, 0, null, 0);
+        java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = space.detectLostPackets(0);
 
         // RTT should still be initial value since packet wasn't ack-eliciting
         assertEquals(333, space.getSmoothedRtt());
@@ -285,40 +275,45 @@ class PacketNumberSpaceTest {
     }
 
     @Test
-    void testBytesAckedInLastRtt() throws InterruptedException {
+    void testBytesAckedInLastRtt() {
         PacketNumberSpace space = new PacketNumberSpace(PacketNumberSpace.PacketPhase.INITIAL);
+        space.setTimeWindowMs(100);
         ByteBuffer frames100 = ByteBuffer.allocate(100);
         frames100.limit(100);
         ByteBuffer frames200 = ByteBuffer.allocate(200);
         frames200.limit(200);
 
+        long currentTime = 0;
+
         // 1. Establish RTT
-        space.onPacketSent(0, frames100, true);
-        Thread.sleep(100);
+        space.onPacketSent(currentTime, 0, frames100, true);
+        currentTime += 100;
         List<PacketNumberSpace.AckRange> range0 = Arrays.asList(new PacketNumberSpace.AckRange(0, 0));
-        space.onAckReceived(0, range0, 0, null, 0);
+        space.onAckReceived(currentTime, 0, range0, 0, null, 0);
 
         long rtt = space.getSmoothedRtt();
         // smoothedRtt will be ~100ms because it's the first sample.
-        assertTrue(rtt >= 90, "RTT should be around 100ms, got: " + rtt);
+        assertEquals(100, rtt, "RTT should be 100ms");
 
         // 2. Clear established RTT data from bytesAckedInLastRtt window
-        Thread.sleep(rtt + 50);
+        currentTime += 200; // More than smoothedRtt and timeWindowMs
+        space.detectLostPackets(currentTime);
         assertEquals(0, space.getWindowedStats().bytesAckedInLastRtt(), "Window should be clear");
 
         // 3. Send and ACK packets
-        space.onPacketSent(1, frames100, true);
-        space.onPacketSent(2, frames200, true);
+        space.onPacketSent(currentTime, 1, frames100, true);
+        space.onPacketSent(currentTime, 2, frames200, true);
 
         List<PacketNumberSpace.AckRange> range1_2 = Arrays.asList(new PacketNumberSpace.AckRange(1, 2));
-        space.onAckReceived(2, range1_2, 0, null, 0);
+        space.onAckReceived(currentTime, 2, range1_2, 0, null, 0);
 
         // Bytes acked should be 100 + 200 = 300
         long actual = space.getWindowedStats().bytesAckedInLastRtt();
         assertEquals(300, actual, "Expected 300 bytes, got: " + actual + " (RTT=" + rtt + ")");
 
         // 4. Wait for RTT to pass
-        Thread.sleep(rtt + 50);
+        currentTime += 200;
+        space.detectLostPackets(currentTime);
 
         // Bytes acked should now be 0 as the window passed
         assertEquals(0, space.getWindowedStats().bytesAckedInLastRtt(), "Should be 0 after RTT window passed");

@@ -216,13 +216,13 @@ public class QuicFrameBuilder {
     /**
      * Creates a TLS 1.3 ServerHello message (RFC 8446 Section 4.1.3).
      *
-     * <p>The {@code key_share} extension carries {@link QuicCrypto.TlsMetadata#serverEphemeralPublicKey},
+     * <p>The {@code key_share} extension carries {@link ConnectionMetadata#serverEphemeralPublicKey},
      * the server's X25519 ephemeral public key produced by processClientHello,
      * so the client can complete its side of the ECDHE exchange.
      *
-     * @param metadata the live {@link QuicCrypto.TlsMetadata} for this connection
+     * @param metadata the live {@link ConnectionMetadata} for this connection
      */
-    public static void writeServerHello(ChunkedOutputStreamWithAmendments out, QuicCrypto.TlsMetadata metadata) throws IOException {
+    public static void writeServerHello(ChunkedOutputStreamWithAmendments out, ConnectionMetadata metadata) throws IOException {
         // ServerHello wire layout (RFC 8446 §4.1.3):
         //   ProtocolVersion(2) + Random(32) + session_id_len(1)
         //   + CipherSuite(2) + compression(1) + extensions_len(2) + extensions

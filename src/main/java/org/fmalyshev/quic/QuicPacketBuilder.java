@@ -197,7 +197,7 @@ public class QuicPacketBuilder {
         return 4;
     }
 
-    static ByteBuffer writeStatelessResetFrame(long connectionId, int incomingPacketSize) {
+    static ByteBuffer writeStatelessResetFrame(long connectionId, int incomingPacketSize, byte[] statelessResetToken) {
         // RFC 9000: Stateless Reset should be smaller than incoming packet
         // to avoid amplification attacks, but at least 21 bytes
         int resetSize = Math.max(MIN_STATELESS_RESET_LENGTH,
@@ -218,9 +218,7 @@ public class QuicPacketBuilder {
         // Add 16-byte Stateless Reset Token at the end
         // In a real implementation, this should be a pseudorandom function of the CID
         // For now, we use random bytes (stateless - doesn't require storing state)
-        byte[] token = QuicCrypto.generateStatelessResetToken(ByteBuffer.allocate(8).putLong(connectionId).array());
-        SECURE_RANDOM.nextBytes(token);
-        frameBuffer.put(token);
+        frameBuffer.put(statelessResetToken);
 
         //Add required padding
         frameBuffer.put(ZERO_BLOCK, 0, resetSize - frameBuffer.position());

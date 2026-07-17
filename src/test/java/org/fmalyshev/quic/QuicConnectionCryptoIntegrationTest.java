@@ -4,7 +4,6 @@ import org.fmalyshev.quic.buffers.BorrowedPoolBuffer;
 import org.fmalyshev.quic.buffers.PoolBuffer;
 import org.fmalyshev.quic.buffers.RootPoolBuffer;
 import org.fmalyshev.quic.streamapi.QuicApplicationProtocol;
-import org.fmalyshev.quic.streamapi.QuicApplicationProtocolConnectionHandler;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -16,7 +15,6 @@ import java.nio.ByteBuffer;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.util.ArrayList;
-import java.util.HexFormat;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -62,7 +60,7 @@ class QuicConnectionCryptoIntegrationTest {
                 when(protocol.getConnectionHandler()).thenReturn(cid -> mock(org.fmalyshev.quic.streamapi.QuicApplicationProtocolConnectionHandler.class));
                 
                 org.fmalyshev.quic.streamapi.CongestionControl cc = mock(org.fmalyshev.quic.streamapi.CongestionControl.class);
-                when(cc.timeWindowNanos()).thenReturn(1000L);
+                when(cc.timeWindowMs()).thenReturn(100);
                 when(protocol.getCongestionControl()).thenReturn(cc);
                 
                 engine.registerProtocol(protocol);
@@ -190,7 +188,7 @@ class QuicConnectionCryptoIntegrationTest {
         } catch (Exception e) {}
 
         connection.setState(QuicConnection.State.ESTABLISHED);
-        QuicCrypto.TlsMetadata meta1Rtt = make1RttMetadata(real1RttKey);
+        ConnectionMetadata meta1Rtt = make1RttMetadata(real1RttKey);
         meta1Rtt.clientApplicationKeys = new QuicCrypto.PacketProtectionKeys(real1RttKey, new byte[12]);
         connection.setTlsMetadata(meta1Rtt);
 
@@ -243,7 +241,7 @@ class QuicConnectionCryptoIntegrationTest {
         } catch (Exception e) {}
 
         connection.setState(QuicConnection.State.ESTABLISHED);
-        QuicCrypto.TlsMetadata meta1Rtt = make1RttMetadata(real1RttKey);
+        ConnectionMetadata meta1Rtt = make1RttMetadata(real1RttKey);
         meta1Rtt.clientApplicationKeys = new QuicCrypto.PacketProtectionKeys(real1RttKey, new byte[12]);
         connection.setTlsMetadata(meta1Rtt);
 
@@ -312,7 +310,7 @@ class QuicConnectionCryptoIntegrationTest {
         }
 
         // TlsMetadata now contains derived Handshake secrets
-        QuicCrypto.TlsMetadata meta = connection.getTlsMetadata();
+        ConnectionMetadata meta = connection.getTlsMetadata();
         assertNotNull(meta.clientHandshakeTrafficSecret, "Handshake secrets must be derived");
 
         // ── Phase 2: Handshake packet (client Finished) ───────────────────────
@@ -340,7 +338,7 @@ class QuicConnectionCryptoIntegrationTest {
             
             assertEquals(QuicConnection.State.ESTABLISHED, connection.getState(),
                 "Server state should be ESTABLISHED after client Finished");
-            assertTrue(meta.hasApplicationKeys(), "1-RTT keys must be derived");
+            assertNotNull(meta.clientApplicationKeys, "1-RTT keys must be derived");
         } finally {
             handshakePacket.release();
         }
@@ -371,7 +369,7 @@ class QuicConnectionCryptoIntegrationTest {
         f.set(conn, cid);
     }
 
-    private byte[] computeClientFinished(QuicCrypto.TlsMetadata meta) throws Exception {
+    private byte[] computeClientFinished(ConnectionMetadata meta) throws Exception {
         // finished_key = HKDF-Expand-Label(clientHandshakeTrafficSecret, "finished", "", 32)
         byte[] finishedKey = QuicCrypto.hkdfExpandLabel(meta.clientHandshakeTrafficSecret, "finished", new byte[0], 32);
         javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256", "Conscrypt");
@@ -524,10 +522,10 @@ class QuicConnectionCryptoIntegrationTest {
      * Creates a TlsMetadata suitable for 1-RTT tests using the provided key for all roles.
      * The HP key is derived from the 1-RTT client secret.
      */
-    private QuicCrypto.TlsMetadata make1RttMetadata(SecretKey real1RttKey) throws Exception {
+    private ConnectionMetadata make1RttMetadata(SecretKey real1RttKey) throws Exception {
         byte[] hpKey = QuicCrypto.deriveHeaderProtectionKey(real1RttKey);
         byte[] iv    = deriveIv(real1RttKey.getEncoded());
-        QuicCrypto.TlsMetadata m = new QuicCrypto.TlsMetadata();
+        ConnectionMetadata m = new ConnectionMetadata();
         m.negotiatedIdleTimeoutMs = 10_000;
         m.clientHandshakeKeys = new QuicCrypto.PacketProtectionKeysWithHP(real1RttKey, new byte[12], new byte[16]);
         m.serverHandshakeKeys = new QuicCrypto.PacketProtectionKeysWithHP(real1RttKey, new byte[12], new byte[16]);

@@ -1,13 +1,18 @@
 package org.fmalyshev.quic;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.Answers;
+import org.mockito.MockedStatic;
+import org.mockito.Mockito;
 
 import java.net.InetSocketAddress;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 
 /**
@@ -18,11 +23,22 @@ class TimeoutHeapTest {
 
     private TimeoutHeap<QuicConnection> timeoutHeap;
     private SelectorThread selectorMock;
+    MockedStatic<QuicCrypto> mock;
 
     @BeforeEach
     void setUp() {
         timeoutHeap = new TimeoutHeap<>(QuicConnection.class);
         selectorMock = mock(SelectorThread.class);
+        mock = Mockito.mockStatic(QuicCrypto.class, Answers.CALLS_REAL_METHODS);
+        mock.when(() -> QuicCrypto.generateStatelessResetToken(any(byte[].class)))
+                .thenReturn(new byte[16]);
+    }
+
+    @AfterEach
+    void tearDown() {
+        if (mock != null) {
+            mock.close(); // Crucial to prevent registration on the next test
+        }
     }
 
     @Test
@@ -93,12 +109,13 @@ class TimeoutHeapTest {
     void testTimeoutUpdateMaintainsOrdering() throws InterruptedException {
         // Create 4 connections with same idle timeout but created at different times
         QuicConnection conn1 = new QuicConnection(1001L, new InetSocketAddress("127.0.0.1", 5001), selectorMock);
-        Thread.sleep(50); // Ensure different creation times
+        conn1.setCurrentTimestamp(50);
         QuicConnection conn2 = new QuicConnection(1002L, new InetSocketAddress("127.0.0.1", 5002), selectorMock);
-        Thread.sleep(50);
+        conn2.setCurrentTimestamp(100);
         QuicConnection conn3 = new QuicConnection(1003L, new InetSocketAddress("127.0.0.1", 5003), selectorMock);
-        Thread.sleep(50);
+        conn3.setCurrentTimestamp(150);
         QuicConnection conn4 = new QuicConnection(1004L, new InetSocketAddress("127.0.0.1", 5004), selectorMock);
+        conn4.setCurrentTimestamp(200);
 
         // Set same idle timeout for all
         conn1.setIdleTimeout(1000);
@@ -117,8 +134,8 @@ class TimeoutHeapTest {
             "Connection 1001 should be at top initially (oldest)");
 
         // Update conn1's timeout (simulating packet activity)
-        Thread.sleep(50); // Wait so updated timeout is pushed into future
         long oldTimeout = conn1.getTimeoutTimestamp();
+        conn1.setCurrentTimestamp(200);
         conn1.updateTimeout();
         long newTimeout = conn1.getTimeoutTimestamp();
 

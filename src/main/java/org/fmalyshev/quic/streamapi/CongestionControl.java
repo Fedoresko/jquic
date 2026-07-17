@@ -32,5 +32,5 @@ public interface CongestionControl {
      * Time window to calculate aggregated stats
      * @return size in nanoseconds
      */
-    long timeWindowNanos();
+    int timeWindowMs();
 }

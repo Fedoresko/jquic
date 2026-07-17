@@ -18,31 +18,27 @@ class QuicTransportParamsParsingTest {
         // or just test the logic if we were to make it public/accessible)
         // Since I can't modify QuicCrypto.java to make it public, I'll use reflection to call it if possible,
         // or just provide the test as a proof of concept for the suggested changes.
-        
+
         ByteBuffer hello = buildClientHelloWithParams(
-            5000, // initial_max_data (0x04)
-            1000, // initial_max_stream_data_bidi_local (0x05)
-            2000, // initial_max_stream_data_bidi_remote (0x06)
-            3000, // initial_max_stream_data_uni (0x07)
-            10,   // initial_max_streams_bidi (0x08)
-            5     // initial_max_streams_uni (0x09)
+                5000, // initial_max_data (0x04)
+                1000, // initial_max_stream_data_bidi_local (0x05)
+                2000, // initial_max_stream_data_bidi_remote (0x06)
+                3000, // initial_max_stream_data_uni (0x07)
+                10,   // initial_max_streams_bidi (0x08)
+                5     // initial_max_streams_uni (0x09)
         );
 
-        // Call private parseClientHello via reflection
-        java.lang.reflect.Method parseMethod = QuicCrypto.class.getDeclaredMethod("parseClientHello", ByteBuffer.class);
-        parseMethod.setAccessible(true);
-        
-        Object parsedHello = parseMethod.invoke(null, hello);
-        
+        ConnectionMetadata.ClientMetadataNegotiated parsedHello = QuicCrypto.parseClientHello(hello);
+
         assertNotNull(parsedHello);
-        
+
         // Use reflection to check fields
-        assertEquals(5000L, getFieldValue(parsedHello, "initialMaxData"));
-        assertEquals(1000L, getFieldValue(parsedHello, "initialMaxStreamDataBidiLocal"));
-        assertEquals(2000L, getFieldValue(parsedHello, "initialMaxStreamDataBidiRemote"));
-        assertEquals(3000L, getFieldValue(parsedHello, "initialMaxStreamDataUni"));
-        assertEquals(10L, getFieldValue(parsedHello, "initialMaxStreamsBidi"));
-        assertEquals(5L, getFieldValue(parsedHello, "initialMaxStreamsUni"));
+        assertEquals(5000, parsedHello.initialStreamLimits.maxData);
+        assertEquals(1000, parsedHello.initialStreamLimits.maxStreamDataBidiLocal);
+        assertEquals(2000, parsedHello.initialStreamLimits.maxStreamDataBidiRemote);
+        assertEquals(3000, parsedHello.initialStreamLimits.maxStreamDataUni);
+        assertEquals(10, parsedHello.initialStreamLimits.maxBidi);
+        assertEquals(5, parsedHello.initialStreamLimits.maxUni);
     }
 
     private Object getFieldValue(Object obj, String fieldName) throws Exception {
@@ -62,32 +58,32 @@ class QuicTransportParamsParsingTest {
         QuicVarint.write(tp, 0x01);
         QuicVarint.write(tp, QuicVarint.sizeOf(30000));
         QuicVarint.write(tp, 30000);
-        
+
         // initial_max_data (0x04)
         QuicVarint.write(tp, 0x04);
         QuicVarint.write(tp, QuicVarint.sizeOf(maxData));
         QuicVarint.write(tp, maxData);
-        
+
         // initial_max_stream_data_bidi_local (0x05)
         QuicVarint.write(tp, 0x05);
         QuicVarint.write(tp, QuicVarint.sizeOf(bidiLocal));
         QuicVarint.write(tp, bidiLocal);
-        
+
         // initial_max_stream_data_bidi_remote (0x06)
         QuicVarint.write(tp, 0x06);
         QuicVarint.write(tp, QuicVarint.sizeOf(bidiRemote));
         QuicVarint.write(tp, bidiRemote);
-        
+
         // initial_max_stream_data_uni (0x07)
         QuicVarint.write(tp, 0x07);
         QuicVarint.write(tp, QuicVarint.sizeOf(uni));
         QuicVarint.write(tp, uni);
-        
+
         // initial_max_streams_bidi (0x08)
         QuicVarint.write(tp, 0x08);
         QuicVarint.write(tp, QuicVarint.sizeOf(streamsBidi));
         QuicVarint.write(tp, streamsBidi);
-        
+
         // initial_max_streams_uni (0x09)
         QuicVarint.write(tp, 0x09);
         QuicVarint.write(tp, QuicVarint.sizeOf(streamsUni));

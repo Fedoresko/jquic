@@ -45,7 +45,7 @@ class TcpCubicTest {
         cubic.canSend(currentTime, 1200, 1, 0, 100, 100, 100, 
                       10000, 0, 10000, 0, 8, 0, 0, 10000, 0, 0, 0);
         
-        currentTime += 100; // After 1 RTT
+        currentTime += cubic.timeWindowMs(); // After 1 RTT
         cubic.canSend(currentTime, 1200, 1, 0, 100, 100, 100, 
                       10000, 0, 10000, 0, 8, 0, 0, 10000, 0, 0, 0);
         

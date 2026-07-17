@@ -201,7 +201,7 @@ public class BBRv3 implements CongestionControl {
     }
 
     @Override
-    public long timeWindowNanos() {
-        return 100_000_000L; // 100ms
+    public int timeWindowMs() {
+        return 0; // 0ms
     }
 }

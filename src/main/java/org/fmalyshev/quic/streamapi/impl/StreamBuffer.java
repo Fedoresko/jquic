@@ -33,6 +33,13 @@ public class StreamBuffer {
         this.streamBufferCapacity = streamBufferCapacity;
     }
 
+    public void free() {
+        for (PoolBuffer poolBuffer : incomingFragments.values()) {
+            poolBuffer.release();
+        }
+        incomingFragments.clear();
+    }
+
     /**
      * Adds incoming STREAM data to reassembly buffer.
      * Called by worker thread after processing STREAM frame event.

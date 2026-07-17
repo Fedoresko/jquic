@@ -47,8 +47,7 @@ public class Copa implements CongestionControl {
         if (bytesAckedInWindow > 0 && minRtt > 0 && lastRtt > 0) {
             long deltaT = currentTimeMs - lastUpdateTimeMs;
             if (deltaT > 0) {
-                long timeWindowMs = timeWindowNanos() / 1_000_000L;
-                double ackRate = (double) bytesAckedInWindow / timeWindowMs;
+                double ackRate = (double) bytesAckedInWindow / timeWindowMs();
                 long estimatedAckedDelta = (long) (ackRate * deltaT);
 
                 if (estimatedAckedDelta > 0) {
@@ -138,8 +137,8 @@ public class Copa implements CongestionControl {
     }
 
     @Override
-    public long timeWindowNanos() {
-        return 100_000_000L; // 100ms
+    public int timeWindowMs() {
+        return 100; // 100ms
     }
 
     // Package-private for testing

@@ -16,7 +16,7 @@ public class StreamState {
         HALF_CLOSED_REMOTE,  // Remote side sent FIN
         CLOSED,         // Stream fully closed
         RESET_SENT,     // RESET_STREAM sent
-        RESET_RECEIVED;  // RESET_STREAM received
+        RESET_ACK_RECEIVED;  // ACK for RESET_STREAM received
 
         public boolean canReceive() {
             return this == State.OPEN || this == State.HALF_CLOSED_LOCAL || this == State.RESET_SENT;
@@ -28,7 +28,7 @@ public class StreamState {
 
     private final long streamId;
     private final boolean isServerInitiated;
-    private final QuicStreamResponse.StreamType streamType;
+    final QuicStreamResponse.StreamType streamType;
     private State state;
 
     // Flow control
@@ -43,13 +43,13 @@ public class StreamState {
     private Long stopSendingErrorCode;
 
     public StreamState(long streamId, boolean isServerInitiated, QuicStreamResponse.StreamType streamType, 
-                      long initialMaxStreamData) {
+                      long initialMaxStreamDataToSend, long initialMaxStreamToReceive) {
         this.streamId = streamId;
         this.isServerInitiated = isServerInitiated;
         this.streamType = streamType;
         this.state = State.OPEN;
-        this.maxStreamData = initialMaxStreamData;
-        this.remoteMaxStreamData = initialMaxStreamData;
+        this.maxStreamData = initialMaxStreamDataToSend;
+        this.remoteMaxStreamData = initialMaxStreamToReceive;
         this.sentBytes = 0;
         this.maxOffset = 0;
         this.inFlightBytes = 0;

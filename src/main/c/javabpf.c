@@ -81,7 +81,6 @@ int bpf_delete_map_i(const char *map_path, int key) {
 int bpf_check_map(const char *map_path) {
     int map_fd = getMapFd(map_path);
     if (map_fd >= 0) {
-        close(map_fd);
         return 0;
     }
     return -1;

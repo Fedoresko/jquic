@@ -110,7 +110,7 @@ public class SelectorThread implements Runnable {
                 SocketAddress sender = channel.receive(buffer.buf(), metricsHolder);
                 if (sender != null) {
                     buffer.buf().flip();
-                    processPacket(buffer, sender, "socket", metricsHolder[0]);
+                    processPacket(now, buffer, sender, "socket", metricsHolder[0]);
                     hadWork = true;
                     buffer = QuicEngine.getPool().requestReadBuffer();
                 }
@@ -119,13 +119,13 @@ public class SelectorThread implements Runnable {
                 // Process forwarded packets
                 PacketData forwarded = forwardedPackets.poll();
                 if (forwarded != null) {
-                    processPacket(forwarded.buffer, forwarded.sender, "forwarded", 0);
+                    processPacket(now, forwarded.buffer, forwarded.sender, "forwarded", 0);
                     hadWork = true;
                 }
 
                 HandshakeTask handshakeTask = handshakeQueue.poll();
                 if (handshakeTask != null) {
-                    processHandshakeTask(handshakeTask);
+                    processHandshakeTask(now, handshakeTask);
                     hadWork = true;
                 }
 
@@ -135,6 +135,8 @@ public class SelectorThread implements Runnable {
                     QuicConnection conn = activeConnections.get(appPacket.cid());
                     if (conn != null) {
                         logger.debug("Polled application data frame cid {}", conn.getConnectionId());
+                        conn.setCurrentTimestamp(now);
+
                         conn.send1RttPacket(appPacket.data());
                         // Update timeout in heap after processing
                         timeoutHeap.insertOrUpdate(conn);
@@ -155,7 +157,7 @@ public class SelectorThread implements Runnable {
 
                 // Check for timed out connections periodically
                 if (now - lastTimeoutCheck > TIMEOUT_CHECK_INTERVAL_MS) {
-                    evictTimedOutConnections();
+                    evictTimedOutConnections(now);
                     lastTimeoutCheck = now;
                 }
 
@@ -168,13 +170,41 @@ public class SelectorThread implements Runnable {
             log.error(logColor(), "Selector-{}: Error in selector thread", threadId, e);
         }
     }
+//
+//    static class StatsFile implements AutoCloseable {
+//        private final RandomAccessFile file;
+//        private final FileChannel channel;
+//        private final String name;
+//        StatsFile(String name, String path) throws FileNotFoundException {
+//            file = new RandomAccessFile(path, "rw");
+//            this.name = name;
+//            channel = file.getChannel();
+//        }
+//        public void put(String val) {
+//            try {
+//                log.info("Stats {} : {}", name, val);
+//                byte[] bytes = val.getBytes(StandardCharsets.UTF_8);
+//                MappedByteBuffer buffer = channel.map(FileChannel.MapMode.READ_WRITE, 0, bytes.length);
+//                buffer.put(bytes);
+//                buffer.force();
+//            } catch (IOException e) {
+//                logger.warn("Could not update stats file {}", name, e);
+//            }
+//        }
+//
+//        @Override
+//        public void close() throws IOException {
+//            channel.close();
+//            file.close();
+//        }
+//    }
 
 
     /**
      * Processes a received datagram which may contain multiple coalesced packets.
      * Routes packets to appropriate connections based on CID.
      */
-    private void processPacket(PoolBuffer datagram, SocketAddress sender, String source, int ecnFlags) {
+    private void processPacket(long now, PoolBuffer datagram, SocketAddress sender, String source, int ecnFlags) {
         try {
             int packetCount = 0;
 
@@ -224,6 +254,8 @@ public class SelectorThread implements Runnable {
                 // Route packet to connection for processing
                 // Buffer position advances automatically as packet is read
                 try {
+                    connection.setCurrentTimestamp(now);
+
                     switch (packetSummary.type()) {
                         case INITIAL -> {
                             log.debug(logColor(), "Selector-{}: Processing Initial packet for CID: {}", threadId, cid);
@@ -273,7 +305,7 @@ public class SelectorThread implements Runnable {
      * Creates connection and sends Initial response (ServerHello).
      * Handshake will continue when client sends Handshake packet.
      */
-    private void processHandshakeTask(HandshakeTask task) {
+    private void processHandshakeTask(long now, HandshakeTask task) {
         try {
             log.warn(logColor(), "Selector-{}: Processing Initial packet for new CID: {}", threadId, task.allocatedCid);
 
@@ -290,7 +322,7 @@ public class SelectorThread implements Runnable {
             ByteBuffer dcidKey = ByteBuffer.wrap(packetSummary.dcid());
             initializingConnections.put(dcidKey, connection);
 
-            processPacket(task.packet, task.sender, "initial", 0);
+            processPacket(now, task.packet, task.sender, "initial", 0);
 
             initializingConnections.remove(dcidKey);
 
@@ -319,8 +351,7 @@ public class SelectorThread implements Runnable {
      * Evicts all connections that have exceeded their idle timeout.
      * Uses min-heap to efficiently find expired connections in O(k log n) where k = expired count.
      */
-    private void evictTimedOutConnections() {
-        long now = System.currentTimeMillis();
+    private void evictTimedOutConnections(long now) {
         int evictedCount = 0;
 
         // Process expired connections from heap top

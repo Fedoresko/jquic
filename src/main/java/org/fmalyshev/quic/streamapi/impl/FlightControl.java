@@ -1,6 +1,7 @@
 package org.fmalyshev.quic.streamapi.impl;
 
-import org.fmalyshev.quic.QuicCrypto;
+import org.fmalyshev.quic.ConnectionMetadata;
+import org.fmalyshev.quic.ConnectionMetadata.InitialStreamLimits;
 import org.fmalyshev.quic.QuicTransportError;
 import org.fmalyshev.quic.streamapi.QuicStreamException;
 import org.fmalyshev.quic.streamapi.QuicStreamResponse;
@@ -11,7 +12,10 @@ import java.util.HashMap;
 import java.util.Map;
 
 import static org.fmalyshev.quic.QuicTransportError.FLOW_CONTROL_ERROR;
+import static org.fmalyshev.quic.QuicTransportError.STREAM_STATE_ERROR;
 import static org.fmalyshev.quic.streamapi.QuicStreamResponse.StreamType.Bidirectional;
+import static org.fmalyshev.quic.streamapi.QuicStreamResponse.StreamType.Unidirectional;
+import static org.fmalyshev.quic.streamapi.impl.StreamState.State.CLOSED;
 
 class FlightControl {
     private static final Logger logger = LoggerFactory.getLogger(FlightControl.class);
@@ -36,41 +40,35 @@ class FlightControl {
     private long bidirectionalIncomingStreamCap;
     private long unidirectionalIncomingStreamCap;
 
-    private long currentBidiStreamsCount = 0;
-    private long currentUniStreamsCount = 0;
+    private long currentIncomingBidiStreamsCount = 0;
+    private long currentIncomingUniStreamsCount = 0;
+    private long maxIncomingBidiStream = 0;
+    private long maxIncomingUniStream = 0;
 
-    private final long initalMaxStreamDataBidiClient;
-    private final long initalMaxStreamDataBidiServer;
-    private final long initalMaxStreamDataUni;
+    private final InitialStreamLimits serverInitialLimits;
+    private final InitialStreamLimits clientInitialLimits;
 
     /**
      * Accepts protocol negotiated flight limits
-     * @param maxStreamDataCap - max data buffered per stream
-     * @param maxDataCap - max total data buffered
-     * @param maxBidirectionalStreams - max simultaneously opened bidirectional streams
-     * @param maxUnidirectionalStreams - max simultaneously opened unidirectional streams
      * @param streamManager - needed to send responses \ close connections according to flight-control QUIC specs
      */
-    FlightControl(int maxStreamDataCap, long maxDataCap, int maxBidirectionalStreams,
-                  int maxUnidirectionalStreams, QuicCrypto.ClientMetadataNegotiated initials, StreamManager streamManager) {
-        this.maxStreamDataCap = maxStreamDataCap;
-        this.maxDataCap = maxDataCap;
-        this.currentMaxData = initials.initialMaxData; // Initial value
-        this.maxBidirectionalStreams = maxBidirectionalStreams;
-        this.maxUnidirectionalStreams = maxUnidirectionalStreams;
+    FlightControl(InitialStreamLimits serverLimits, InitialStreamLimits clientLimits, StreamManager streamManager) {
+        serverInitialLimits = serverLimits;
+        clientInitialLimits = clientLimits;
+        this.maxStreamDataCap = serverLimits.maxStreamDataUni;
+        this.maxDataCap = serverLimits.maxData;
+        this.currentMaxData = clientInitialLimits.maxData; // Initial value
+        this.maxBidirectionalStreams = serverLimits.maxBidi; // Our capacity same as the initial value
+        this.maxUnidirectionalStreams = serverLimits.maxUni;
         this.streamManager = streamManager;
 
         //defaults
-        bidirectionalIncomingStreamCap = maxBidirectionalStreams* 4L;
-        unidirectionalIncomingStreamCap = 2 + maxUnidirectionalStreams* 4L;
+        bidirectionalIncomingStreamCap = serverLimits.maxBidi * 4;
+        unidirectionalIncomingStreamCap = 2 + serverLimits.maxUni * 4;
         
         // If peer provided initial_max_streams, use it
-        bidirectionalOutgoingStreamCap = 1 + (initials.initialMaxStreamsBidi > 0 ? initials.initialMaxStreamsBidi : maxBidirectionalStreams) * 4;
-        unidirectionalOutgoingStreamCap = 3 + (initials.initialMaxStreamsUni > 0 ? initials.initialMaxStreamsUni : maxUnidirectionalStreams) * 4;
-
-        initalMaxStreamDataUni = initials.initialMaxStreamDataUni > 0 ? initials.initialMaxStreamDataUni : maxUnidirectionalStreams;
-        initalMaxStreamDataBidiClient = initials.initialMaxStreamDataBidiLocal > 0 ? initials.initialMaxStreamDataBidiLocal : maxBidirectionalStreams;
-        initalMaxStreamDataBidiServer = initials.initialMaxStreamDataBidiRemote > 0 ? initials.initialMaxStreamDataBidiRemote : maxBidirectionalStreams;
+        bidirectionalOutgoingStreamCap = 1 + clientLimits.maxBidi * 4;
+        unidirectionalOutgoingStreamCap = 3 + clientLimits.maxUni * 4;
     }
 
     /**
@@ -79,7 +77,9 @@ class FlightControl {
      */
     public void bytesAcked(long streamId, Long ackTotalLength) {
         StreamState state = streams.get(streamId);
-        state.onBytesAcknowledged(ackTotalLength);
+        if (state != null) {
+            state.onBytesAcknowledged(ackTotalLength);
+        }
         totalInFlightBytes -= ackTotalLength;
     }
 
@@ -154,13 +154,13 @@ class FlightControl {
     public boolean canSend(long streamId, int dataSize) {
         StreamState state = streams.get(streamId);
         if (!state.canSendBytes(dataSize)) {
-            logger.debug("Stream {} blocked by MAX_STREAM_DATA: in-flight={}, data={}, limit={}",
+            logger.warn("Stream {} blocked by MAX_STREAM_DATA: in-flight={}, data={}, limit={}",
                     streamId, state.getInFlightBytes(), dataSize, state.getMaxStreamData());
             streamManager.sendStreamDataBlockedFrame(streamId, state.getMaxStreamData());
             return false;
         }
         if (totalInFlightBytes + dataSize > currentMaxData) {
-            logger.debug("Connection blocked by MAX_DATA: in-flight={}, data={}, limit={}",
+            logger.warn("Connection blocked by MAX_DATA: in-flight={}, data={}, limit={}",
                     totalInFlightBytes, dataSize, currentMaxData);
             // Send DATA_BLOCKED frame to inform peer
             streamManager.sendDataBlockedFrame(currentMaxData);
@@ -195,8 +195,8 @@ class FlightControl {
         }
 
         StreamState state = new StreamState(streamId, true, streamType,
-                streamType == Bidirectional ?
-                initalMaxStreamDataBidiServer : initalMaxStreamDataUni);
+            streamType == Bidirectional ? serverInitialLimits.maxStreamDataBidiLocal : serverInitialLimits.maxStreamDataUni,
+            streamType == Bidirectional ? clientInitialLimits.maxStreamDataBidiRemote : clientInitialLimits.maxStreamDataUni);
         streams.put(streamId, state);
     }
 
@@ -211,18 +211,19 @@ class FlightControl {
             if (streamState.getState() == StreamState.State.OPEN) {
                 streamState.setState(StreamState.State.HALF_CLOSED_LOCAL);
             } else if (streamState.getState() == StreamState.State.HALF_CLOSED_REMOTE) {
-                streamState.setState(StreamState.State.CLOSED);
+                streamState.setState(CLOSED);
             }
         } else {
             if (streamState.getState() == StreamState.State.OPEN) {
                 streamState.setState(StreamState.State.HALF_CLOSED_REMOTE);
             } else if (streamState.getState() == StreamState.State.HALF_CLOSED_LOCAL) {
-                streamState.setState(StreamState.State.CLOSED);
+                streamState.setState(CLOSED);
             }
         }
 
-        if (prevState != StreamState.State.CLOSED && streamState.getState() == StreamState.State.CLOSED) {
+        if (prevState != CLOSED && streamState.getState() == CLOSED) {
             decrementActiveStreamCount(streamId);
+            streams.remove(streamId);
         }
     }
 
@@ -230,9 +231,9 @@ class FlightControl {
         if ((streamId & 0x01) == 0) { // client initiated
             QuicStreamResponse.StreamType type = StreamManager.getStreamType(streamId);
             if (type == Bidirectional) {
-                currentBidiStreamsCount--;
+                currentIncomingBidiStreamsCount--;
             } else {
-                currentUniStreamsCount--;
+                currentIncomingUniStreamsCount--;
             }
         }
     }
@@ -243,8 +244,8 @@ class FlightControl {
      */
     public StreamState.State incomingStream(long streamId) {
         if (streamId % 2 != 0) { //not incoming stream
-            streamManager.sendConnectionClose(QuicTransportError.STREAM_STATE_ERROR, "Wrong incoming stream id "+streamId);
-            return StreamState.State.CLOSED;
+            streamManager.sendConnectionClose(STREAM_STATE_ERROR, "Wrong incoming stream id "+streamId);
+            return CLOSED;
         }
 
         QuicStreamResponse.StreamType type = StreamManager.getStreamType(streamId);
@@ -254,29 +255,38 @@ class FlightControl {
         if (streamId >= cap) {
             logger.debug("Stream limit reached for stream {}: cap is {}", streamId, cap);
             streamManager.sendConnectionClose(QuicTransportError.STREAM_LIMIT_ERROR, "MAX_STREAM_CAP");
-            return StreamState.State.CLOSED;
+            return CLOSED;
         }
 
         boolean isNew = !streams.containsKey(streamId);
-        StreamState state = streams.computeIfAbsent(streamId, id -> new StreamState(id, false, type, isBidi ?
-                initalMaxStreamDataBidiClient : initalMaxStreamDataUni));
+        StreamState state = streams.computeIfAbsent(streamId, id -> new StreamState(id, false, type,
+                isBidi ? serverInitialLimits.maxStreamDataBidiRemote : serverInitialLimits.maxStreamDataUni,
+                isBidi ? clientInitialLimits.maxStreamDataBidiLocal : clientInitialLimits.maxStreamDataUni));
 
         if (isNew) {
             long streamIndex = streamId / 4;
             if (isBidi) {
-                currentBidiStreamsCount++;
+                if (streamIndex < maxIncomingBidiStream) {
+                    return CLOSED; //Closed stream data, ignore
+                }
+                maxIncomingBidiStream = streamIndex;
+                currentIncomingBidiStreamsCount++;
                 long maxStreams = bidirectionalIncomingStreamCap / 4;
                 if (streamIndex >= maxStreams - maxBidirectionalStreams / 2) {
-                    long newMaxStreams = maxStreams - currentBidiStreamsCount + maxBidirectionalStreams;
+                    long newMaxStreams = maxStreams - currentIncomingBidiStreamsCount + maxBidirectionalStreams;
                     logger.debug("Sending bidirectional MAX_STREAMS frame because stream index {} exceeds threshold {} new value would be {}", streamIndex, maxStreams - maxBidirectionalStreams / 2, newMaxStreams);
                     bidirectionalIncomingStreamCap = newMaxStreams * 4;
                     streamManager.sendMaxStreamsFrame(newMaxStreams, true);
                 }
             } else {
-                currentUniStreamsCount++;
+                if (streamIndex < maxIncomingUniStream) {
+                    return CLOSED; //Closed stream data, ignore
+                }
+                maxIncomingUniStream = streamIndex;
+                currentIncomingUniStreamsCount++;
                 long maxStreams = (unidirectionalIncomingStreamCap - 2) / 4;
                 if (streamIndex >= maxStreams - maxUnidirectionalStreams / 2) {
-                    long newMaxStreams = maxStreams - currentUniStreamsCount + maxUnidirectionalStreams;
+                    long newMaxStreams = maxStreams - currentIncomingUniStreamsCount + maxUnidirectionalStreams;
                     logger.debug("Sending unidirectional MAX_STREAMS frame because stream index {} exceeds threshold {} new value would be {}", streamIndex, maxStreams - maxUnidirectionalStreams / 2, newMaxStreams);
                     unidirectionalIncomingStreamCap = 2 + newMaxStreams * 4;
                     streamManager.sendMaxStreamsFrame(newMaxStreams, false);
@@ -296,7 +306,10 @@ class FlightControl {
             logger.debug("Received RESET_STREAM for unknown stream {}", streamId);
             return;
         }
-
+        if (state.streamType == Unidirectional && (streamId & 0x01) != 0) {
+            streamManager.sendConnectionClose(STREAM_STATE_ERROR , "Stream reset cannot be send by receiver");
+            return;
+        }
         if (finalSize > state.getRemoteMaxStreamData()) {
             streamManager.sendConnectionClose(FLOW_CONTROL_ERROR, "Stream reset final size exceeds stream max data cap");
             return;
@@ -309,11 +322,21 @@ class FlightControl {
         }
 
         StreamState.State prevState = state.getState();
-        state.setState(StreamState.State.RESET_RECEIVED);
+        if (state.streamType == Bidirectional) {
+            if (prevState == StreamState.State.HALF_CLOSED_LOCAL || prevState == StreamState.State.RESET_ACK_RECEIVED) {
+                state.setState(CLOSED);
+            } else {
+                state.setState(StreamState.State.HALF_CLOSED_REMOTE);
+            }
+        } else {
+            state.setState(CLOSED);
+        }
+
         state.setResetErrorCode(errorCode);
 
-        if (prevState != StreamState.State.RESET_RECEIVED && prevState != StreamState.State.CLOSED) {
+        if (state.getState() == CLOSED && prevState != CLOSED) {
              decrementActiveStreamCount(streamId);
+             streams.remove(streamId);
         }
     }
 
@@ -330,10 +353,25 @@ class FlightControl {
         }
 
         state.setStopSendingErrorCode(errorCode);
-        state.setState(StreamState.State.RESET_SENT);
+
+        StreamState.State prevState = state.getState();
+        if (state.streamType == Bidirectional) {
+            if (prevState == StreamState.State.HALF_CLOSED_REMOTE || prevState == StreamState.State.RESET_ACK_RECEIVED) {
+                state.setState(CLOSED);
+            } else {
+                state.setState(StreamState.State.RESET_SENT);
+            }
+        } else {
+            state.setState(CLOSED);
+        }
 
         // Send RESET_STREAM in response
         streamManager.sendResetStreamFrame(streamId, errorCode, state.getSentBytes());
+
+        if (state.getState() == CLOSED && prevState != CLOSED) {
+            decrementActiveStreamCount(streamId);
+            streams.remove(streamId);
+        }
     }
 
     /**
@@ -400,9 +438,21 @@ class FlightControl {
      * User code has requested closing stream with an error.
      */
     public void closeStream(long streamId, long errorCode) {
+        QuicStreamResponse.StreamType streamType = StreamManager.getStreamType(streamId);
         StreamState streamState = streams.get(streamId);
-        streamState.setState(StreamState.State.RESET_SENT);
-        streamManager.sendResetStreamFrame(streamId, errorCode, streamState.getSentBytes());
+        if (streamType == Bidirectional) {
+            streamState.setState(StreamState.State.RESET_SENT);
+            streamManager.sendResetStreamFrame(streamId, errorCode, streamState.getSentBytes());
+            streamManager.sendStopSendingFrame(streamId, errorCode);
+        }
+        else {
+            if ((streamId & 0x01) == 0) {
+                streamManager.sendStopSendingFrame(streamId, errorCode);
+            } else {
+                streamState.setState(StreamState.State.RESET_SENT);
+                streamManager.sendResetStreamFrame(streamId, errorCode, streamState.getSentBytes());
+            }
+        }
     }
 
     /**
@@ -412,4 +462,16 @@ class FlightControl {
         StreamState streamState = streams.get(streamId);
         return streamState != null && streamState.getState().canSend();
     }
+
+    public void onStreamResetAck(long streamId) {
+        QuicStreamResponse.StreamType streamType = StreamManager.getStreamType(streamId);
+        StreamState streamState = streams.get(streamId);
+        if (streamState.getState() != StreamState.State.RESET_SENT) {
+            logger.warn("Received ack for STREAM_RESET in state {} for stream {}", streamState.getState(), streamId);
+        }
+        streamState.setState(StreamState.State.RESET_ACK_RECEIVED);
+        decrementActiveStreamCount(streamId);
+        streams.remove(streamId);
+    }
+
 }

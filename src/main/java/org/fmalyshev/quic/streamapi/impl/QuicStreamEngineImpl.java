@@ -129,6 +129,7 @@ public class QuicStreamEngineImpl implements QuicStreamEngine {
         return protocols.values().stream().toList();
     }
 
+    @Override
     public QuicApplicationProtocol getProtocol(String protocolName) {
         return protocols.get(protocolName);
     }

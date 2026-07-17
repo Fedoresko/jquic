@@ -74,7 +74,8 @@ public class BpfRouting {
             );
             affinity = linker.downcallHandle(
                 lookup.find("bpf_set_affinity").orElseThrow(),
-                FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_INT)
+                //ValueLayout.JAVA_INT,
+                FunctionDescriptor.ofVoid( ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_INT)
             );
 
             initialized = true;
