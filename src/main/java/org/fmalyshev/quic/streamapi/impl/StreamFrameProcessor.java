@@ -66,7 +66,7 @@ public class StreamFrameProcessor {
      */
     public static ByteBuffer encodeResetStreamFrame(long streamId, long errorCode, long finalSize) {
         logger.debug("Encoding reset stream frame for stream id {}", streamId);
-        ByteBuffer buffer = ByteBuffer.allocate(1 + 24);
+        ByteBuffer buffer = ByteBuffer.allocateDirect(1 + 24);
         buffer.put(FRAME_TYPE_RESET_STREAM);
         QuicVarint.write(buffer, streamId);
         QuicVarint.write(buffer, errorCode);
@@ -92,7 +92,7 @@ public class StreamFrameProcessor {
      */
     public static ByteBuffer encodeMaxDataFrame(long maximumData) {
         logger.warn("maximum data frame is {}", maximumData);
-        ByteBuffer buffer = ByteBuffer.allocate(1 + 8);
+        ByteBuffer buffer = ByteBuffer.allocateDirect(1 + 8);
         buffer.put(FRAME_TYPE_MAX_DATA);
         QuicVarint.write(buffer, maximumData);
         buffer.flip();
@@ -105,7 +105,7 @@ public class StreamFrameProcessor {
      */
     public static ByteBuffer encodeDataBlockedFrame(long limit) {
         logger.warn("Encoding data blocked frame");
-        ByteBuffer buffer = ByteBuffer.allocate(128);
+        ByteBuffer buffer = ByteBuffer.allocateDirect(128);
         buffer.put((byte) 0x14); // DATA_BLOCKED frame type
         QuicVarint.write(buffer, limit);
         buffer.flip();
@@ -118,7 +118,7 @@ public class StreamFrameProcessor {
      */
     public static ByteBuffer encodeStopSendingFrame(long streamId, long errorCode) {
         logger.warn("Stream {} has stop sending", streamId);
-        ByteBuffer buffer = ByteBuffer.allocate(1 + 16);
+        ByteBuffer buffer = ByteBuffer.allocateDirect(1 + 16);
         buffer.put(FRAME_TYPE_STOP_SENDING);
         QuicVarint.write(buffer, streamId);
         QuicVarint.write(buffer, errorCode);
@@ -141,7 +141,7 @@ public class StreamFrameProcessor {
      */
     public static ByteBuffer encodeMaxStreamDataFrame(long streamId, long maximumData) {
         logger.warn("Stream {} has stream data", streamId);
-        ByteBuffer buffer = ByteBuffer.allocate(1 + 16);
+        ByteBuffer buffer = ByteBuffer.allocateDirect(1 + 16);
         buffer.put(FRAME_TYPE_MAX_STREAM_DATA);
         QuicVarint.write(buffer, streamId);
         QuicVarint.write(buffer, maximumData);
@@ -163,7 +163,7 @@ public class StreamFrameProcessor {
      * Format: type(0x12/0x13) | maximum_streams
      */
     public static ByteBuffer encodeMaxStreamsFrame(long maximumStreams, boolean bidirectional) {
-        ByteBuffer buffer = ByteBuffer.allocate(1 + 8);
+        ByteBuffer buffer = ByteBuffer.allocateDirect(1 + 8);
         buffer.put(bidirectional ? FRAME_TYPE_MAX_STREAMS_BIDI : FRAME_TYPE_MAX_STREAMS_UNI);
         QuicVarint.write(buffer, maximumStreams);
         return buffer.flip();
@@ -183,7 +183,7 @@ public class StreamFrameProcessor {
      */
     public static ByteBuffer encodeStreamDataBlockedFrame(long streamId, long limit) {
         logger.warn("Stream {} has stream data", streamId);
-        ByteBuffer buffer = ByteBuffer.allocate(1 + 16);
+        ByteBuffer buffer = ByteBuffer.allocateDirect(1 + 16);
         buffer.put(FRAME_TYPE_STREAM_DATA_BLOCKED);
         QuicVarint.write(buffer, streamId);
         QuicVarint.write(buffer, limit);

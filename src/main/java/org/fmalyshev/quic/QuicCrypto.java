@@ -31,7 +31,7 @@ public class QuicCrypto {
         // Register Conscrypt eagerly when the class is loaded,
         // before any method can reference it by name.
         if (Security.getProvider("Conscrypt") == null) {
-            Security.insertProviderAt(Conscrypt.newProvider(), 1);
+            Security.addProvider(Conscrypt.newProvider());
         }
     }
 
@@ -79,7 +79,7 @@ public class QuicCrypto {
     public record PacketProtectionKeysWithHP (
         SecretKey key,           // Encryption/decryption key
         byte[] iv,               // Initialization vector
-        byte[] headerProtection  // Header protection key
+        Cipher headerProtection  // Header protection key
     ) {}
 
     /**
@@ -304,7 +304,7 @@ public class QuicCrypto {
                         break; // unknown extension — skip below
                 }
 
-                // Always advance to the end of this extension
+                // Always advance to the higher of this extension
                 if (buf.position() < extEnd) buf.position(extEnd);
             }
 
@@ -318,7 +318,7 @@ public class QuicCrypto {
                 logger.warn("ClientHello: no ALPN extension present");
             }
 
-            logger.warn("Initials negotiated max_data {}, max stream data bidi local {}, max stream data bidi remote {}, max stream data uni {}, max streams bidi {}, max streams uni {}", initialMaxData, initialMaxStreamDataBidiLocal, initialMaxStreamDataBidiRemote, initialMaxStreamDataUni, initialMaxStreamsBidi, initialMaxStreamsUni);
+            logger.debug("Initials negotiated max_data {}, max stream data bidi local {}, max stream data bidi remote {}, max stream data uni {}, max streams bidi {}, max streams uni {}", initialMaxData, initialMaxStreamDataBidiLocal, initialMaxStreamDataBidiRemote, initialMaxStreamDataUni, initialMaxStreamsBidi, initialMaxStreamsUni);
 
             return new ConnectionMetadata.ClientMetadataNegotiated(alpn, maxIdleTimeout, supportedGroups, clientKeys, maxUdpPayloadSize, initialMaxData, initialMaxStreamDataBidiLocal, initialMaxStreamDataBidiRemote, initialMaxStreamDataUni, initialMaxStreamsBidi, initialMaxStreamsUni, signatures, ackDelayExponent, activeConnectionIdLimit);
 
@@ -351,14 +351,23 @@ public class QuicCrypto {
             byte[] clientIv = deriveIv(clientInitialSecret);
             byte[] clientHp = deriveHp(clientInitialSecret);
 
+            Cipher clientHpProtection = javax.crypto.Cipher.getInstance("AES/ECB/NoPadding", "Conscrypt");
+            clientHpProtection.init(javax.crypto.Cipher.ENCRYPT_MODE,
+                    new javax.crypto.spec.SecretKeySpec(clientHp, "AES"));
+
             // Derive server keys
             byte[] serverInitialSecret = hkdfExpandLabel(initialSecret, "server in", new byte[0], 32);
             SecretKey serverKey = deriveKey(serverInitialSecret);
             byte[] serverIv = deriveIv(serverInitialSecret);
             byte[] serverHp = deriveHp(serverInitialSecret);
 
-            PacketProtectionKeysWithHP clientKeys = new PacketProtectionKeysWithHP(clientKey, clientIv, clientHp);
-            PacketProtectionKeysWithHP serverKeys = new PacketProtectionKeysWithHP(serverKey, serverIv, serverHp);
+            Cipher serverHpProtection = javax.crypto.Cipher.getInstance("AES/ECB/NoPadding", "Conscrypt");
+            serverHpProtection.init(javax.crypto.Cipher.ENCRYPT_MODE,
+                    new javax.crypto.spec.SecretKeySpec(serverHp, "AES"));
+
+
+            PacketProtectionKeysWithHP clientKeys = new PacketProtectionKeysWithHP(clientKey, clientIv, clientHpProtection);
+            PacketProtectionKeysWithHP serverKeys = new PacketProtectionKeysWithHP(serverKey, serverIv, serverHpProtection);
 
             return new PacketProtectionKeysWithHP[] { clientKeys, serverKeys };
 
@@ -509,10 +518,21 @@ public class QuicCrypto {
         metadata.serverHandshakeTrafficSecret = serverHandshakeTrafficSecret;
         metadata.clientHandshakeTrafficSecret = clientHandshakeTrafficSecret;
 
+        byte[] serverHp = deriveHp(serverHandshakeTrafficSecret);
+        Cipher serverHpProtection = javax.crypto.Cipher.getInstance("AES/ECB/NoPadding", "Conscrypt");
+        serverHpProtection.init(javax.crypto.Cipher.ENCRYPT_MODE,
+                new javax.crypto.spec.SecretKeySpec(serverHp, "AES"));
+
         metadata.serverHandshakeKeys = new PacketProtectionKeysWithHP(deriveKey(serverHandshakeTrafficSecret),
-                deriveIv(serverHandshakeTrafficSecret), deriveHp(serverHandshakeTrafficSecret));
+                deriveIv(serverHandshakeTrafficSecret), serverHpProtection);
+
+        byte[] clientHp = deriveHp(clientHandshakeTrafficSecret);
+        Cipher clientHpProtection = javax.crypto.Cipher.getInstance("AES/ECB/NoPadding", "Conscrypt");
+        clientHpProtection.init(javax.crypto.Cipher.ENCRYPT_MODE,
+                new javax.crypto.spec.SecretKeySpec(clientHp, "AES"));
+
         metadata.clientHandshakeKeys = new PacketProtectionKeysWithHP(deriveKey(clientHandshakeTrafficSecret),
-                deriveIv(clientHandshakeTrafficSecret), deriveHp(clientHandshakeTrafficSecret));
+                deriveIv(clientHandshakeTrafficSecret), clientHpProtection);
     }
 
     /**
@@ -716,8 +736,16 @@ public class QuicCrypto {
             byte[] clientApplicationIv = deriveIv(metadata.clientApplicationTrafficSecret);
             byte[] serverApplicationIv = deriveIv(metadata.serverApplicationTrafficSecret);
 
-            metadata.serverApplicationHeaderProtection = serverApplicationHpKey;
-            metadata.clientApplicationHeaderProtection = clientApplicationHpKey;
+            Cipher clientHpProtection = javax.crypto.Cipher.getInstance("AES/ECB/NoPadding", "Conscrypt");
+            clientHpProtection.init(javax.crypto.Cipher.ENCRYPT_MODE,
+                    new javax.crypto.spec.SecretKeySpec(clientApplicationHpKey, "AES"));
+            Cipher serverHpProtection = javax.crypto.Cipher.getInstance("AES/ECB/NoPadding", "Conscrypt");
+            serverHpProtection.init(javax.crypto.Cipher.ENCRYPT_MODE,
+                    new javax.crypto.spec.SecretKeySpec(serverApplicationHpKey, "AES"));
+
+
+            metadata.serverApplicationHeaderProtection = serverHpProtection;
+            metadata.clientApplicationHeaderProtection = clientHpProtection;
 
             metadata.setApplicationKeys(new PacketProtectionKeys(clientApplicationSecret, clientApplicationIv),
                     new PacketProtectionKeys(serverApplicationSecret, serverApplicationIv));
@@ -1216,7 +1244,6 @@ public class QuicCrypto {
      *
      * @param trafficSecret The traffic secret (e.g. {@code TlsMetadata.clientHandshakeSecret})
      * @return Raw 16-byte header-protection key bytes suitable for passing to
-     *         {@link QuicPacketHeader#parse(java.nio.ByteBuffer, byte[])}
      * @throws CryptoException if key derivation fails
      */
     public static byte[] deriveHeaderProtectionKey(SecretKey trafficSecret) throws CryptoException {

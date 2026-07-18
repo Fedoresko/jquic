@@ -120,7 +120,7 @@ public class QuicPacketHeader {
      * Returns a masked header that needs unmask() to be called.
      * Returns null if the packet is malformed (RFC 9000: silently discard).
      */
-    public static QuicPacketHeader parse(ByteBuffer packet, @Nullable byte[] headerProtectionKey) {
+    public static QuicPacketHeader parse(ByteBuffer packet, @Nullable Cipher headerProtection) {
         try {
             int startPosition = packet.position();
 
@@ -129,9 +129,9 @@ public class QuicPacketHeader {
             boolean isLongHeader = (flags & 0x80) != 0;
 
             if (isLongHeader) {
-                return parseLongHeader(packet, startPosition, flags, headerProtectionKey);
+                return parseLongHeader(packet, startPosition, flags, headerProtection);
             } else {
-                return parseShortHeader(packet, startPosition, flags, headerProtectionKey);
+                return parseShortHeader(packet, startPosition, flags, headerProtection);
             }
         } catch (Exception e) {
             // RFC 9000: Silently discard malformed packets
@@ -179,7 +179,7 @@ public class QuicPacketHeader {
         };
     }
 
-    private static QuicPacketHeader parseLongHeader(ByteBuffer packet, int startPosition, byte flags, byte[] headerProtectionKey) {
+    private static QuicPacketHeader parseLongHeader(ByteBuffer packet, int startPosition, byte flags, Cipher headerProtection) {
         // Read version (4 bytes)
         int version = packet.getInt();
 
@@ -206,7 +206,7 @@ public class QuicPacketHeader {
 
         // Read payload length (varint)
         long payloadLength = QuicVarint.read(packet);
-        PacketNumber packetNumber = readPacketNumber(packet, true, flags, startPosition, headerProtectionKey);
+        PacketNumber packetNumber = readPacketNumber(packet, true, flags, startPosition, headerProtection);
 
         int headerLen = packet.position() - startPosition;
         byte [] rawData = new byte[headerLen];
@@ -216,13 +216,13 @@ public class QuicPacketHeader {
                                          packetType, token, payloadLength, (byte) 0, rawData);
     }
 
-    private static QuicPacketHeader parseShortHeader(ByteBuffer packet, int startPosition, byte flags, byte[] headerProtectionKey) {
+    private static QuicPacketHeader parseShortHeader(ByteBuffer packet, int startPosition, byte flags, Cipher headerProtection) {
         // Short header has DCID but no length field (must know from connection context)
         // For now, assume 8-byte DCID
         byte[] destinationCid = new byte[8];
         packet.get(destinationCid);
 
-        PacketNumber packetNumber = readPacketNumber(packet, false, flags, startPosition, headerProtectionKey);
+        PacketNumber packetNumber = readPacketNumber(packet, false, flags, startPosition, headerProtection);
 
         int headerLen = packet.position() - startPosition;
         byte [] rawData = new byte[headerLen];
@@ -233,22 +233,21 @@ public class QuicPacketHeader {
 
     public record PacketNumber(int pnLength, long packetNumber, byte flags) {}
 
-    public static PacketNumber readPacketNumber(ByteBuffer packet, boolean isLongHeader, byte protectedFlags, int startPosition, @Nullable byte[] headerProtectionKey) {
-        if (headerProtectionKey == null) {
+    public static PacketNumber readPacketNumber(ByteBuffer packet, boolean isLongHeader, byte protectedFlags, int startPosition, @Nullable Cipher headerProtection) {
+        if (headerProtection == null) {
             int pnLength = getPacketNumberLength(protectedFlags);
             return new PacketNumber(pnLength, readPacketNumber(packet, pnLength), protectedFlags);
         } else {
-            return readPacketNumberMasked(packet, isLongHeader, protectedFlags, startPosition, headerProtectionKey);
+            return readPacketNumberMasked(packet, isLongHeader, protectedFlags, startPosition, headerProtection);
         }
     }
 
     /**
      * Removes header protection and returns a proper QuicPacketHeader.
      *
-     * @param headerProtectionKey The header protection key for unmasking
      * @return Unmasked QuicPacketHeader with correct packet number, or null if unmasking fails
      */
-    public static PacketNumber readPacketNumberMasked(ByteBuffer packet, boolean isLongHeader, byte protectedFlags, int startPosition, @NonNull byte[] headerProtectionKey) {
+    public static PacketNumber readPacketNumberMasked(ByteBuffer packet, boolean isLongHeader, byte protectedFlags, int startPosition, @NonNull Cipher headerProtection) {
 
         try {
             // Sample starts 4 bytes after packet number starts
@@ -260,9 +259,7 @@ public class QuicPacketHeader {
             packet.duplicate().position(packet.position() + sampleOffset).get(sample);
 
             // Generate mask using AES-ECB
-            Cipher cipher = Cipher.getInstance("AES/ECB/NoPadding", "Conscrypt");
-            cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(headerProtectionKey, "AES"));
-            byte[] mask = cipher.doFinal(sample);
+            byte[] mask = headerProtection.doFinal(sample);
 
             // Unmask the flags byte
             byte unmaskedFlags = protectedFlags;

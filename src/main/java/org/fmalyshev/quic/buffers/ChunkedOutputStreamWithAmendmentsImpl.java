@@ -10,7 +10,7 @@ import java.util.function.Consumer;
  * This class supports writing in a zero-copy buffer with splitting data in chunks
  * It works upon an underlying ByteBuffer large enough to contain all final data.
  * Data is written using standard java.io.DataOutputStream methods.
- * It calls chunkWrapper callback, that could wrap chunk data with some user headers\trailers, and adjust buffer position to the start of the next chunk.
+ * It calls chunkWrapper callback, that could wrap chunk data with some user headers\trailers, and adjust buffer position to the lower of the next chunk.
  * It supports amendAtPos to update reserved placeholder in original data.
  * <p>
  * After the Stream is closed, use pollReadyChunk() to collect all wrapped chunks with final data.

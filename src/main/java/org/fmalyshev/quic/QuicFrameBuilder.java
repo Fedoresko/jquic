@@ -1,13 +1,13 @@
 package org.fmalyshev.quic;
 
 import org.fmalyshev.quic.buffers.ChunkedOutputStreamWithAmendments;
+import org.fmalyshev.quic.struct.SortedIntervals;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.util.List;
-import java.util.stream.Collectors;
+import java.util.Iterator;
 
 public class QuicFrameBuilder {
     public static final int CRYPTO_FRAME_MAX_HEADER_LENGTH = 1 + 8 + 8;
@@ -22,44 +22,14 @@ public class QuicFrameBuilder {
      * Format: type(0x02) | largest_ack(varint) | ack_delay(varint) | ack_range_count(varint) |
      * first_ack_range(varint) | [gap(varint) | ack_range(varint)]*
      */
-    public static void writeAckFrameWithRanges(long largestAcknowledged, List<PacketNumberSpace.AckRange> ranges, ByteBuffer out) {
+    public static void writeAckFrameWithRanges(long largestAcknowledged, SortedIntervals ranges, ByteBuffer out) {
         int start = out.position();
 
         out.put((byte) 0x02); // ACK frame type
         QuicVarint.write(out, largestAcknowledged);
         QuicVarint.write(out, 0); // ACK Delay (simplified)
 
-        if (ranges.isEmpty()) {
-            QuicVarint.write(out, 0); // No ranges
-            QuicVarint.write(out, 0);
-            out.limit(out.position());
-            out.position(start);
-            return;
-        }
-
-        // Range count (excluding first range)
-        QuicVarint.write(out, ranges.size() - 1);
-
-        // First range
-        PacketNumberSpace.AckRange firstRange = ranges.get(0);
-        long firstRangeLength = firstRange.largest - firstRange.smallest;
-        QuicVarint.write(out, firstRangeLength);
-
-        // Additional ranges with gaps
-        long previousSmallest = firstRange.smallest;
-        for (int i = 1; i < ranges.size(); i++) {
-            PacketNumberSpace.AckRange range = ranges.get(i);
-
-            // Gap = previousSmallest - currentLargest - 2
-            long gap = previousSmallest - range.largest - 2;
-            QuicVarint.write(out, gap);
-
-            // Range length
-            long rangeLength = range.largest - range.smallest;
-            QuicVarint.write(out, rangeLength);
-
-            previousSmallest = range.smallest;
-        }
+        writeAckRanges(ranges, out);
 
         while (out.position() < 20) {
             out.put((byte) 0x00); //PADDING
@@ -67,6 +37,40 @@ public class QuicFrameBuilder {
 
         out.limit(out.position());
         out.position(start);
+    }
+
+    private static void writeAckRanges(SortedIntervals ranges, ByteBuffer out) {
+        if (ranges.isEmpty()) {
+            QuicVarint.write(out, 0); // No ranges
+            QuicVarint.write(out, 0);
+            return;
+        }
+
+        // Range count (excluding first range)
+        QuicVarint.write(out, ranges.size() - 1);
+
+        // First range
+        Iterator<SortedIntervals.Interval> iterator = ranges.iterator();
+
+        SortedIntervals.Interval firstRange = iterator.next();
+        long firstRangeLength = firstRange.higher() - firstRange.lower();
+        QuicVarint.write(out, firstRangeLength);
+
+        // Additional ranges with gaps
+        long previousSmallest = firstRange.lower();
+        while (iterator.hasNext()) {
+            SortedIntervals.Interval range = iterator.next();
+
+            // Gap = previousSmallest - currentLargest - 2
+            long gap = previousSmallest - range.higher() - 2;
+            QuicVarint.write(out, gap);
+
+            // Range length
+            long rangeLength = range.higher() - range.lower();
+            QuicVarint.write(out, rangeLength);
+
+            previousSmallest = range.lower();
+        }
     }
 
     /**
@@ -93,9 +97,7 @@ public class QuicFrameBuilder {
     }
 
     public static void writeAckFrame(PacketNumberSpace space, ByteBuffer out) {
-        List<PacketNumberSpace.AckRange> ackRanges = space.getAckRanges();
-
-        log.debug("PN {} acked ranges {}", space.phase, ackRanges.stream().map(PacketNumberSpace.AckRange::toString).collect(Collectors.joining(", ")));
+        SortedIntervals ackRanges = space.getAckRanges();
 
         long largestAcknowledged = space.getLargestReceivedPacketNumber();
         writeAckFrameWithRanges(largestAcknowledged, ackRanges, out);
@@ -285,38 +287,14 @@ public class QuicFrameBuilder {
      */
     public static void writeAckEcnFrame(PacketNumberSpace space, ByteBuffer out) {
         int start = out.position();
-        List<PacketNumberSpace.AckRange> ranges = space.getAckRanges();
+        SortedIntervals ranges = space.getAckRanges();
         long largestAcknowledged = space.getLargestReceivedPacketNumber();
 
         out.put((byte) 0x03); // ACK + ECN frame type
         QuicVarint.write(out, largestAcknowledged);
         QuicVarint.write(out, 0); // ACK Delay (simplified)
 
-        if (ranges.isEmpty()) {
-            QuicVarint.write(out, 0); // No additional ranges
-            QuicVarint.write(out, 0); // First range length is 0
-        } else {
-            // Range count (excluding first range)
-            QuicVarint.write(out, ranges.size() - 1);
-
-            // First range
-            PacketNumberSpace.AckRange firstRange = ranges.get(0);
-            long firstRangeLength = firstRange.largest - firstRange.smallest;
-            QuicVarint.write(out, firstRangeLength);
-
-            // Additional ranges with gaps
-            long previousSmallest = firstRange.smallest;
-            for (int i = 1; i < ranges.size(); i++) {
-                PacketNumberSpace.AckRange range = ranges.get(i);
-                // Gap = previousSmallest - currentLargest - 2
-                long gap = previousSmallest - range.largest - 2;
-                QuicVarint.write(out, gap);
-                // Range length
-                long rangeLength = range.largest - range.smallest;
-                QuicVarint.write(out, rangeLength);
-                previousSmallest = range.smallest;
-            }
-        }
+        writeAckRanges(ranges, out);
 
         // ECN Counts
         QuicVarint.write(out, space.clientEct0Counter);

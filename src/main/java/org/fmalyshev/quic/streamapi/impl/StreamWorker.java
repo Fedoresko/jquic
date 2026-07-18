@@ -82,6 +82,7 @@ public class StreamWorker extends Thread {
                         }
                     } catch (Exception e) {
                         logger.error("Error processing frame for connection {}", currentFrameTask.manager.getConnectionId(), e);
+                        currentFrameTask = null;
                     }
                 }
 
@@ -93,7 +94,7 @@ public class StreamWorker extends Thread {
                         Thread.yield();
                     } else {
                         isParked = true;
-                        LockSupport.parkNanos(10000);
+                        LockSupport.parkNanos(1_000_000_0L);
                         isParked = false;
                     }
                 } else {

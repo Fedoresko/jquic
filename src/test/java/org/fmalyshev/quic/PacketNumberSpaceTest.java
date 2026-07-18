@@ -1,10 +1,13 @@
 package org.fmalyshev.quic;
 
+import org.fmalyshev.quic.struct.SortedIntervals;
 import org.junit.jupiter.api.Test;
 
 import java.nio.ByteBuffer;
 import java.util.Arrays;
+import java.util.Iterator;
 import java.util.List;
+import java.util.stream.StreamSupport;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -159,11 +162,13 @@ class PacketNumberSpaceTest {
             space.onPacketReceived(i, 0);
         }
 
-        List<PacketNumberSpace.AckRange> ranges = space.getAckRanges();
+        SortedIntervals ranges = space.getAckRanges();
+
+        SortedIntervals.Interval first = ranges.iterator().next();
 
         assertEquals(1, ranges.size());
-        assertEquals(0, ranges.get(0).smallest);
-        assertEquals(4, ranges.get(0).largest);
+        assertEquals(0, first.lower());
+        assertEquals(4, first.higher());
     }
 
     @Test
@@ -179,19 +184,24 @@ class PacketNumberSpaceTest {
         space.onPacketReceived(7, 0);
         space.onPacketReceived(10, 0);
 
-        List<PacketNumberSpace.AckRange> ranges = space.getAckRanges();
+        SortedIntervals ranges = space.getAckRanges();
 
         assertEquals(3, ranges.size());
 
+        Iterator<SortedIntervals.Interval> it = space.getAckRanges().iterator();
+
+        SortedIntervals.Interval next = it.next();
         // Ranges should be in descending order (largest first)
-        assertEquals(10, ranges.get(0).smallest);
-        assertEquals(10, ranges.get(0).largest);
+        assertEquals(10, next.lower());
+        assertEquals(10, next.higher());
 
-        assertEquals(5, ranges.get(1).smallest);
-        assertEquals(7, ranges.get(1).largest);
+        next = it.next();
+        assertEquals(5, next.lower());
+        assertEquals(7, next.higher());
 
-        assertEquals(0, ranges.get(2).smallest);
-        assertEquals(2, ranges.get(2).largest);
+        next = it.next();
+        assertEquals(0, next.lower());
+        assertEquals(2, next.higher());
     }
 
     @Test
@@ -205,12 +215,13 @@ class PacketNumberSpaceTest {
         space.onPacketReceived(3, 0);
         space.onPacketReceived(4, 0);
 
-        List<PacketNumberSpace.AckRange> ranges = space.getAckRanges();
+        SortedIntervals ranges = space.getAckRanges();
+
 
         // Should merge into ranges: [8], [2-5]
         assertEquals(2, ranges.size());
-        assertTrue(ranges.stream().anyMatch(r -> r.smallest == 8 && r.largest == 8));
-        assertTrue(ranges.stream().anyMatch(r -> r.smallest == 2 && r.largest == 5));
+        assertTrue(StreamSupport.stream(ranges.spliterator(), false).anyMatch(r -> r.lower() == 8 && r.higher() == 8));
+        assertTrue(StreamSupport.stream(ranges.spliterator(), false).anyMatch(r -> r.lower() == 2 && r.higher() == 5));
     }
 
     @Test

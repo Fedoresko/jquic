@@ -2,6 +2,7 @@ package org.fmalyshev.quic;
 
 import org.junit.jupiter.api.Test;
 
+import javax.crypto.Cipher;
 import java.nio.ByteBuffer;
 
 import static org.fmalyshev.quic.QuicConnectionCryptoIntegrationTest.destinationCidBytes;
@@ -15,7 +16,7 @@ class QuicPacketBuilderTest {
 
     public static final ByteBuffer SCID = ByteBuffer.wrap(new byte[8]).putLong(0x5678L).flip();
     private static final byte[] MOCK_IV = new byte[12];
-    private static final byte[] MOCK_HP = new byte[0]; // Set to 0 to skip HP in QuicPacketBuilder
+    private static final Cipher MOCK_HP = null; // Set to 0 to skip HP in QuicPacketBuilder
     private static final javax.crypto.SecretKey MOCK_KEY = new javax.crypto.spec.SecretKeySpec(new byte[16], "AES");
     private static final QuicCrypto.PacketProtectionKeysWithHP MOCK_KEYS_HP = new QuicCrypto.PacketProtectionKeysWithHP(MOCK_KEY, MOCK_IV, MOCK_HP);
     private static final QuicCrypto.PacketProtectionKeys MOCK_KEYS = new QuicCrypto.PacketProtectionKeys(MOCK_KEY, MOCK_IV);

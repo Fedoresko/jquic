@@ -2,7 +2,6 @@ package org.fmalyshev.http3;
 
 import org.fmalyshev.quic.QuicVarint;
 import org.fmalyshev.quic.streamapi.QuicApplicationProtocolConnectionHandler;
-import org.fmalyshev.quic.streamapi.QuicStreamException;
 import org.fmalyshev.quic.streamapi.QuicStreamResponse;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
@@ -15,7 +14,6 @@ import java.io.ByteArrayInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
@@ -298,13 +296,11 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
         }
 
         private final long streamId;
-        private final ByteBuffer dataBuffer = ByteBuffer.allocate(64 * 1024); // 64 KB buffer
+        private final Deque<ByteBuffer> chunks = new LinkedList<>();
+        private int lastlyRecieved = 0;
 
         /** HTTP/3-level role of this stream (determined from the QUIC stream type or the stream-type varint). */
         private Http3StreamRole role;
-
-        /** Read cursor: how many bytes from dataBuffer have already been consumed as complete frames. */
-        private int readCursor = 0;
 
         // ---- request state machine ----
         private RequestProcessingState requestState = RequestProcessingState.INITIAL;
@@ -337,6 +333,10 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
             this.request = request;
         }
 
+        boolean hasUnconsumedData() {
+            return !chunks.isEmpty() && chunks.peek().hasRemaining();
+        }
+
         /**
          * Attempts to determine the HTTP/3 role of a unidirectional stream by reading the
          * leading stream-type varint from the buffered data (RFC 9114 §6.2).
@@ -347,7 +347,10 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
                 return;
             }
             // Peek at the buffer without advancing the write position.
-            ByteBuffer peek = dataBuffer.duplicate().flip();
+            if (chunks.isEmpty()) {
+                return;
+            }
+            ByteBuffer peek = chunks.getFirst().duplicate();
             if (!peek.hasRemaining()) {
                 return; // No bytes yet.
             }
@@ -366,67 +369,45 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
         }
 
         void appendData(byte[] data) {
-            if (dataBuffer.remaining() < data.length) {
-                throw new IllegalStateException("Stream buffer overflow");
-            }
-            dataBuffer.put(data);
+            chunks.add(ByteBuffer.wrap(data));
+            lastlyRecieved += data.length;
         }
 
         /**
          * Tries to parse the next complete HTTP/3 frame from the buffer starting at
-         * {@link #readCursor}. Returns {@code null} if there are not enough bytes yet.
-         * Advances {@link #readCursor} past the consumed frame on success.
          */
         @Nullable
         ParsedFrame pollFrame() {
             // Create a view of the bytes written so far, starting from readCursor.
-            ByteBuffer view = dataBuffer.duplicate().flip();
-            view.position(readCursor);
-
-            if (!view.hasRemaining()) {
+            if (chunks.isEmpty()) {
                 return null;
             }
 
-            // Mark the start so we can reset if we don't have a full frame.
-            view.mark();
-
-            // Need at least 1 byte for the type varint.
-            if (view.remaining() < 1) {
-                return null;
-            }
+            ByteBuffer view = chunks.peek();
             long frameType = QuicVarint.read(view);
-
             if (!view.hasRemaining()) {
                 return null; // Not enough bytes for the length varint.
             }
             long frameLength = QuicVarint.read(view);
-
-            if (view.remaining() < (int) frameLength) {
+            if (lastlyRecieved < (int) frameLength) {
                 return null; // Payload not fully arrived yet.
             }
 
             byte[] payload = new byte[(int) frameLength];
-            view.get(payload);
 
-            readCursor = view.position();
+            int pos = 0;
+            while (!chunks.isEmpty() && pos < frameLength) {
+                ByteBuffer chunk = chunks.peek();
+                int chunkSize = chunk.remaining();
+                chunk.get(payload, pos, Math.min((int) frameLength - pos, chunkSize));
+                pos += chunkSize;
+                if (pos < frameLength) {
+                    chunks.poll();
+                }
+            }
+            lastlyRecieved -= (int) frameLength;
+
             return new ParsedFrame(frameType, payload);
-        }
-
-        /**
-         * Returns {@code true} if there are bytes in the buffer that have not yet been
-         * consumed by {@link #pollFrame()} — i.e. the buffer holds a partial (truncated) frame.
-         * Per RFC 9114 §4.1, a FIN while unconsumed bytes remain MUST be a connection error.
-         */
-        boolean hasUnconsumedData() {
-            return readCursor < dataBuffer.position();
-        }
-
-        ByteBuffer getData() {
-            return dataBuffer.duplicate().flip();
-        }
-
-        int getDataLength() {
-            return dataBuffer.position();
         }
     }
 }

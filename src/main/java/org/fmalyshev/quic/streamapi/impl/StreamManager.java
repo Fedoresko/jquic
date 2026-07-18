@@ -222,11 +222,6 @@ public class StreamManager implements ConnectionStreamManager {
                 logger.warn("Connection {} stream {} has reached MAX_STREAM_DATA", getConnectionId(), streamId);
                 connection.closeConnection(QuicTransportError.FLOW_CONTROL_ERROR, "MAX_STREAM_DATA limit reached");
             }
-
-            if (hasFin) {
-                flightControl.onStreamFin(streamId, false);
-                streamBuffers.remove(streamId).free();
-            }
         }
 
         private void handleFrame(ResetStreamFrameData frame) throws IOException {
@@ -284,6 +279,11 @@ public class StreamManager implements ConnectionStreamManager {
                 flightControl.byfferedBytesFreed(streamId, freedBytes);
 
                 handler.onStreamDataReceived(streamId, responseHandler, data.getData(), data.isLast(), errorCode);
+
+                if (data.isLast()) {
+                    flightControl.onStreamFin(streamId, false);
+                    streamBuffers.remove(streamId).free();
+                }
             } else if (errorCode != null) {
                 handler.onStreamDataReceived(streamId, responseHandler, new byte[0], true, errorCode);
             }
@@ -291,7 +291,12 @@ public class StreamManager implements ConnectionStreamManager {
 
         private void onStreamResetAck(long streamId) {
             flightControl.onStreamResetAck(streamId);
-            streamBuffers.remove(streamId).free();
+            StreamBuffer buffer = streamBuffers.remove(streamId);
+            if (buffer != null) {
+                buffer.free();
+            } else {
+                logger.warn("onStreamResetAck: stream {} is already gone", streamId);
+            }
         }
     }
 
@@ -309,7 +314,7 @@ public class StreamManager implements ConnectionStreamManager {
             throw new QuicStreamException("Stream " + streamId + " cannot send data in stream.");
         }
 
-        ByteBuffer data = ByteBuffer.allocate(2048);
+        ByteBuffer data = ByteBuffer.allocateDirect(2048);
         data.position(STREAM_FRAME_HEADER_MAX_LEN);
 
         ChunkedOutputStreamWithAmendmentsImpl outs = new ChunkedOutputStreamWithAmendmentsImpl(data,
@@ -355,7 +360,10 @@ public class StreamManager implements ConnectionStreamManager {
 
     private boolean trySendData(long streamId, boolean fin, ByteBuffer data, boolean isBlocking) {
         int dataSize = data.remaining();
-        if (!flightControl.canSend(streamId, dataSize)) return false;
+        if (!flightControl.canSend(streamId, dataSize)) {
+            logger.warn("Cannot push more data for stream {}", streamId);
+            return false;
+        }
 
         long delayNs = getCongestionDelayNanos(streamId, data);
         if (delayNs > 0) {

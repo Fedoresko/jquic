@@ -153,7 +153,7 @@ public class ChunkedOutputStreamWithAmendmentsTest {
         stream.write(new byte[20]);
 
         // Amend across boundary
-        stream.amendAtPos(9, dos -> dos.write(new byte[]{1, 2})); // Writes to index 9 (end of chunk 1) and 10 (start of chunk 2)
+        stream.amendAtPos(9, dos -> dos.write(new byte[]{1, 2})); // Writes to index 9 (higher of chunk 1) and 10 (lower of chunk 2)
 
         stream.close();
 
@@ -424,10 +424,10 @@ public class ChunkedOutputStreamWithAmendmentsTest {
         ChunkedOutputStreamWithAmendmentsImpl stream = new ChunkedOutputStreamWithAmendmentsImpl(buffer, chunkSize, wrapper);
         stream.write(new byte[30]);
 
-        // Amendment exactly at the end of first chunk (pos 9)
+        // Amendment exactly at the higher of first chunk (pos 9)
         stream.amendAtPos(9, dos -> dos.write(77));
 
-        // Amendment exactly at the start of second chunk (pos 10)
+        // Amendment exactly at the lower of second chunk (pos 10)
         stream.amendAtPos(10, dos -> dos.write(88));
 
         stream.close();

@@ -17,6 +17,7 @@ import java.nio.channels.DatagramChannel;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.LockSupport;
 
 // =========================================================================
 // SELECTOR THREAD LOGIC
@@ -46,6 +47,7 @@ public class SelectorThread implements Runnable {
     private final TimeoutHeap<QuicConnection> timeoutHeap = new TimeoutHeap<>(QuicConnection.class);
     private long lastTimeoutCheck = System.currentTimeMillis();
     private static final long TIMEOUT_CHECK_INTERVAL_MS = 1000; // Check every second
+    private int idleCounter = 0;
 
     /**
      * Encapsulates a packet with its sender address for forwarding between threads.
@@ -60,7 +62,7 @@ public class SelectorThread implements Runnable {
         }
     }
 
-    public SelectorThread(int threadId, DatagramChannel channel, ConcurrentHashMap<Long, Integer> cidToSelectorMap) throws IOException {
+    public SelectorThread(int threadId, DatagramChannel channel, ConcurrentHashMap<Long, Integer> cidToSelectorMap) throws IOException, NoSuchFieldException, IllegalAccessException {
         this.threadId = threadId;
         this.channel = new QuicDatagramChannel(channel);
         this.forwardedPackets = new SpscLinkedQueue<>();
@@ -107,11 +109,15 @@ public class SelectorThread implements Runnable {
                 boolean hadWork = false;
 
                 // Process packets from socket
-                SocketAddress sender = channel.receive(buffer.buf(), metricsHolder);
+                SocketAddress sender = (idleCounter > 10) ?
+                        channel.receiveBlocking(buffer.buf(), metricsHolder) :
+                        channel.receive(buffer.buf(), metricsHolder);
+
                 if (sender != null) {
                     buffer.buf().flip();
                     processPacket(now, buffer, sender, "socket", metricsHolder[0]);
                     hadWork = true;
+                    idleCounter = 0;
                     buffer = QuicEngine.getPool().requestReadBuffer();
                 }
 
@@ -121,12 +127,14 @@ public class SelectorThread implements Runnable {
                 if (forwarded != null) {
                     processPacket(now, forwarded.buffer, forwarded.sender, "forwarded", 0);
                     hadWork = true;
+                    idleCounter = 0;
                 }
 
                 HandshakeTask handshakeTask = handshakeQueue.poll();
                 if (handshakeTask != null) {
                     processHandshakeTask(now, handshakeTask);
                     hadWork = true;
+                    idleCounter = 0;
                 }
 
                 // Drain application queue and process packages for all active connections.
@@ -152,6 +160,7 @@ public class SelectorThread implements Runnable {
                         }
 
                         hadWork = true;
+                        idleCounter = 0;
                     }
                 }
 
@@ -162,9 +171,9 @@ public class SelectorThread implements Runnable {
                 }
 
                 if (!hadWork) {
-                    Thread.sleep(1);
+                    LockSupport.parkNanos(1000);
+                    idleCounter++;
                 }
-
             }
         } catch (Exception e) {
             log.error(logColor(), "Selector-{}: Error in selector thread", threadId, e);
@@ -243,6 +252,7 @@ public class SelectorThread implements Runnable {
 
                 if (connection == null) {
                     log.warn(logColor(), "Selector-{}: No connection found for CID: {}, discarding datagram", threadId, cid);
+                    evictConnection(cid);
                     break;
                 }
 
@@ -309,17 +319,13 @@ public class SelectorThread implements Runnable {
         try {
             log.warn(logColor(), "Selector-{}: Processing Initial packet for new CID: {}", threadId, task.allocatedCid);
 
-            QuicPacketHeader.PacketSummary packetSummary = QuicPacketHeader.parseSummary(task.packet.buf());
-            if (packetSummary == null) {
-                return;
-            }
-
             QuicConnection connection = activeConnections.computeIfAbsent(task.allocatedCid,
                     cid -> new QuicConnection(task.allocatedCid, task.sender, this));
+            connection.setCurrentTimestamp(now);
 
             assignConnectionToSelector(connection.getConnectionId());
 
-            ByteBuffer dcidKey = ByteBuffer.wrap(packetSummary.dcid());
+            ByteBuffer dcidKey = ByteBuffer.wrap(task.packetSummary.dcid());
             initializingConnections.put(dcidKey, connection);
 
             processPacket(now, task.packet, task.sender, "initial", 0);
@@ -335,8 +341,6 @@ public class SelectorThread implements Runnable {
     }
 
     private void assignConnectionToSelector(long connectionId) {
-        cidToSelectorMap.put(connectionId, threadId);
-
         log.info(logColor(), "Connection {} assigned to Selector {}", connectionId, threadId);
 
         // Update eBPF map if available
@@ -428,7 +432,7 @@ public class SelectorThread implements Runnable {
      * For short-header (1-RTT) packets, the entire remaining datagram is consumed
      * since there is no length field in a short header.
      *
-     * @param datagram The datagram buffer positioned at the start of the packet to skip
+     * @param datagram The datagram buffer positioned at the lower of the packet to skip
      */
      public static void skipPacket(ByteBuffer datagram) {
         try {

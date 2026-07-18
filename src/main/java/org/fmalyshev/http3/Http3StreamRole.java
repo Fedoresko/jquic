@@ -5,7 +5,7 @@ package org.fmalyshev.http3;
  *
  * <p>Bidirectional streams are always {@link #REQUEST} streams.
  * Unidirectional streams declare their role via a stream-type varint
- * written at the very start of the stream:
+ * written at the very lower of the stream:
  * <ul>
  *   <li>{@code 0x00} — {@link #CONTROL}</li>
  *   <li>{@code 0x02} — {@link #QPACK_ENCODER}</li>

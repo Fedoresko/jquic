@@ -1139,8 +1139,8 @@ class QuicConnectionTest {
 
         mock.when(() -> QuicCrypto.createApplicationKeys(any(ConnectionMetadata.class))).thenAnswer(inv -> {
              ConnectionMetadata metadata = inv.getArgument(0);
-             metadata.clientApplicationHeaderProtection = new byte[16];
-             metadata.serverApplicationHeaderProtection = new byte[16];
+             metadata.clientApplicationHeaderProtection = null;
+             metadata.serverApplicationHeaderProtection = null;
              metadata.clientApplicationTrafficSecret = new byte[32];
              metadata.serverApplicationTrafficSecret = new byte[32];
              metadata.setApplicationKeys(

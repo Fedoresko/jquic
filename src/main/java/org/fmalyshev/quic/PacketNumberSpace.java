@@ -1,5 +1,6 @@
 package org.fmalyshev.quic;
 
+import org.fmalyshev.quic.struct.SortedIntervals;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -26,7 +27,7 @@ public class PacketNumberSpace {
 
     // Received packet tracking
     private long largestReceivedPacketNumber = -1;
-    private final Set<Long> receivedPackets = new TreeSet<>();
+    private final SortedIntervals receivedPackets = new SortedIntervals(255);
 
     // Sent packet tracking — TreeMap keeps packet numbers sorted so the packet-threshold
     // pass in detectLostPackets can use headMap() instead of scanning the full table.
@@ -121,7 +122,7 @@ public class PacketNumberSpace {
      * Records that a packet was received.
      */
     public synchronized void onPacketReceived(long packetNumber, int ecnFlags) {
-        receivedPackets.add(packetNumber);
+        receivedPackets.add((int) packetNumber);
 
         if (packetNumber > largestReceivedPacketNumber) {
             largestReceivedPacketNumber = packetNumber;
@@ -364,36 +365,8 @@ public class PacketNumberSpace {
      * Returns ACK ranges for received packets.
      * Used to construct ACK frames.
      */
-    public List<AckRange> getAckRanges() {
-        if (receivedPackets.isEmpty()) {
-            return Collections.emptyList();
-        }
-
-        List<AckRange> ranges = new ArrayList<>();
-        List<Long> sorted = new ArrayList<>(receivedPackets);
-        sorted.sort(Collections.reverseOrder());
-
-        long rangeStart = sorted.get(0);
-        long rangeEnd = sorted.get(0);
-
-        for (int i = 1; i < sorted.size(); i++) {
-            long pn = sorted.get(i);
-
-            if (pn == rangeEnd - 1) {
-                // Contiguous, extend range
-                rangeEnd = pn;
-            } else {
-                // Gap found, save current range and start new one
-                ranges.add(new AckRange(rangeEnd, rangeStart));
-                rangeStart = pn;
-                rangeEnd = pn;
-            }
-        }
-
-        // Add final range
-        ranges.add(new AckRange(rangeEnd, rangeStart));
-
-        return ranges;
+    public SortedIntervals getAckRanges() {
+        return receivedPackets;
     }
 
     public long getLargestReceivedPacketNumber() {

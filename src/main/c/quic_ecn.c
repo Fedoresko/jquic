@@ -5,6 +5,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <string.h>
+#include <poll.h>
 #include <errno.h>
 
 int32_t quic_receive_ecn(int32_t fd, void *buf, int32_t length, int32_t *out_metadata) {
@@ -74,4 +75,27 @@ int32_t quic_receive_ecn(int32_t fd, void *buf, int32_t length, int32_t *out_met
     }
 
     return (int32_t)bytes_read;
+}
+
+// A blocking wrapper that uses your exact function
+int32_t quic_receive_ecn_blocking(int32_t fd, void *buf, int32_t length, int32_t *out_metadata) {
+    // 1. Try a fast non-blocking read first
+    int32_t bytes = quic_receive_ecn(fd, buf, length, out_metadata);
+
+    // 2. If no data, use poll() to wait indefinitely at 0% CPU
+    if (bytes < 0 && (out_metadata[0] == EAGAIN || out_metadata[0] == EWOULDBLOCK)) {
+        struct pollfd pfd = { .fd = fd, .events = POLLIN };
+
+        // This blocks the thread natively until UDP data hits the NIC
+        int ret = poll(&pfd, 1, 10);
+        if (ret <= 0) {
+            out_metadata[0] = errno;
+            return -1; // Handle poll error or interrupt
+        }
+
+        // 3. Data is guaranteed ready, run your exact code again
+        return quic_receive_ecn(fd, buf, length, out_metadata);
+    }
+
+    return bytes;
 }

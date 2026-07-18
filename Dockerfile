@@ -93,7 +93,7 @@ strace -e bpf /app/loader &&\n\
 # Start the Java application in the background and capture its PID\n\
 su - fedoresko -c "cd /app && ${JAVA_HOME}/bin/java -XX:+UnlockDiagnosticVMOptions -XX:+DebugNonSafepoints -Djava.net.preferIPv4Stack=true\
    --add-opens java.base/sun.nio.ch=ALL-UNNAMED --add-opens java.base/java.io=ALL-UNNAMED -Dlog.level=WARN\
-   -agentpath:/opt/async-profiler/lib/libasyncProfiler.so=start,event=cpu,alloc=2m,loop=1m,file=/home/fedoresko/profile-%t.jfr\
+   -agentpath:/opt/async-profiler/lib/libasyncProfiler.so=start,event=cpu,event=alloc,event=nativemem,alloc=2m,loop=1m,file=/home/fedoresko/profile-%t.jfr\
    -jar jquic.jar" &\n\
 JAVA_PID=$!\n\
 \n\
@@ -111,7 +111,11 @@ while (true) do\n\
       echo "Processing: $FILE"\n\
       BASE_NAME="${FILE%.*}"\n\
       OUTPUT_FILE="${BASE_NAME}.html"\n\
-      /opt/async-profiler/bin/jfrconv -o heatmap "$FILE" "$OUTPUT_FILE"\n\
+      DIR=$(dirname "$OUTPUT_FILE")\n\
+      BASE=$(basename "$OUTPUT_FILE")\n\
+      /opt/async-profiler/bin/jfrconv -o heatmap "$FILE" "$DIR/cpu-$BASE"\n\
+      /opt/async-profiler/bin/jfrconv --alloc --total -o heatmap "$FILE" "$DIR/mem-$BASE"\n\
+      /opt/async-profiler/bin/jfrconv --nativemem --total -o heatmap "$FILE" "$DIR/nmem-$BASE"\n\
       if [ $? -eq 0 ]; then\n\
           echo "Success. Deleting original file..."\n\
           rm "$FILE"\n\

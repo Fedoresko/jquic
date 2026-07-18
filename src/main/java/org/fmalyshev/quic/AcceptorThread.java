@@ -62,18 +62,18 @@ class AcceptorThread implements Runnable {
                     QuicPacketHeader.PacketSummary packetSummary = QuicPacketHeader.parseSummary(buffer.buf());
                     if (packetSummary == null) {
                         log.warn(ANSIConstants.RED_FG, "Could not parse paket summary");
-                        break; // skip remaining
+                        continue; // skip remaining
                     }
                     byte[] dcid = packetSummary.dcid();
                     log.debug(ANSIConstants.RED_FG, "[Acceptor] Received {} packet, DCID: {}", packetSummary.type(), dcid);
 
                     SelectorCID assignedSelectorId = initialSelectorMap.get(ByteBuffer.wrap(dcid));
                     if (assignedSelectorId != null) {
-                        log.warn(ANSIConstants.RED_FG, "[Acceptor] Packet in initialization mapping  CID: {}, enqueueing for handshake", assignedSelectorId.cid);
+                        log.debug(ANSIConstants.RED_FG, "[Acceptor] Packet in initialization mapping  CID: {}, enqueueing for handshake", assignedSelectorId.cid);
 
                         buffer.buf().rewind();
                         selectors[assignedSelectorId.selectorId].forwardHandshake(
-                                new HandshakeTask(buffer.borrow(), sender, assignedSelectorId.cid())
+                                new HandshakeTask(buffer.borrow(), sender, assignedSelectorId.cid(), packetSummary)
                         );
                     } else {
                         long cid = ByteBuffer.wrap(dcid).getLong();
@@ -93,10 +93,11 @@ class AcceptorThread implements Runnable {
                                 int selectorId = (int) (getLongHash(dcid) % selectors.length);
 
                                 initialSelectorMap.put(ByteBuffer.wrap(dcid), new SelectorCID(selectorId, newCid));
+                                cidToSelectorMap.put(newCid, selectorId);
 
                                 buffer.buf().rewind();
                                 selectors[selectorId].forwardHandshake(
-                                        new HandshakeTask(buffer.borrow(), sender, newCid)
+                                        new HandshakeTask(buffer.borrow(), sender, newCid, packetSummary)
                                 );
                             } else if (packetSummary.type() != QuicPacketHeader.PacketType.INITIAL) {
                                 skipPacket(buffer.buf());

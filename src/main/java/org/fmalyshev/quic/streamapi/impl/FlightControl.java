@@ -266,9 +266,6 @@ class FlightControl {
         if (isNew) {
             long streamIndex = streamId / 4;
             if (isBidi) {
-                if (streamIndex < maxIncomingBidiStream) {
-                    return CLOSED; //Closed stream data, ignore
-                }
                 maxIncomingBidiStream = streamIndex;
                 currentIncomingBidiStreamsCount++;
                 long maxStreams = bidirectionalIncomingStreamCap / 4;
@@ -279,9 +276,6 @@ class FlightControl {
                     streamManager.sendMaxStreamsFrame(newMaxStreams, true);
                 }
             } else {
-                if (streamIndex < maxIncomingUniStream) {
-                    return CLOSED; //Closed stream data, ignore
-                }
                 maxIncomingUniStream = streamIndex;
                 currentIncomingUniStreamsCount++;
                 long maxStreams = (unidirectionalIncomingStreamCap - 2) / 4;
@@ -302,6 +296,7 @@ class FlightControl {
      */
     public void onStreamReset(long streamId, long errorCode, long finalSize) {
         StreamState state = streams.get(streamId);
+        logger.warn("Received RESET_STREAM for setram {}", streamId);
         if (state == null) {
             logger.debug("Received RESET_STREAM for unknown stream {}", streamId);
             return;
@@ -414,7 +409,7 @@ class FlightControl {
      * @param bufferedBytes - currently buffered bytes for the stream.
      */
     public void onStreamDataBlocked(long streamId, long limit, long bufferedBytes) {
-        logger.debug("Peer is blocked on stream {} at limit {}", streamId, limit);
+        logger.warn("Peer is blocked on stream {} at limit {}", streamId, limit);
         // Could send MAX_STREAM_DATA to unblock
         StreamState streamState = streams.get(streamId);
         long received = streamState.getMaxOffset();

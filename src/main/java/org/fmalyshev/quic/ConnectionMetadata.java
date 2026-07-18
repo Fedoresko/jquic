@@ -1,5 +1,6 @@
 package org.fmalyshev.quic;
 
+import javax.crypto.Cipher;
 import java.nio.ByteBuffer;
 import java.util.List;
 import java.util.Map;
@@ -59,8 +60,8 @@ public class ConnectionMetadata {
     public QuicCrypto.PacketProtectionKeys prevServerApplicationKeys;
     public byte[] clientApplicationTrafficSecret;
     public byte[] serverApplicationTrafficSecret;
-    public byte[] clientApplicationHeaderProtection;
-    public byte[] serverApplicationHeaderProtection;
+    public Cipher clientApplicationHeaderProtection;
+    public Cipher serverApplicationHeaderProtection;
 
     public byte currentPhase;
     public long lastPhaseSwitchPacketNumber = -1;

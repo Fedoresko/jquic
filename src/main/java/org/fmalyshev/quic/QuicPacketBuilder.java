@@ -4,6 +4,7 @@ import org.fmalyshev.quic.buffers.PoolBuffer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.crypto.Cipher;
 import javax.crypto.SecretKey;
 import java.nio.ByteBuffer;
 import java.security.SecureRandom;
@@ -62,7 +63,7 @@ public class QuicPacketBuilder {
         return encryptAndProtectQuicPacket(packetBuffer, keys.key(), keys.iv(), header, keys.headerProtection());
     }
 
-    private static PoolBuffer encryptAndProtectQuicPacket(ByteBuffer plaintext, SecretKey key, byte[] iv, QuicPacketHeader header, byte[] hp_key) throws QuicCrypto.CryptoException {
+    private static PoolBuffer encryptAndProtectQuicPacket(ByteBuffer plaintext, SecretKey key, byte[] iv, QuicPacketHeader header, Cipher hp_key) throws QuicCrypto.CryptoException {
         PoolBuffer packet = QuicEngine.getPool().requestWriteBuffer();
         int headerStart = packet.buf().position();
         header.write(packet.buf());
@@ -114,7 +115,7 @@ public class QuicPacketBuilder {
      * @throws QuicCrypto.CryptoException if encryption fails
      */
     public static PoolBuffer build1RttPacket(byte [] destinationCid, long packetNumber,
-                                             ByteBuffer plaintext, QuicCrypto.PacketProtectionKeys keys, byte [] hp_key, byte keyPhase) throws QuicCrypto.CryptoException {
+                                             ByteBuffer plaintext, QuicCrypto.PacketProtectionKeys keys, Cipher hp_key, byte keyPhase) throws QuicCrypto.CryptoException {
         int pnLen = encodedPnLength(packetNumber);
 
         QuicPacketHeader header = new QuicPacketHeader(new QuicPacketHeader.PacketNumber(pnLen, packetNumber, (byte) 0),
@@ -140,17 +141,15 @@ public class QuicPacketBuilder {
      * @param packet          fully assembled packet (flipped, ready to read)
      * @param headerLength    total header length in bytes (packet number is last {@code pnLen} bytes)
      * @param pnLen           packet number length in bytes (1–4)
-     * @param hpKey           16-byte AES header protection key
      * @throws QuicCrypto.CryptoException if AES-ECB fails
      */
     private static void applyHeaderProtection(ByteBuffer packet, int headerLength, int pnLen,
-                                              byte[] hpKey) throws QuicCrypto.CryptoException {
-        if (hpKey == null || hpKey.length == 0) {
-            return; // no-op for tests that pass a null/empty HP key
+                                              Cipher cipher) throws QuicCrypto.CryptoException {
+        if (cipher == null) {
+            return;
         }
-
         // RFC 9001 §5.4.2: sample_offset = pn_offset + 4
-        // pn_offset is the start of the packet number field = headerLength - pnLen
+        // pn_offset is the lower of the packet number field = headerLength - pnLen
         int sampleOffset = packet.position() + (headerLength - pnLen) + 4;
         if (packet.limit() < sampleOffset + 16) {
             throw new QuicCrypto.CryptoException(
@@ -166,9 +165,6 @@ public class QuicPacketBuilder {
         // Generate mask via AES-ECB
         byte[] mask;
         try {
-            javax.crypto.Cipher cipher = javax.crypto.Cipher.getInstance("AES/ECB/NoPadding", "Conscrypt");
-            cipher.init(javax.crypto.Cipher.ENCRYPT_MODE,
-                    new javax.crypto.spec.SecretKeySpec(hpKey, "AES"));
             mask = cipher.doFinal(sample);
         } catch (java.security.GeneralSecurityException e) {
             throw new QuicCrypto.CryptoException("Header protection mask generation failed", e);
@@ -203,7 +199,7 @@ public class QuicPacketBuilder {
         int resetSize = Math.max(MIN_STATELESS_RESET_LENGTH,
                 Math.min(incomingPacketSize - 1, 1200));
 
-        ByteBuffer frameBuffer = ByteBuffer.allocate(resetSize);
+        ByteBuffer frameBuffer = ByteBuffer.allocateDirect(resetSize);
 
         // First byte must have fixed bit (0x40) set to appear as valid short header
         byte firstByte = (byte) (0x40 | (SECURE_RANDOM.nextInt() & 0x3F));
@@ -215,7 +211,7 @@ public class QuicPacketBuilder {
         SECURE_RANDOM.nextBytes(randomBytes);
         frameBuffer.put(randomBytes);
 
-        // Add 16-byte Stateless Reset Token at the end
+        // Add 16-byte Stateless Reset Token at the higher
         // In a real implementation, this should be a pseudorandom function of the CID
         // For now, we use random bytes (stateless - doesn't require storing state)
         frameBuffer.put(statelessResetToken);

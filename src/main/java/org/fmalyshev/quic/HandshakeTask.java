@@ -12,10 +12,12 @@ public class HandshakeTask {
     final PoolBuffer packet;
     final SocketAddress sender;
     final long allocatedCid;
+    final QuicPacketHeader.PacketSummary packetSummary;
 
-    HandshakeTask(PoolBuffer packet, SocketAddress sender, long allocatedCid) {
+    HandshakeTask(PoolBuffer packet, SocketAddress sender, long allocatedCid, QuicPacketHeader.PacketSummary packetSummary) {
         this.packet = packet;
         this.sender = sender;
         this.allocatedCid = allocatedCid;
+        this.packetSummary = packetSummary;
     }
 }
