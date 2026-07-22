@@ -1,0 +1,59 @@
+plugins {
+    id 'java-library'
+    id 'maven-publish'
+}
+
+group = 'org.jquic'
+version = '1.0-SNAPSHOT'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+}
+
+repositories {
+    mavenCentral()
+    mavenLocal()
+}
+
+dependencies {
+    compileOnlyApi 'org.jspecify:jspecify:1.0.0'
+
+    // Slf4j API and Logback implementation
+    implementation 'org.slf4j:slf4j-api:2.0.9'
+    implementation 'tech.kwik:qpack:2.1'
+    api 'org.jquic:jquic:1.0-SNAPSHOT'
+
+    // Testing dependencies
+    // JUnit 6 BOM handles all version management for JUnit libraries automatically
+    testImplementation platform('org.junit:junit-bom:6.1.2')
+
+    // JUnit dependencies (versions omitted because they are managed by the BOM)
+    testImplementation 'org.junit.jupiter:junit-jupiter-api'
+    testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine'
+
+    // Latest Mockito core with full Java 25 byte-code compatibility
+    testImplementation 'org.mockito:mockito-core:5.23.0'
+    testImplementation 'org.mockito:mockito-junit-jupiter:5.23.0'
+
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            from components.java // Publishes the main jar and its dependencies
+        }
+    }
+}
+
+test {
+    useJUnitPlatform()
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.compilerArgs += ["-h", file("src/main/c").absolutePath]
+//    options.compilerArgs += ["--release", "22"]
+}
