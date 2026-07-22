@@ -1,10 +1,10 @@
 # Use the official minimal Debian slim image
-FROM azul/zulu-openjdk:22-latest AS java-vendor
+FROM azul/zulu-openjdk:25-latest AS java-vendor
 FROM debian:stable-slim
 
-ENV JAVA_HOME=/usr/lib/jvm/zulu22-ca
+ENV JAVA_HOME=/usr/lib/jvm/zulu25-ca
 ENV PATH="${JAVA_HOME}/bin:${PATH}"
-COPY --from=java-vendor /usr/lib/jvm/zulu22-ca-amd64 $JAVA_HOME
+COPY --from=java-vendor /usr/lib/jvm/zulu25-ca-amd64 $JAVA_HOME
 
 LABEL authors="fmmalyshev"
 

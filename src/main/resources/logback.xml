@@ -1,6 +1,6 @@
 <configuration>
     <!-- Регистрируем кастомный тег %mdcColor -->
-    <conversionRule conversionWord="mdcColor" converterClass="org.fmalyshev.MdcColorConverter" />
+    <conversionRule conversionWord="mdcColor" converterClass="org.jquic.MdcColorConverter" />
 
     <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
@@ -9,7 +9,7 @@
         </encoder>
     </appender>
 
-    <root level="${log.level:-WARN}">
+    <root level="${log.level:-DEBUG}">
         <appender-ref ref="STDOUT" />
     </root>
 </configuration>

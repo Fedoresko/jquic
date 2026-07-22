@@ -42,5 +42,5 @@ bin/
 ### Mac OS ###
 .DS_Store
 /.idea/
-/src/main/c/org_fmalyshev_quic_BpfRouting.h
-/src/main/c/org_fmalyshev_quic_LinuxEcnSocket.h
+/src/main/c/org_jquic_quic_BpfRouting.h
+/src/main/c/org_jquic_quic_LinuxEcnSocket.h
