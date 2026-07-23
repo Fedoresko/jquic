@@ -1,3 +1,18 @@
+﻿/*
+ * Copyright 2026 Fedor Malyshev
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.jquic.quic;
 
 import org.conscrypt.Conscrypt;
@@ -31,8 +46,8 @@ import static org.mockito.Mockito.when;
  * Integration tests for QUIC connection with REAL cryptographic operations.
  * These tests verify that GCM authentication tags are properly verified,
  * that transcript hashes are accumulated correctly, and that the full
- * Initial → Handshake → 1-RTT sequence works higher-to-higher.
- * NO MOCKING of QuicCrypto — all encryption/decryption is real.
+ * Initial в†’ Handshake в†’ 1-RTT sequence works higher-to-higher.
+ * NO MOCKING of QuicCrypto вЂ” all encryption/decryption is real.
  */
 class QuicConnectionCryptoIntegrationTest {
     static {
@@ -116,7 +131,7 @@ class QuicConnectionCryptoIntegrationTest {
         connection.processInitialAndRespond(initialPacket);
         List<ByteBuffer> responses = getOutboundPackets(connection);
 
-        // Decryption succeeded and ClientHello was processed → HANDSHAKE
+        // Decryption succeeded and ClientHello was processed в†’ HANDSHAKE
         assertFalse(responses.isEmpty(), "Initial response (ServerHello) should be generated");
         assertEquals(QuicConnection.State.HANDSHAKE, connection.getState(),
             "Connection should advance to HANDSHAKE after valid Initial packet");
@@ -272,7 +287,7 @@ class QuicConnectionCryptoIntegrationTest {
     }
 
     // =========================================================================
-    // End-to-higher test: real ClientHello → Initial → Handshake → 1-RTT
+    // End-to-higher test: real ClientHello в†’ Initial в†’ Handshake в†’ 1-RTT
     // =========================================================================
 
     @Test
@@ -284,7 +299,7 @@ class QuicConnectionCryptoIntegrationTest {
         
         assertEquals(QuicConnection.State.INITIAL, connection.getState());
 
-        // ── Phase 1: Initial packet (ClientHello) ─────────────────────────────
+        // в”Ђв”Ђ Phase 1: Initial packet (ClientHello) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
         QuicCrypto.PacketProtectionKeysWithHP[] initKeys = QuicCrypto.deriveInitialKeys(TEST_CID);
         ByteBuffer clientHello = buildMinimalClientHello();
         
@@ -311,7 +326,7 @@ class QuicConnectionCryptoIntegrationTest {
         ConnectionMetadata meta = connection.getTlsMetadata();
         assertNotNull(meta.clientHandshakeTrafficSecret, "Handshake secrets must be derived");
 
-        // ── Phase 2: Handshake packet (client Finished) ───────────────────────
+        // в”Ђв”Ђ Phase 2: Handshake packet (client Finished) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
         // The server flight (EE, Cert, CV, server Finished) has already been added 
         // to the transcript by QuicConnection during sendHandshakePacket().
         
@@ -337,7 +352,7 @@ class QuicConnectionCryptoIntegrationTest {
             "Server state should be ESTABLISHED after client Finished");
         assertNotNull(meta.clientApplicationKeys, "1-RTT keys must be derived");
 
-        // ── Phase 3: 1-RTT packet (PING) ──────────────────────────────────────
+        // в”Ђв”Ђ Phase 3: 1-RTT packet (PING) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
         ByteBuffer pingFrame = ByteBuffer.allocate(10);
         pingFrame.put((byte) 0x01); // PING
         // Add padding to ensure packet is long enough for HP sampling (>= 20 bytes ciphertext)
@@ -556,3 +571,4 @@ class QuicConnectionCryptoIntegrationTest {
         return result;
     }
 }
+

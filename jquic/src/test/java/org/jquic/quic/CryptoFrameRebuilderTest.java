@@ -1,3 +1,18 @@
+﻿/*
+ * Copyright 2026 Fedor Malyshev
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.jquic.quic;
 
 import org.jquic.quic.buffers.BorrowedPoolBuffer;
@@ -15,15 +30,15 @@ import static org.mockito.Mockito.mock;
 /**
  * Tests for {@link CryptoFrameRebuilder}.
  *
- * <p>CRYPTO frames carry TLS handshake bytes and are governed by RFC 9001 §4 and the
- * reliable, ordered byte-stream semantics of RFC 9000 §19.6.  Key properties under
+ * <p>CRYPTO frames carry TLS handshake bytes and are governed by RFC 9001 В§4 and the
+ * reliable, ordered byte-stream semantics of RFC 9000 В§19.6.  Key properties under
  * test:
  * <ul>
- *   <li>Fragments may arrive in any order (RFC 9000 §2.2 stream-like delivery).</li>
+ *   <li>Fragments may arrive in any order (RFC 9000 В§2.2 stream-like delivery).</li>
  *   <li>Overlapping or retransmitted fragments MUST be tolerated; duplicate data that
- *       is already received MUST be silently ignored (RFC 9000 §2.2).</li>
+ *       is already received MUST be silently ignored (RFC 9000 В§2.2).</li>
  *   <li>The stream is not consumable until every byte from 0 to {@code expectedLength}
- *       has been received contiguously (RFC 9001 §4.1.3 — TLS must receive a
+ *       has been received contiguously (RFC 9001 В§4.1.3 вЂ” TLS must receive a
  *       complete record before it can process it).</li>
  *   <li>{@code peekEarlyHead} allows reading the beginning of the stream (e.g. TLS
  *       record header) before the full frame length is known, matching the common
@@ -32,9 +47,9 @@ import static org.mockito.Mockito.mock;
  */
 class CryptoFrameRebuilderTest {
 
-    // ─────────────────────────────────────────────────────────────
+    // в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
     // Helpers
-    // ─────────────────────────────────────────────────────────────
+    // в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
     /** Wrap a plain byte array in a ByteBuffer positioned at 0. */
     private static PoolBuffer buf(byte... bytes) {
@@ -58,12 +73,12 @@ class CryptoFrameRebuilderTest {
         return out;
     }
 
-    // ─────────────────────────────────────────────────────────────
+    // в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
     // Basic single-fragment delivery
-    // ─────────────────────────────────────────────────────────────
+    // в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
     /**
-     * RFC 9001 §4.1.3 – simplest case: the entire CRYPTO payload arrives in one
+     * RFC 9001 В§4.1.3 вЂ“ simplest case: the entire CRYPTO payload arrives in one
      * fragment. After setExpectedLength and addPart the frame must be immediately
      * complete and rebuild() must return the exact bytes.
      */
@@ -82,12 +97,12 @@ class CryptoFrameRebuilderTest {
         assertArrayEquals(payload, drain(result));
     }
 
-    // ─────────────────────────────────────────────────────────────
+    // в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
     // setExpectedLength called AFTER fragments arrive
-    // ─────────────────────────────────────────────────────────────
+    // в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
     /**
-     * RFC 9001 §4.1.3 – a receiver may buffer fragments before it has parsed the
+     * RFC 9001 В§4.1.3 вЂ“ a receiver may buffer fragments before it has parsed the
      * TLS record length.  When setExpectedLength is finally called with the correct
      * value, isComplete must reflect the already-received data.
      */
@@ -107,9 +122,9 @@ class CryptoFrameRebuilderTest {
         assertArrayEquals(payload, drain(result));
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // In-order fragmented delivery (RFC 9000 §2.2)
-    // ─────────────────────────────────────────────────────────────
+    // в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+    // In-order fragmented delivery (RFC 9000 В§2.2)
+    // в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
     /**
      * CRYPTO stream split across three in-order fragments.  Only the last addPart
@@ -132,12 +147,12 @@ class CryptoFrameRebuilderTest {
         assertArrayEquals(expected, drain(rebuilder.rebuild()));
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // Out-of-order delivery (RFC 9000 §2.2)
-    // ─────────────────────────────────────────────────────────────
+    // в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+    // Out-of-order delivery (RFC 9000 В§2.2)
+    // в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
     /**
-     * RFC 9000 §2.2 – stream data may arrive out of order.  The CRYPTO receiver MUST
+     * RFC 9000 В§2.2 вЂ“ stream data may arrive out of order.  The CRYPTO receiver MUST
      * buffer out-of-order data and deliver it in order to TLS.  Here the last fragment
      * arrives first.
      */
@@ -173,12 +188,12 @@ class CryptoFrameRebuilderTest {
         assertArrayEquals(sequential(0, 9), drain(rebuilder.rebuild()));
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // Duplicate / overlapping segments (RFC 9000 §2.2)
-    // ─────────────────────────────────────────────────────────────
+    // в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+    // Duplicate / overlapping segments (RFC 9000 В§2.2)
+    // в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
     /**
-     * RFC 9000 §2.2 – an endpoint may receive the same stream data multiple times
+     * RFC 9000 В§2.2 вЂ“ an endpoint may receive the same stream data multiple times
      * (e.g. due to retransmission).  Duplicate data MUST be silently discarded;
      * only novel bytes fill gaps.
      */
@@ -190,7 +205,7 @@ class CryptoFrameRebuilderTest {
         byte[] first = sequential(0, 6);
         assertTrue(rebuilder.addPart(0, 6, buf(first)), "Full frame in first call");
 
-        // Exact retransmission — must not throw and must still be complete
+        // Exact retransmission вЂ” must not throw and must still be complete
         assertDoesNotThrow(() -> rebuilder.addPart(0, 6, buf(first)));
         assertTrue(rebuilder.isComplete());
     }
@@ -204,10 +219,10 @@ class CryptoFrameRebuilderTest {
         CryptoFrameRebuilder rebuilder = new CryptoFrameRebuilder();
         rebuilder.setExpectedLength(10);
 
-        // Bytes 0–4 arrive first
+        // Bytes 0вЂ“4 arrive first
         assertFalse(rebuilder.addPart(0, 5, buf(sequential(0, 5))));
 
-        // Retransmission covers bytes 3–9 (overlap at 3-4, novel at 5-9)
+        // Retransmission covers bytes 3вЂ“9 (overlap at 3-4, novel at 5-9)
         assertTrue(rebuilder.addPart(3, 7, buf(sequential(3, 7))));
 
         assertArrayEquals(sequential(0, 10), drain(rebuilder.rebuild()));
@@ -229,12 +244,12 @@ class CryptoFrameRebuilderTest {
         assertArrayEquals(sequential(0, 10), drain(rebuilder.rebuild()));
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // peekEarlyHead — parsing length from the first bytes
-    // ─────────────────────────────────────────────────────────────
+    // в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+    // peekEarlyHead вЂ” parsing length from the first bytes
+    // в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
     /**
-     * RFC 9001 §4.1.3 pattern: the implementation needs the first N bytes of the TLS
+     * RFC 9001 В§4.1.3 pattern: the implementation needs the first N bytes of the TLS
      * record to determine the total length before all data has arrived.
      * peekEarlyHead must return exactly the buffered prefix.
      */
@@ -252,7 +267,7 @@ class CryptoFrameRebuilderTest {
     }
 
     /**
-     * peekEarlyHead must return only available contiguous bytes — not more — when
+     * peekEarlyHead must return only available contiguous bytes вЂ” not more вЂ” when
      * fewer bytes than requested have arrived.
      */
     @Test
@@ -320,12 +335,12 @@ class CryptoFrameRebuilderTest {
         }
     }
 
-    // ─────────────────────────────────────────────────────────────
+    // в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
     // Not complete until gap at offset 0 is filled
-    // ─────────────────────────────────────────────────────────────
+    // в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
     /**
-     * RFC 9001 §4.1.3 – TLS requires contiguous data from offset 0.  Having all bytes
+     * RFC 9001 В§4.1.3 вЂ“ TLS requires contiguous data from offset 0.  Having all bytes
      * except the very first segment must NOT be considered complete.
      */
     @Test
@@ -341,9 +356,9 @@ class CryptoFrameRebuilderTest {
         assertTrue(rebuilder.addPart(0, 3, buf(sequential(0, 3))));
     }
 
-    // ─────────────────────────────────────────────────────────────
+    // в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
     // rebuild() result correctness with various orderings
-    // ─────────────────────────────────────────────────────────────
+    // в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
     /**
      * Verify rebuild() assembles bytes correctly after reverse-order delivery.
@@ -377,9 +392,9 @@ class CryptoFrameRebuilderTest {
         assertEquals(5, result.limit(), "Buffer limit must equal expectedLength");
     }
 
-    // ─────────────────────────────────────────────────────────────
+    // в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
     // Error / contract violations
-    // ─────────────────────────────────────────────────────────────
+    // в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
     /**
      * Calling rebuild() before the frame is complete must throw IllegalStateException.
@@ -455,12 +470,12 @@ class CryptoFrameRebuilderTest {
             () -> rebuilder.addPart(0, 5, tooSmall));
     }
 
-    // ─────────────────────────────────────────────────────────────
+    // в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
     // DoS budget enforcement (RFC 9000 flow-control motivation)
-    // ─────────────────────────────────────────────────────────────
+    // в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
     /**
-     * RFC 9000 §4 motivates limiting unbounded buffering to prevent DoS.
+     * RFC 9000 В§4 motivates limiting unbounded buffering to prevent DoS.
      * Staging data beyond the built-in 16 384-byte budget must be rejected.
      */
     @Test
@@ -488,9 +503,9 @@ class CryptoFrameRebuilderTest {
         assertTrue(rebuilder.addPart(0, 16384, buf(maxPayload)));
     }
 
-    // ─────────────────────────────────────────────────────────────
+    // в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
     // isComplete semantics without setExpectedLength
-    // ─────────────────────────────────────────────────────────────
+    // в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
     /**
      * isComplete must never return true when setExpectedLength has not been called,
@@ -505,9 +520,9 @@ class CryptoFrameRebuilderTest {
             "isComplete must be false without a known expectedLength");
     }
 
-    // ─────────────────────────────────────────────────────────────
+    // в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
     // getExpectedLength
-    // ─────────────────────────────────────────────────────────────
+    // в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
     /**
      * getExpectedLength returns -1 before setExpectedLength is called, and the
@@ -522,3 +537,4 @@ class CryptoFrameRebuilderTest {
         assertEquals(42, rebuilder.getExpectedLength());
     }
 }
+

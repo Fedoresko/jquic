@@ -1,3 +1,18 @@
+﻿/*
+ * Copyright 2026 Fedor Malyshev
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.jquic.quic;
 
 import org.jquic.quic.buffers.BufferPool;
@@ -141,7 +156,7 @@ public class QuicPacketBuilder {
      *
      * @param packet          fully assembled packet (flipped, ready to read)
      * @param headerLength    total header length in bytes (packet number is last {@code pnLen} bytes)
-     * @param pnLen           packet number length in bytes (1–4)
+     * @param pnLen           packet number length in bytes (1вЂ“4)
      * @throws QuicCrypto.CryptoException if AES-ECB fails
      */
     private static void applyHeaderProtection(ByteBuffer packet, int headerLength, int pnLen,
@@ -149,7 +164,7 @@ public class QuicPacketBuilder {
         if (cipher == null) {
             return;
         }
-        // RFC 9001 §5.4.2: sample_offset = pn_offset + 4
+        // RFC 9001 В§5.4.2: sample_offset = pn_offset + 4
         // pn_offset is the lower of the packet number field = headerLength - pnLen
         int sampleOffset = packet.position() + (headerLength - pnLen) + 4;
         if (packet.limit() < sampleOffset + 16) {
@@ -184,8 +199,8 @@ public class QuicPacketBuilder {
     }
 
     /**
-     * Returns the minimum number of bytes (1–4) required to encode {@code packetNumber}
-     * as a QUIC packet number field (RFC 9000 §17.1).
+     * Returns the minimum number of bytes (1вЂ“4) required to encode {@code packetNumber}
+     * as a QUIC packet number field (RFC 9000 В§17.1).
      */
     private static int encodedPnLength(long packetNumber) {
         if (packetNumber <= 0xFFL)       return 1;
@@ -226,3 +241,4 @@ public class QuicPacketBuilder {
         return buffer;
     }
 }
+

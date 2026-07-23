@@ -1,3 +1,18 @@
+﻿/*
+ * Copyright 2026 Fedor Malyshev
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.jquic.quic;
 
 import org.jquic.quic.buffers.ChunkedOutputStreamWithAmendments;
@@ -144,14 +159,14 @@ public class QuicFrameBuilder {
 
     /**
      * Builds the raw TLS 1.3 HelloRetryRequest (HRR) wire message and wraps it
-     * in a QUIC CRYPTO frame (RFC 9000 §19.6).
+     * in a QUIC CRYPTO frame (RFC 9000 В§19.6).
      *
-     * <p>An HRR is a special ServerHello (RFC 8446 §4.1.3) whose Random field equals
+     * <p>An HRR is a special ServerHello (RFC 8446 В§4.1.3) whose Random field equals
      * SHA-256("HelloRetryRequest"). It carries exactly two extensions:
      * <ul>
-     *   <li>{@code supported_versions} (0x002b) — advertises TLS 1.3.</li>
-     *   <li>{@code key_share} (0x0033) — contains <em>only</em> the preferred group id,
-     *       no key material (RFC 8446 §4.2.8), telling the client to retry with that group.</li>
+     *   <li>{@code supported_versions} (0x002b) вЂ” advertises TLS 1.3.</li>
+     *   <li>{@code key_share} (0x0033) вЂ” contains <em>only</em> the preferred group id,
+     *       no key material (RFC 8446 В§4.2.8), telling the client to retry with that group.</li>
      * </ul>
      *
      * <p>This method is a <em>pure builder</em>: it does not touch the transcript.
@@ -161,14 +176,14 @@ public class QuicFrameBuilder {
      *                         (e.g. {@code 0x001d} for x25519, {@code 0x0017} for secp256r1)
      */
     public static void writeHelloRetryRequest(ByteBuffer hrr, short preferredGroupId) {
-        // ── 4-byte TLS handshake header ───────────────────────────────────────────
+        // в”Ђв”Ђ 4-byte TLS handshake header в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
         int start = hrr.position();
 
         hrr.put((byte) 0x02);                    // HandshakeType: server_hello (HRR reuses 0x02)
         int bodyLenPos = hrr.position();
-        hrr.put((byte) 0).put((byte) 0).put((byte) 0); // body length — back-filled
+        hrr.put((byte) 0).put((byte) 0).put((byte) 0); // body length вЂ” back-filled
 
-        // ── ServerHello body (RFC 8446 §4.1.3) ───────────────────────────────────
+        // в”Ђв”Ђ ServerHello body (RFC 8446 В§4.1.3) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
         int bodyStart = hrr.position();
         hrr.putShort((short) 0x0303);                     // legacy_version = TLS 1.2
         hrr.put(QuicCrypto.HRR_RANDOM);                              // sentinel random
@@ -177,7 +192,7 @@ public class QuicFrameBuilder {
         hrr.put((byte) 0x00);                             // legacy compression = null
 
         int extLenPos = hrr.position();
-        hrr.putShort((short) 0);                 // extensions_length — back-filled
+        hrr.putShort((short) 0);                 // extensions_length вЂ” back-filled
         int extStart = hrr.position();
 
         // supported_versions (0x002b): TLS 1.3
@@ -185,7 +200,7 @@ public class QuicFrameBuilder {
         hrr.putShort((short) 0x0002);
         hrr.putShort((short) QuicCrypto.TLS_VERSION_1_3);
 
-        // key_share (0x0033): selected_group only — no key bytes (RFC 8446 §4.2.8)
+        // key_share (0x0033): selected_group only вЂ” no key bytes (RFC 8446 В§4.2.8)
         hrr.putShort((short) 0x0033);
         hrr.putShort((short) 0x0002);            // extension data length = 2 (group id only)
         hrr.putShort(preferredGroupId);
@@ -201,7 +216,7 @@ public class QuicFrameBuilder {
         hrr.put(bodyLenPos + 2, (byte) ( bodyLen        & 0xFF));
 
 
-        // ── Wrap in QUIC CRYPTO frame (RFC 9000 §19.6) ───────────────────────────
+        // в”Ђв”Ђ Wrap in QUIC CRYPTO frame (RFC 9000 В§19.6) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
         // type(varint=0x06) | offset(varint=0) | length(varint) | data
         int hrrLen = hrr.position() - start;
         int hrrLim = hrr.position();
@@ -225,7 +240,7 @@ public class QuicFrameBuilder {
      * @param metadata the live {@link ConnectionMetadata} for this connection
      */
     public static void writeServerHello(ChunkedOutputStreamWithAmendments out, ConnectionMetadata metadata) throws IOException {
-        // ServerHello wire layout (RFC 8446 §4.1.3):
+        // ServerHello wire layout (RFC 8446 В§4.1.3):
         //   ProtocolVersion(2) + Random(32) + session_id_len(1)
         //   + CipherSuite(2) + compression(1) + extensions_len(2) + extensions
 
@@ -254,12 +269,12 @@ public class QuicFrameBuilder {
         out.writeShort((short) 0);                // extensions length placeholder
         int extStart = out.getPos();
 
-        // supported_versions extension (0x002b) — signals TLS 1.3 to the client
+        // supported_versions extension (0x002b) вЂ” signals TLS 1.3 to the client
         out.writeShort((short) 0x002b);
         out.writeShort((short) 0x0002);
         out.writeShort((short) 0x0304);           // TLS 1.3
 
-        // key_share extension (0x0033) — server's x25519 ephemeral public key
+        // key_share extension (0x0033) вЂ” server's x25519 ephemeral public key
         out.writeShort((short) 0x0033);
         out.writeShort((short) (2 + 2 + keyShare.length)); // group(2) + key_len(2) + key
         out.writeShort(metadata.selectedKeyScheme);
@@ -309,3 +324,4 @@ public class QuicFrameBuilder {
         out.position(start);
     }
 }
+

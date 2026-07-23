@@ -1,3 +1,18 @@
+﻿/*
+ * Copyright 2026 Fedor Malyshev
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.jquic.quic;
 
 import javax.crypto.Cipher;
@@ -9,7 +24,7 @@ import java.util.Map;
  * TLS metadata associated with a QUIC connection.
  *
  * <p>Acts as the running state object across the entire TLS 1.3 key schedule
- * (RFC 8446 Section 7). It is created first — before any crypto — and then
+ * (RFC 8446 Section 7). It is created first вЂ” before any crypto вЂ” and then
  * populated gradually as the handshake progresses:
  * <ol>
  *   <li>Constructed with the Early Secret.</li>
@@ -21,8 +36,8 @@ import java.util.Map;
  *
  * <p>A running SHA-256 transcript hash is maintained by calling
  * {@link #updateTranscript(byte[])} with each TLS handshake message in wire order:
- * ClientHello → ServerHello → EncryptedExtensions → Certificate →
- * CertificateVerify → (server) Finished → (client) Finished.
+ * ClientHello в†’ ServerHello в†’ EncryptedExtensions в†’ Certificate в†’
+ * CertificateVerify в†’ (server) Finished в†’ (client) Finished.
  * Snapshot the current hash at any time via {@link #transcriptHash()}.
  */
 public class ConnectionMetadata {
@@ -95,8 +110,8 @@ public class ConnectionMetadata {
     /**
      * Feeds raw TLS handshake message bytes into the running transcript hash.
      * Must be called in wire order:
-     * ClientHello → ServerHello → EncryptedExtensions → Certificate →
-     * CertificateVerify → (server) Finished → (client) Finished.
+     * ClientHello в†’ ServerHello в†’ EncryptedExtensions в†’ Certificate в†’
+     * CertificateVerify в†’ (server) Finished в†’ (client) Finished.
      *
      * @param message raw TLS handshake message bytes (including 4-byte header:
      *                msg_type + 3-byte length)
@@ -114,7 +129,7 @@ public class ConnectionMetadata {
     /**
      * Resets the running transcript digest to its initial (empty) state.
      *
-     * <p>Used during HelloRetryRequest processing (RFC 8446 §4.4.1): after sending
+     * <p>Used during HelloRetryRequest processing (RFC 8446 В§4.4.1): after sending
      * an HRR the transcript must be replaced with a synthetic {@code message_hash}
      * record followed by the HRR itself. Call this method, then feed the synthetic
      * record and the HRR via {@link #updateTranscript}.
@@ -189,3 +204,4 @@ public class ConnectionMetadata {
         }
     }
 }
+

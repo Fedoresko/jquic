@@ -1,0 +1,5 @@
+rootProject.name = 'root'
+
+include 'http3'
+include 'jquic'
+include 'quic-application'

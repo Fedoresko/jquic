@@ -5,16 +5,13 @@ plugins {
 
 def getVersionFromGit() {
     try {
-        def stdout = new ByteArrayOutputStream()
-        exec {
+        def gitTag = providers.exec {
             commandLine 'git', 'describe', '--tags', '--abbrev=0'
-            standardOutput = stdout
-        }
-        // Return clean string without trailing newlines or 'v' prefix if present
-        return stdout.toString().trim().replaceFirst('^v', '')
+        }.standardOutput.asText.get().trim()
+
+        return gitTag.replaceFirst('^v', '')
     } catch (Exception e) {
-        // Fallback default version if Git is missing, not initialized, or has no tags
-        logger.warn("Could not determine version from Git tags: ${e.message}. Using fallback snapshot version.")
+        // Fallback default version if Git is missing or has no tags
         return '1.0.0-SNAPSHOT'
     }
 }

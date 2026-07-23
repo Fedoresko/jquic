@@ -1,3 +1,18 @@
+﻿/*
+ * Copyright 2026 Fedor Malyshev
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.jquic.http3;
 
 import org.jquic.quic.QuicVarint;
@@ -47,7 +62,7 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
 
     @Override
     public void onNewClientStreamAllocated(long streamId, @NonNull QuicConnectionControl control, DataOutputStream outputStream, QuicConnectionControl.StreamType streamType) {
-        // Bidirectional streams are always client-initiated request streams (RFC 9114 §6.1).
+        // Bidirectional streams are always client-initiated request streams (RFC 9114 В§6.1).
         // Unidirectional streams carry their HTTP/3 role in the first stream-type varint,
         // so we mark them as UNKNOWN until we read those bytes.
         Http3StreamRole initialRole = (streamType == QuicConnectionControl.StreamType.Bidirectional)
@@ -84,7 +99,7 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
         context.appendData(data);
 
         // For unidirectional streams whose role is not yet known, try to determine it
-        // from the leading stream-type varint (RFC 9114 §6.2).
+        // from the leading stream-type varint (RFC 9114 В§6.2).
         if (context.getRole() == Http3StreamRole.UNKNOWN) {
             context.tryDetermineRole();
             logger.debug("Unidirectional stream {} on connection {} identified as {}",
@@ -111,7 +126,7 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
                                     logger.debug("Dispatching HTTP/3 request on stream {} (connection {}) after HEADERS frame",
                                             streamId, connectionId);
                                     Http3Response httpResponse = requestHandler.handleRequest(request);
-                                    // Send the response immediately — do not wait for stream FIN.
+                                    // Send the response immediately вЂ” do not wait for stream FIN.
                                     logger.debug("Sending HTTP/3 response on stream {} (connection {}) immediately after HEADERS",
                                             streamId, connectionId);
                                     putResponse(outs.get(streamId), httpResponse);
@@ -121,14 +136,14 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
                                 }
                             }
                         } else if (frame.type() == 0x00 /* DATA */ ) {
-                            // DATA frame body chunk — accumulate for response (could be streamed further).
+                            // DATA frame body chunk вЂ” accumulate for response (could be streamed further).
                             if (context.getRequest() != null &&  context.getRequestState() != Http3StreamContext.RequestProcessingState.RESPONSE_SENT) {
                                 context.getRequest().appendBody(new String(frame.payload()));
                                 context.readBodyBytes += frame.payload().length;
                                 if (context.getRequestState() == Http3StreamContext.RequestProcessingState.WAITING_FOR_BODY) {
                                     if (context.readBodyBytes == context.getRequest().getContentLength()) {
                                         Http3Response httpResponse = requestHandler.handleRequest(context.getRequest());
-                                        // Send the response immediately — do not wait for stream FIN.
+                                        // Send the response immediately вЂ” do not wait for stream FIN.
                                         logger.debug("Sending HTTP/3 response on stream {} (connection {}) immediately after HEADERS",
                                                 streamId, connectionId);
                                         putResponse(outs.get(streamId), httpResponse);
@@ -141,24 +156,24 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
                     }
 
                     if (isLastData) {
-                        // RFC 9114 §4.1: validate stream state on FIN before cleaning up.
+                        // RFC 9114 В§4.1: validate stream state on FIN before cleaning up.
                         if (context.hasUnconsumedData()) {
-                            logger.warn("Stream {} FIN with truncated frame data (connection {}) — H3_FRAME_ERROR",
+                            logger.warn("Stream {} FIN with truncated frame data (connection {}) вЂ” H3_FRAME_ERROR",
                                     streamId, connectionId);
                             response.closeStream(streamId, Http3Server.H3_FRAME_ERROR); // H3_MESSAGE_ERROR
                         } else if (context.getRequestState() == Http3StreamContext.RequestProcessingState.INITIAL) {
-                            logger.warn("Stream {} FIN received without a HEADERS frame (connection {}) — H3_MESSAGE_ERROR",
+                            logger.warn("Stream {} FIN received without a HEADERS frame (connection {}) вЂ” H3_MESSAGE_ERROR",
                                     streamId, connectionId);
                             response.closeStream(streamId, Http3Server.H3_MESSAGE_ERROR); // H3_MESSAGE_ERROR
                         } else if (context.getRequestState() == Http3StreamContext.RequestProcessingState.WAITING_FOR_FIN) {
                             Http3Response httpResponse = requestHandler.handleRequest(context.getRequest());
-                            // Send the response immediately — do not wait for stream FIN.
+                            // Send the response immediately вЂ” do not wait for stream FIN.
                             logger.debug("Sending HTTP/3 response on stream {} (connection {}) immediately after HEADERS",
                                     streamId, connectionId);
                             putResponse(outs.get(streamId), httpResponse);
                             context.setRequestState(Http3StreamContext.RequestProcessingState.RESPONSE_SENT);
                         } else {
-                            // Clean FIN — response was already sent; just remove stream context.
+                            // Clean FIN вЂ” response was already sent; just remove stream context.
                             logger.debug("Stream {} FIN received cleanly, removing context (connection {})",
                                     streamId, connectionId);
                         }
@@ -175,23 +190,23 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
                 }
             }
             case CONTROL -> {
-                // Control stream — buffer data; control frame processing is not yet implemented.
-                logger.debug("Control stream {} data received ({} bytes) — processing not yet implemented",
+                // Control stream вЂ” buffer data; control frame processing is not yet implemented.
+                logger.debug("Control stream {} data received ({} bytes) вЂ” processing not yet implemented",
                         streamId, data.length);
             }
             case QPACK_ENCODER -> {
-                // QPACK encoder stream — buffer instructions; processing not yet implemented.
-                logger.debug("QPACK encoder stream {} data received ({} bytes) — processing not yet implemented",
+                // QPACK encoder stream вЂ” buffer instructions; processing not yet implemented.
+                logger.debug("QPACK encoder stream {} data received ({} bytes) вЂ” processing not yet implemented",
                         streamId, data.length);
             }
             case QPACK_DECODER -> {
-                // QPACK decoder stream — buffer acknowledgements; processing not yet implemented.
-                logger.debug("QPACK decoder stream {} data received ({} bytes) — processing not yet implemented",
+                // QPACK decoder stream вЂ” buffer acknowledgements; processing not yet implemented.
+                logger.debug("QPACK decoder stream {} data received ({} bytes) вЂ” processing not yet implemented",
                         streamId, data.length);
             }
             case PUSH -> {
-                // Push stream — buffer data; push processing not yet implemented.
-                logger.debug("Push stream {} data received ({} bytes) — processing not yet implemented",
+                // Push stream вЂ” buffer data; push processing not yet implemented.
+                logger.debug("Push stream {} data received ({} bytes) вЂ” processing not yet implemented",
                         streamId, data.length);
             }
             case UNKNOWN -> {
@@ -299,10 +314,10 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
          * State machine for processing an HTTP/3 request stream.
          *
          * <ul>
-         *   <li>{@code WAITING_FOR_BODY} – .</li>
-         *   <li>{@code HEADERS_DISPATCHED} – HEADERS were parsed and the request was handed to the
+         *   <li>{@code WAITING_FOR_BODY} вЂ“ .</li>
+         *   <li>{@code HEADERS_DISPATCHED} вЂ“ HEADERS were parsed and the request was handed to the
          *       handler; DATA frames (body chunks) may still arrive.</li>
-         *   <li>{@code RESPONSE_SENT} – response has been written to the stream; waiting for FIN to clean up.</li>
+         *   <li>{@code RESPONSE_SENT} вЂ“ response has been written to the stream; waiting for FIN to clean up.</li>
          * </ul>
          */
         enum RequestProcessingState {
@@ -368,7 +383,7 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
 
         /**
          * Attempts to determine the HTTP/3 role of a unidirectional stream by reading the
-         * leading stream-type varint from the buffered data (RFC 9114 §6.2).
+         * leading stream-type varint from the buffered data (RFC 9114 В§6.2).
          * Does nothing if the role is already known or if not enough bytes are available yet.
          */
         void tryDetermineRole() {
@@ -470,3 +485,4 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
         }
     }
 }
+

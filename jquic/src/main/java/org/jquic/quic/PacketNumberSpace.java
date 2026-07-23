@@ -1,3 +1,18 @@
+﻿/*
+ * Copyright 2026 Fedor Malyshev
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.jquic.quic;
 
 import org.jquic.quic.buffers.PoolBuffer;
@@ -29,7 +44,7 @@ public class PacketNumberSpace {
     private long largestReceivedPacketNumber = -1;
     private final SortedIntervals receivedPackets = new SortedIntervals(255);
 
-    // Sent packet tracking — TreeMap keeps packet numbers sorted so the packet-threshold
+    // Sent packet tracking вЂ” TreeMap keeps packet numbers sorted so the packet-threshold
     // pass in detectLostPackets can use headMap() instead of scanning the full table.
     private final TreeMap<Long, SentPacket> sentPackets = new TreeMap<>();
     private long largestAckedPacketNumber = -1;
@@ -191,7 +206,7 @@ public class PacketNumberSpace {
 
         // Find newly acked packets.
         // For each ACK range, subMap() seeks directly to the matching window in our TreeMap
-        // in O(log n), then iterates only the entries that actually fall within it — O(log n + k).
+        // in O(log n), then iterates only the entries that actually fall within it вЂ” O(log n + k).
         // We never enumerate packet numbers from the peer-supplied ranges themselves, so a
         // malicious enormous range costs nothing beyond a single O(log n) tree seek.
         Set<Long> newlyAcked = new HashSet<>();
@@ -354,7 +369,7 @@ public class PacketNumberSpace {
             }
         }
 
-        // Update loss time: the next expiry is simply the heap minimum — O(1).
+        // Update loss time: the next expiry is simply the heap minimum вЂ” O(1).
         SentPacket next = lossHeap.peek();
         lossTime = (next != null) ? next.getTimeoutTimestamp() : 0;
 
@@ -520,4 +535,5 @@ public class PacketNumberSpace {
         }
     }
 }
+
 

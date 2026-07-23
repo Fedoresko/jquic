@@ -1,3 +1,18 @@
+﻿/*
+ * Copyright 2026 Fedor Malyshev
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.jquic;
 
 import org.jquic.http3.Http3Request;
@@ -19,10 +34,10 @@ import java.util.List;
  * <p>Starts the QuicEngine (UDP multiplexer + eBPF steering) and an HTTP/3 server
  * with the following test endpoints:
  * <ul>
- *   <li>GET /health  – liveness check, returns 200 OK</li>
- *   <li>GET /hello   – friendly greeting with server timestamp</li>
- *   <li>GET /echo    – echoes connection ID and request path back as JSON</li>
- *   <li>*            – 404 Not Found for any other path</li>
+ *   <li>GET /health  вЂ“ liveness check, returns 200 OK</li>
+ *   <li>GET /hello   вЂ“ friendly greeting with server timestamp</li>
+ *   <li>GET /echo    вЂ“ echoes connection ID and request path back as JSON</li>
+ *   <li>*            вЂ“ 404 Not Found for any other path</li>
  * </ul>
  */
 public class Main {
@@ -89,12 +104,12 @@ public class Main {
         );
     }
 
-    /** GET /health – simple liveness probe */
+    /** GET /health вЂ“ simple liveness probe */
     private static Http3Response handleHealth(Http3Request request) {
         return Http3Response.ok("OK", List.of());
     }
 
-    /** GET /hello – friendly greeting */
+    /** GET /hello вЂ“ friendly greeting */
     private static Http3Response handleHello(Http3Request request) {
         String body = "Hello from QUIC/HTTP3 server! Server time: " + Instant.now();
         return Http3Response.ok(body,
@@ -104,7 +119,7 @@ public class Main {
         );
     }
 
-    /** GET /echo – returns request metadata as JSON */
+    /** GET /echo вЂ“ returns request metadata as JSON */
     private static Http3Response handleEcho(Http3Request request) {
         String json = String.format(
                 "{\"connectionId\":%d,\"method\":\"%s\",\"path\":\"%s\",\"timestamp\":\"%s\"}",
@@ -116,3 +131,4 @@ public class Main {
         return Http3Response.json(json);
     }
 }
+

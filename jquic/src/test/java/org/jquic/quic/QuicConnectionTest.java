@@ -1,3 +1,18 @@
+﻿/*
+ * Copyright 2026 Fedor Malyshev
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.jquic.quic;
 
 import org.jctools.queues.SpscLinkedQueue;
@@ -155,7 +170,7 @@ class QuicConnectionTest {
     // ========================================================================
 
     @Test
-    @DisplayName("Test successful 1-RTT handshake: INITIAL → HANDSHAKE → ESTABLISHED")
+    @DisplayName("Test successful 1-RTT handshake: INITIAL в†’ HANDSHAKE в†’ ESTABLISHED")
     void testSuccessful1RttHandshake() throws Exception {
         // Initial state
         assertEquals(QuicConnection.State.INITIAL, connection.getState());
@@ -456,7 +471,7 @@ class QuicConnectionTest {
 
         SecretKey keyBefore = connection.getTlsMetadata().clientApplicationKeys.key();
 
-        // Phase bit = 0 matches initial currentPhase = 0 → no rotation expected
+        // Phase bit = 0 matches initial currentPhase = 0 в†’ no rotation expected
         ByteBuffer packet = createMock1RttPacketWithKeyPhase(5L, new byte[]{0x01}, false);
         connection.process1RttPacket(new RootPoolBuffer(packet, pool, false), 0);
 
@@ -484,7 +499,7 @@ class QuicConnectionTest {
 
         // Step 2: Subsequent packet with the same key phase bit = 1 and a higher packet number.
         // It must be processed without triggering another rotation (same phase) and must
-        // succeed — proving the connection now uses the post-rotation key for decryption.
+        // succeed вЂ” proving the connection now uses the post-rotation key for decryption.
         ByteBuffer followUpPacket = createMock1RttPacketWithKeyPhase(11L, new byte[]{0x01}, true);
         connection.process1RttPacket(new RootPoolBuffer(followUpPacket, pool, false), 0);
 
@@ -528,8 +543,8 @@ class QuicConnectionTest {
         SecretKey currentKey = connection.getTlsMetadata().clientApplicationKeys.key();
         assertNotSame(prevKey, currentKey, "prev and current keys must differ after rotation");
 
-        // Step 2: Deliver a LATE packet — packet number 5 (< lastPhaseSwitchPacketNumber = 20),
-        // key phase bit = 0 (old phase). RFC 9001 §6: must be decrypted with the PREVIOUS keys.
+        // Step 2: Deliver a LATE packet вЂ” packet number 5 (< lastPhaseSwitchPacketNumber = 20),
+        // key phase bit = 0 (old phase). RFC 9001 В§6: must be decrypted with the PREVIOUS keys.
         usedKeys.clear();
         ByteBuffer latePacket = createMock1RttPacketWithKeyPhase(5L, new byte[]{0x01}, false);
         connection.process1RttPacket(new RootPoolBuffer(latePacket, pool, false), 0);
@@ -546,14 +561,14 @@ class QuicConnectionTest {
 
         setupEstablishedConnection();
 
-        // First rotation: phase 0 → 1, at packet 10
+        // First rotation: phase 0 в†’ 1, at packet 10
         connection.process1RttPacket(new BorrowedPoolBuffer(mock(RootPoolBuffer.class), createMock1RttPacketWithKeyPhase(10L, new byte[]{0x01}, true)), 0);
         assertEquals(10L, connection.getTlsMetadata().lastPhaseSwitchPacketNumber,
                 "After first rotation lastPhaseSwitchPacketNumber should be 10");
         assertEquals((byte) 1, connection.getTlsMetadata().currentPhase,
                 "currentPhase should be 1 after first rotation");
 
-        // Second rotation: phase 1 → 0, at packet 30
+        // Second rotation: phase 1 в†’ 0, at packet 30
         connection.process1RttPacket(new BorrowedPoolBuffer(mock(RootPoolBuffer.class), createMock1RttPacketWithKeyPhase(30L, new byte[]{0x01}, false)), 0);
         assertEquals(30L, connection.getTlsMetadata().lastPhaseSwitchPacketNumber,
                 "After second rotation lastPhaseSwitchPacketNumber should be 30");
@@ -1082,7 +1097,7 @@ class QuicConnectionTest {
 
         // Build a valid QUIC Handshake long-header packet (RFC 9000)
         // flags: 1 (Long) | 1 (Fixed) | 10 (Handshake type) | 00 (reserved) | 00 (1-byte PN)
-        //        = 1110_0000 = 0xE0  → type bits (flags & 0x30) >> 4 == 0x02 → HANDSHAKE
+        //        = 1110_0000 = 0xE0  в†’ type bits (flags & 0x30) >> 4 == 0x02 в†’ HANDSHAKE
         //        Packet number length = (flags & 0x03) + 1 = 1 byte
         byte flags = (byte) 0xE0;
         byte[] dcid = longToBytes(TEST_CID);
@@ -1273,7 +1288,7 @@ class QuicConnectionTest {
         System.arraycopy(ackBytes, 0, encryptedPayload, 0, ackBytes.length);
 
         // Build a valid QUIC Handshake long-header packet (RFC 9000)
-        // flags: 1110_0000 = 0xE0  → type bits == 0x02 → HANDSHAKE, 1-byte packet number
+        // flags: 1110_0000 = 0xE0  в†’ type bits == 0x02 в†’ HANDSHAKE, 1-byte packet number
         byte flags = (byte) 0xE0;
         byte[] dcid = longToBytes(TEST_CID);
         byte[] scid = new byte[8];
@@ -1358,7 +1373,7 @@ class QuicConnectionTest {
      * @return a flipped {@link ByteBuffer} ready for {@link QuicConnection#process1RttPacket}
      */
     private ByteBuffer createMock1RttPacketWithKeyPhase(long packetNumber, byte[] payload, boolean keyPhaseBit) {
-        // Short header flags layout (RFC 9001 §5.4.2 / RFC 9000 §17.3):
+        // Short header flags layout (RFC 9001 В§5.4.2 / RFC 9000 В§17.3):
         //   bit 7 = 0        (short header)
         //   bit 6 = 1        (Fixed Bit, must be 1)
         //   bit 5 = 0        (Spin Bit)
@@ -1382,3 +1397,4 @@ class QuicConnectionTest {
         return buffer;
     }
 }
+

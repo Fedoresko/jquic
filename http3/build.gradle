@@ -3,8 +3,21 @@ plugins {
     id 'maven-publish'
 }
 
+def getVersionFromGit() {
+    try {
+        def gitTag = providers.exec {
+            commandLine 'git', 'describe', '--tags', '--abbrev=0'
+        }.standardOutput.asText.get().trim()
+
+        return gitTag.replaceFirst('^v', '')
+    } catch (Exception e) {
+        // Fallback default version if Git is missing or has no tags
+        return '1.0.0-SNAPSHOT'
+    }
+}
+
 group = 'org.jquic'
-version = '1.0-SNAPSHOT'
+version = getVersionFromGit()
 
 java {
     toolchain {
@@ -23,7 +36,7 @@ dependencies {
     // Slf4j API and Logback implementation
     implementation 'org.slf4j:slf4j-api:2.0.9'
     implementation 'tech.kwik:qpack:2.1'
-    api 'org.jquic:jquic:1.0-SNAPSHOT'
+    api 'org.jquic:jquic:latest.release'
 
     // Testing dependencies
     // JUnit 6 BOM handles all version management for JUnit libraries automatically

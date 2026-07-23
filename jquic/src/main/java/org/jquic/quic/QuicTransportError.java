@@ -1,3 +1,18 @@
+﻿/*
+ * Copyright 2026 Fedor Malyshev
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.jquic.quic;
 
 /**
@@ -7,7 +22,7 @@ package org.jquic.quic;
  * why a connection is being closed at the transport layer.  Error codes are
  * 62-bit unsigned integers on the wire; this enum covers every named code in
  * the specification plus the {@link #CRYPTO_ERROR} sentinel for the TLS-alert
- * range (0x0100 – 0x01ff).
+ * range (0x0100 вЂ“ 0x01ff).
  *
  * <h2>Usage</h2>
  * <pre>{@code
@@ -18,7 +33,7 @@ package org.jquic.quic;
  * long wireCode = QuicTransportError.cryptoErrorCode(40);      // 0x0128
  * }</pre>
  *
- * @see <a href="https://www.rfc-editor.org/rfc/rfc9000#section-20.1">RFC 9000 §20.1</a>
+ * @see <a href="https://www.rfc-editor.org/rfc/rfc9000#section-20.1">RFC 9000 В§20.1</a>
  */
 public enum QuicTransportError {
 
@@ -65,7 +80,7 @@ public enum QuicTransportError {
     FINAL_SIZE_ERROR(0x06),
 
     /**
-     * An endpoint received a frame that was badly formatted — for example, a
+     * An endpoint received a frame that was badly formatted вЂ” for example, a
      * frame of an unknown type or one that contained an invalid value for a
      * field.
      */
@@ -125,14 +140,14 @@ public enum QuicTransportError {
     NO_VIABLE_PATH(0x10),
 
     /**
-     * Sentinel for the CRYPTO_ERROR range (0x0100 – 0x01ff).
+     * Sentinel for the CRYPTO_ERROR range (0x0100 вЂ“ 0x01ff).
      *
      * <p>The low 8 bits of the wire value encode the TLS alert code that
      * caused the closure.  Use {@link #cryptoErrorCode(int)} to construct the
      * correct wire value, and {@link #isCryptoError(long)} to detect it during
      * parsing.
      *
-     * @see <a href="https://www.rfc-editor.org/rfc/rfc9000#section-20.1">RFC 9000 §20.1</a>
+     * @see <a href="https://www.rfc-editor.org/rfc/rfc9000#section-20.1">RFC 9000 В§20.1</a>
      */
     CRYPTO_ERROR(0x0100),
 
@@ -163,7 +178,7 @@ public enum QuicTransportError {
     TLS_ERROR_CERTIFICATE_REQUIRED(0x0100 + 116),
     TLS_ERROR_NO_APPLICATION_PROTOCOL(0x0100 + 120);
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
     private final long code;
 
@@ -182,15 +197,15 @@ public enum QuicTransportError {
         return code;
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
     // Factory / reverse-lookup helpers
-    // ─────────────────────────────────────────────────────────────────────────
+    // в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
     /**
      * Returns the enum constant whose wire value equals {@code code}, or
      * {@link #PROTOCOL_VIOLATION} as a safe fallback for unknown values.
      *
-     * <p>Values in the range {@code 0x0100}–{@code 0x01ff} are mapped to
+     * <p>Values in the range {@code 0x0100}вЂ“{@code 0x01ff} are mapped to
      * {@link #CRYPTO_ERROR} regardless of the specific TLS alert byte.
      *
      * @param code wire error code read from a CONNECTION_CLOSE frame
@@ -205,13 +220,13 @@ public enum QuicTransportError {
                 return e;
             }
         }
-        // Unknown codes are treated as a protocol violation per RFC 9000 §20.1
+        // Unknown codes are treated as a protocol violation per RFC 9000 В§20.1
         return PROTOCOL_VIOLATION;
     }
 
     /**
      * Returns {@code true} when {@code code} falls in the CRYPTO_ERROR range
-     * {@code 0x0100}–{@code 0x01ff}, indicating a TLS alert was the cause.
+     * {@code 0x0100}вЂ“{@code 0x01ff}, indicating a TLS alert was the cause.
      *
      * @param code wire error code read from a CONNECTION_CLOSE frame
      */
@@ -222,17 +237,17 @@ public enum QuicTransportError {
     /**
      * Builds the wire error code for a TLS-alert-triggered connection close.
      *
-     * <p>Per RFC 9000 §20.1: the error code is {@code 0x0100 + alertCode},
-     * where {@code alertCode} is the TLS alert description value (0–255).
+     * <p>Per RFC 9000 В§20.1: the error code is {@code 0x0100 + alertCode},
+     * where {@code alertCode} is the TLS alert description value (0вЂ“255).
      *
-     * @param tlsAlertCode TLS alert description value (0–255)
+     * @param tlsAlertCode TLS alert description value (0вЂ“255)
      * @return wire transport error code to place in a CONNECTION_CLOSE frame
-     * @throws IllegalArgumentException if {@code tlsAlertCode} is not in 0–255
+     * @throws IllegalArgumentException if {@code tlsAlertCode} is not in 0вЂ“255
      */
     public static long cryptoErrorCode(int tlsAlertCode) {
         if (tlsAlertCode < 0 || tlsAlertCode > 0xff) {
             throw new IllegalArgumentException(
-                "TLS alert code must be in range 0–255, got: " + tlsAlertCode);
+                "TLS alert code must be in range 0вЂ“255, got: " + tlsAlertCode);
         }
         return 0x0100L + tlsAlertCode;
     }
@@ -241,7 +256,7 @@ public enum QuicTransportError {
      * Extracts the TLS alert description byte from a CRYPTO_ERROR wire value.
      *
      * @param code wire error code that must satisfy {@link #isCryptoError(long)}
-     * @return TLS alert description (0–255)
+     * @return TLS alert description (0вЂ“255)
      * @throws IllegalArgumentException if {@code code} is not a CRYPTO_ERROR
      */
     public static int extractTlsAlert(long code) {
@@ -257,3 +272,4 @@ public enum QuicTransportError {
         return name() + "(0x" + Long.toHexString(code) + ")";
     }
 }
+

@@ -1,3 +1,18 @@
+﻿/*
+ * Copyright 2026 Fedor Malyshev
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.jquic.quic;
 
 import org.jquic.LogTool;
@@ -450,7 +465,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
             return;
         }
 
-        // Parse and decrypt packet — use the HP key pre-derived in TlsMetadata
+        // Parse and decrypt packet вЂ” use the HP key pre-derived in TlsMetadata
         // (RFC 9001 Section 5.4: Handshake level hp_key derived via "quic hp")
         QuicPacketHeader header = QuicPacketHeader.parse(packet.buf(), connectionMetadata.clientHandshakeKeys.headerProtection());
         if (header == null) {
@@ -545,9 +560,9 @@ public class QuicConnection implements TimeoutHeap.Entry {
                 logger.info("Client Finished verified successfully for CID: {}", connectionId);
 
                 // Now the transcript contains all server Handshake messages.
-                // Append the client Finished and derive 1-RTT keys (RFC 8446 §7.1).
-                // The correct order is: ClientHello → ServerHello → Certificate →
-                // CertificateVerify → server Finished → client Finished.
+                // Append the client Finished and derive 1-RTT keys (RFC 8446 В§7.1).
+                // The correct order is: ClientHello в†’ ServerHello в†’ Certificate в†’
+                // CertificateVerify в†’ server Finished в†’ client Finished.
 
                 QuicCrypto.createApplicationKeys(connectionMetadata);
                 logger.debug("1-RTT application keys derived (transcript complete)");
@@ -602,7 +617,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
             return;
         }
 
-        // Parse short header — use the HP key pre-derived in TlsMetadata
+        // Parse short header вЂ” use the HP key pre-derived in TlsMetadata
         // (RFC 9001 Section 5.4: 1-RTT level hp_key derived via "quic hp")
         QuicPacketHeader header = QuicPacketHeader.parse(packet.buf(), connectionMetadata.clientApplicationHeaderProtection);
         logger.debug("Processing 1-RTT packet: CID={}, packetNumber={}, ", header.destinationCid, header.packetNumber);
@@ -851,8 +866,8 @@ public class QuicConnection implements TimeoutHeap.Entry {
      * <p>
      * Flow:
      * 1. Client sends: Initial (ClientHello)
-     * 2. Server responds: Initial (ServerHello) ← this method
-     * 3. Client sends: Handshake (Finished) ← handled by processHandshakePacket()
+     * 2. Server responds: Initial (ServerHello) в†ђ this method
+     * 3. Client sends: Handshake (Finished) в†ђ handled by processHandshakePacket()
      * 4. Server responds: Handshake + 1-RTT (Certificate/Finished + HANDSHAKE_DONE)
      *
      * @param datagram The received datagram buffer containing Initial packet
@@ -1162,7 +1177,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
      * Creates Initial packet with ServerHello.
      */
     private void sendInitialResponse() throws IOException {
-        // Create ServerHello — uses the server's ephemeral public key already stored in tlsMetadata
+        // Create ServerHello вЂ” uses the server's ephemeral public key already stored in tlsMetadata
         int headersReservedSize = MAX_LONG_HEADER_LENGTH + INITIAL_PACKET_TOKEN_LENGTH + CRYPTO_FRAME_MAX_HEADER_LENGTH;
 //
 //        ByteBuffer serverHello = ByteBuffer.allocateDirect(4096);
@@ -1201,8 +1216,8 @@ public class QuicConnection implements TimeoutHeap.Entry {
     /**
      * Creates Handshake packet with EncryptedExtensions, Certificate, CertificateVerify, Finished.
      *
-     * <p>TLS 1.3 server flight order (RFC 8446 §4.4):
-     * EncryptedExtensions → Certificate → CertificateVerify → Finished
+     * <p>TLS 1.3 server flight order (RFC 8446 В§4.4):
+     * EncryptedExtensions в†’ Certificate в†’ CertificateVerify в†’ Finished
      * <p>
      * Each message is fed into the running transcript hash immediately after it is built,
      * so that CertificateVerify signs over EE+Cert and Finished covers the full flight.
@@ -1227,20 +1242,20 @@ public class QuicConnection implements TimeoutHeap.Entry {
                 });
 
         TranscryptHashSupport transcryptUpdater = new TranscryptHashSupport(out, this::updateTranscript);
-        // ── 1. EncryptedExtensions ────────────────────────────────────────────
+        // в”Ђв”Ђ 1. EncryptedExtensions в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
         transcryptUpdater.startHashMessage("EncryptedExtensions");
         QuicCrypto.putEncryptedExtensions(connectionMetadata, connectionId, out);
 
-        // ── 2. Certificate ────────────────────────────────────────────────────
+        // в”Ђв”Ђ 2. Certificate в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
         transcryptUpdater.startHashMessage("Certificate");
         QuicCrypto.putCertificate(out);
 
-        // ── 3. CertificateVerify ──────────────────────────────────────────────
+        // в”Ђв”Ђ 3. CertificateVerify в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
         // Transcript now covers EE + Cert; CertificateVerify signs over that hash.
         transcryptUpdater.startHashMessage("CertificateVerify");
         QuicCrypto.putCertificateVerify(connectionMetadata, out);
 
-        // ── 4. Finished ───────────────────────────────────────────────────────
+        // в”Ђв”Ђ 4. Finished в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
         transcryptUpdater.startHashMessage("server Finished");
         QuicCrypto.createServerFinished(connectionMetadata, out);
 
@@ -1444,3 +1459,4 @@ public class QuicConnection implements TimeoutHeap.Entry {
         }
     }
 }
+

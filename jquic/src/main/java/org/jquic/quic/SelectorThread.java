@@ -1,3 +1,18 @@
+﻿/*
+ * Copyright 2026 Fedor Malyshev
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.jquic.quic;
 
 import org.jquic.LogTool;
@@ -469,7 +484,7 @@ public class SelectorThread implements Runnable {
             boolean isLongHeader = (flags & 0x80) != 0;
 
             if (!isLongHeader) {
-                // Short header has no length field — consume the rest of the datagram
+                // Short header has no length field вЂ” consume the rest of the datagram
                 datagram.position(datagram.limit());
                 return;
             }
@@ -484,12 +499,12 @@ public class SelectorThread implements Runnable {
             // For INITIAL packets there is also a token; for RETRY/ZERO_RTT there is none,
             // but we check the type just in case.
             int typeField = (flags & 0x30) >> 4;
-            if (typeField == 0x00) { // INITIAL — has a token length varint
+            if (typeField == 0x00) { // INITIAL вЂ” has a token length varint
                 long tokenLen = QuicVarint.read(datagram);
                 datagram.position((int) (datagram.position() + tokenLen));
             }
 
-            // Payload length (varint) — includes the packet-number bytes and ciphertext
+            // Payload length (varint) вЂ” includes the packet-number bytes and ciphertext
             long payloadLength = QuicVarint.read(datagram);
             datagram.position((int) (datagram.position() + payloadLength));
 
@@ -500,3 +515,4 @@ public class SelectorThread implements Runnable {
     }
 
 }
+
