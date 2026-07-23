@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Copyright 2026 Fedor Malyshev
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -46,7 +46,7 @@ public class QuicDatagramChannel {
         try {
             return new LinuxEcnSocket(getNativeFd(channel));
         } catch (Exception e) {
-            logger.warn("Failed to open Linux EcnSocket. ECN is not supported.", e);
+            logger.warn("Failed to open Linux EcnSocket. ECN is not supported.");
             return null;
         }
     }

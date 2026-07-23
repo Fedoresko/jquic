@@ -11,9 +11,30 @@ repositories {
     mavenLocal()
 }
 
+tasks.register('runShadowJar', JavaExec) {
+    group = 'application'
+    description = 'Runs the shadow fat JAR file.'
+
+    // Automatically wait for shadowJar to build before running
+    dependsOn tasks.named('shadowJar')
+
+    // Dynamically references the exact file location of the shadow archive
+    classpath = files(tasks.named('shadowJar').flatMap { it.archiveFile })
+
+    // Forces the execution environment to be the project root directory
+    workingDir = project.projectDir
+
+    // Pass your VM options/arguments here
+    jvmArgs = [
+            '--add-opens', 'java.base/sun.nio.ch=ALL-UNNAMED',
+            '--add-opens', 'java.base/java.io=ALL-UNNAMED',
+            '--enable-native-access=ALL-UNNAMED'
+    ]
+}
+
 dependencies {
     implementation 'ch.qos.logback:logback-classic:1.5.38'
-    implementation('org.jquic:http3:1.0-SNAPSHOT')
+    implementation('org.jquic:http3:latest.release')
 
     testImplementation platform('org.junit:junit-bom:5.10.0')
     testImplementation 'org.junit.jupiter:junit-jupiter'

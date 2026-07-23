@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Copyright 2026 Fedor Malyshev
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -72,9 +72,7 @@ public class LinuxEcnSocket implements AutoCloseable {
             // critical(true) enables the array pinning feature for downcalls
             mh3 = Linker.nativeLinker().downcallHandle(symbol, descForSendTo, Linker.Option.critical(true));
 
-        } catch (Throwable e) {
-            e.printStackTrace();
-        }
+        } catch (Throwable e) {}
         quic_receive_ecn = mh;
         quic_receive_ecn_blocking = mh2;
         send_to = mh3;

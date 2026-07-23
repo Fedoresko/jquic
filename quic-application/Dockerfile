@@ -14,10 +14,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     vsftpd \
     curl \
     ca-certificates \
-#    gcc \
-#    llvm \
-#    clang \
-#    libc-dev \
     libbpf1 \
     libelf1 \
     ethtool \
@@ -40,28 +36,8 @@ WORKDIR /app
 # Copy your local Java application into the container image layer
 COPY ./build/libs/quic-application-1.0-SNAPSHOT-all.jar /app/jquic.jar
 COPY ./server.p12 /app/server.p12
-#COPY ../jquic/src/main/c /app/
 
 RUN cd /app & jar -xf jquic.jar loader quic_router.bpf.o
-
-#RUN gcc -O2 /app/loader.c -o /app/loader -lbpf -lelf && \
-#    clang -O2 -g -target bpf -I/usr/include/x86_64-linux-gnu -c quic_router.bpf.c -o quic_router.bpf.o
-
-#RUN  gcc -shared -fPIC \
-#    -I"${JAVA_HOME}/include" \
-#    -I"${JAVA_HOME}/include/linux" \
-#    javabpf.c -lbpf \
-#    -o libjavabpf.so
-#
-#RUN  gcc -shared -fPIC \
-#    -I"${JAVA_HOME}/include" \
-#    -I"${JAVA_HOME}/include/linux" \
-#    quic_ecn.c -lbpf \
-#    -o libquic_ecn.so
-#
-#RUN mkdir -p /usr/java/packages/lib && \
-#    cp libjavabpf.so /usr/java/packages/lib && \
-#    cp libquic_ecn.so /usr/java/packages/lib
 
 # Give fedoresko ownership of the app directory for FTP uploads
 RUN chown -R fedoresko:fedoresko /app
