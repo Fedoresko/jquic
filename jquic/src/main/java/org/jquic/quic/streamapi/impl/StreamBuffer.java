@@ -42,7 +42,7 @@ public class StreamBuffer {
     private long bufferedBytes = 0; // Bytes buffered but not yet delivered to application
 
     // Outgoing data tracking
-    private AtomicLong nextSendOffset = new AtomicLong(0);
+    private final AtomicLong nextSendOffset = new AtomicLong(0);
 
     public StreamBuffer(long streamId, int streamBufferCapacity) {
         this.streamId = streamId;
@@ -165,20 +165,6 @@ public class StreamBuffer {
      */
     public long allocateSendOffset(int dataLength) {
         return nextSendOffset.getAndAdd(dataLength);
-    }
-
-    /**
-     * Returns whether the stream has received FIN.
-     */
-    public boolean hasReceivedFin() {
-        return receivedFin;
-    }
-
-    /**
-     * Gets the current receive offset.
-     */
-    public long getNextExpectedOffset() {
-        return nextExpectedOffset;
     }
 
     public long getStreamId() {

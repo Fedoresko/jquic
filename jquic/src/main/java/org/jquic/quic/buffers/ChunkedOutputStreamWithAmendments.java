@@ -106,18 +106,6 @@ public abstract class ChunkedOutputStreamWithAmendments extends DataOutputStream
     public abstract PoolBuffer pollReadyChunk();
 
     /**
-     * Peek at ready and wrapped chunk.
-     *
-     * @return the first added chunk in queue, null if nothing left.
-     */
-    public abstract PoolBuffer peekReadyChunk();
-
-    /**
-     * Return total data already available to poll
-     */
-    public abstract int bufferedBytes();
-
-    /**
      * Return if the stream was closed
      */
     public abstract boolean isClosed();

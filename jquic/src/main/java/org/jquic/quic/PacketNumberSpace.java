@@ -58,8 +58,6 @@ public class PacketNumberSpace {
 
     private long serverCeCounter = -1;
 
-    private record PacketEvent(long timestamp, int bytes) {};
-
     // RTT tracking (RFC 9002 Section 5)
     private int smoothedRtt = K_INITIAL_RTT_MS;
     private int rttVar = K_INITIAL_RTT_MS / 2;
@@ -175,12 +173,12 @@ public class PacketNumberSpace {
      * Processes received ACK frame and updates RTT, removes acked packets, detects losses.
      * RFC 9002 Section 6: Processing Acknowledgments
      *
-     * @param timestampMs
+     * @param timestampMs  Current timestamp
      * @param largestAcked Largest acknowledged packet number
      * @param ackRanges    List of acknowledged packet ranges
      * @param ackDelay     ACK delay in microseconds
      * @param ackCallback  Optional callback invoked for each acked packet before removal
-     * @param ceCounter
+     * @param ceCounter    ECN contingency event counter
      */
     public void onAckReceived(long timestampMs, long largestAcked, List<AckRange> ackRanges, long ackDelay, AckCallback ackCallback, long ceCounter) {
         logger.info("{}: ACK received for largest: {}, ranges: {}", phase, largestAcked, ackRanges.size());
@@ -307,7 +305,7 @@ public class PacketNumberSpace {
     }
 
     public void discardSentPackets() {
-        if (sentPackets.size() > 0) {
+        if (!sentPackets.isEmpty()) {
             sentPackets.pollFirstEntry().getValue().getUnencryptedPayload().release();
         }
     }
@@ -399,7 +397,7 @@ public class PacketNumberSpace {
     }
 
     public long getPTO() {
-        return smoothedRtt + 4 * rttVar;
+        return smoothedRtt + 4L * rttVar;
     }
 
     public long getSmoothedRtt() {

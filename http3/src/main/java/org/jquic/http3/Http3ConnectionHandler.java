@@ -44,7 +44,6 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
     private final long connectionId;
     private final Http3RequestHandler requestHandler;
     private final ConcurrentHashMap<Long, Http3StreamContext> streams = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<Long, DataOutputStream> outs = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long,  CompletableFuture<DataOutputStream>> futures = new ConcurrentHashMap<>();
 
     private final Map<Long, Http3ServerStreamRole> serverStreamRoles = new HashMap<>();
@@ -312,7 +311,7 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
                             // Send the response immediately - do not wait for stream FIN.
                             logger.debug("Sending HTTP/3 response on stream {} (connection {}) immediately after HEADERS",
                                     streamId, connectionId);
-                            futures.computeIfPresent(streamId, (_, f) -> putResponse(futures.get(streamId), httpResponse));
+                            futures.computeIfPresent(streamId, (_, _) -> putResponse(futures.get(streamId), httpResponse));
                             context.setRequestState(Http3StreamContext.RequestProcessingState.RESPONSE_SENDING);
                         } else {
                             context.setRequestState(Http3StreamContext.RequestProcessingState.WAITING_FOR_BODY);
@@ -332,7 +331,7 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
                                 // Send the response immediately - do not wait for stream FIN.
                                 logger.debug("Sending HTTP/3 response on stream {} (connection {}) immediately after HEADERS",
                                         streamId, connectionId);
-                                futures.computeIfPresent(streamId, (_, f) -> putResponse(futures.get(streamId), httpResponse));
+                                futures.computeIfPresent(streamId, (_, _) -> putResponse(futures.get(streamId), httpResponse));
                                 context.setRequestState(Http3StreamContext.RequestProcessingState.RESPONSE_SENDING);
                             }
                         }
@@ -364,7 +363,7 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
                     // Send the response immediately - do not wait for stream FIN.
                     logger.debug("Sending HTTP/3 response on stream {} (connection {}) immediately after HEADERS",
                             streamId, connectionId);
-                    futures.computeIfPresent(streamId, (_, f) -> putResponse(futures.get(streamId), httpResponse));
+                    futures.computeIfPresent(streamId, (_, _) -> putResponse(futures.get(streamId), httpResponse));
                     finishStream(streamId);
                 } else {
                     // Clean FIN - response was already sent; just remove stream context.
@@ -475,7 +474,7 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
             data.position(data.limit());
             return new Http3Request(connectionId, method, path, contentLength);
         } catch (IOException e) {
-            logger.warn("QPACK decoding failed on stream (connection {})",
+            logger.warn("QPACK decoding failed on stream (connection {}) {}",
                     connectionId, e.getMessage());
             return null;
         }
@@ -499,7 +498,6 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
         ByteBuffer headerBlock = qpackEncoder.compressHeaders(headers).position(0);
 
         return responseFuture.thenApplyAsync((outputStream) -> {
-            System.out.println("Start writing response part "+headerBlock+" "+body);
             try {
                 // HTTP/3 framing: each frame = type (varint) + length (varint) + payload
                 putHttp3Frame(outputStream, 0x01, headerBlock);
@@ -507,7 +505,6 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
-            System.out.println("End writing response part ");
             return outputStream;
         });
     }
@@ -549,7 +546,6 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
             }
         }
 
-        private final long streamId;
         private final Deque<ByteBuffer> chunks = new LinkedList<>();
         private int bufferedBytes = 0;
 
@@ -564,7 +560,6 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
         public int readBodyBytes = 0;
 
         Http3StreamContext(long streamId, @Nullable Object role) {
-            this.streamId = streamId;
             this.role = role;
         }
 
@@ -574,10 +569,6 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
 
         void setRole(@NonNull Object role) {
             this.role = role;
-        }
-
-        boolean isUnknown() {
-            return role == Http3ClientStreamRole.UNKNOWN;
         }
 
         RequestProcessingState getRequestState() {
@@ -614,10 +605,6 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
                 n -= toConsume;
                 if (chunk.remaining() == 0) chunks.poll();
             }
-        }
-
-        void consumeAll() {
-            consume(bufferedBytes);
         }
 
         /**
@@ -681,7 +668,7 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
             consume(typeLen + lengthLen);
             byte[] payload = new byte[length.intValue()];
             int pos = 0;
-            while (pos < payload.length) {
+            while (pos < payload.length && !chunks.isEmpty()) {
                 ByteBuffer chunk = chunks.peek();
                 int toCopy = Math.min(chunk.remaining(), payload.length - pos);
                 chunk.get(payload, pos, toCopy);

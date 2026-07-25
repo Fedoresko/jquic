@@ -17,8 +17,8 @@ package org.jquic.quic.streamapi.impl;
 
 import org.jquic.quic.ConnectionMetadata.InitialStreamLimits;
 import org.jquic.quic.QuicTransportError;
-import org.jquic.quic.streamapi.QuicStreamException;
 import org.jquic.quic.streamapi.QuicConnectionControl;
+import org.jquic.quic.streamapi.QuicStreamException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -45,9 +45,9 @@ class FlightControl {
     private final int maxUnidirectionalStreams;
     // Connection-level flow control - receiving side
     private long totalMaxOffsetsSum = 0;
-    private AtomicLong totalBufferedBytes = new AtomicLong(0); // Total bytes currently stored in all stream buffers
+    private final AtomicLong totalBufferedBytes = new AtomicLong(0); // Total bytes currently stored in all stream buffers
     // Connection-level flow control - sending side (in-flight bytes)
-    private AtomicLong totalInFlightBytes = new AtomicLong(0);
+    private final AtomicLong totalInFlightBytes = new AtomicLong(0);
     private final StreamManager streamManager;
 
     private long bidirectionalOutgoingStreamCap;
@@ -57,8 +57,6 @@ class FlightControl {
 
     private long currentIncomingBidiStreamsCount = 0;
     private long currentIncomingUniStreamsCount = 0;
-    private long maxIncomingBidiStream = 0;
-    private long maxIncomingUniStream = 0;
 
     private final InitialStreamLimits serverInitialLimits;
     private final InitialStreamLimits clientInitialLimits;
@@ -296,7 +294,6 @@ class FlightControl {
         if (isNew) {
             long streamIndex = streamId / 4;
             if (isBidi) {
-                maxIncomingBidiStream = streamIndex;
                 currentIncomingBidiStreamsCount++;
                 long maxStreams = bidirectionalIncomingStreamCap / 4;
                 if (streamIndex >= maxStreams - maxBidirectionalStreams / 2) {
@@ -306,7 +303,6 @@ class FlightControl {
                     streamManager.sendMaxStreamsFrame(newMaxStreams, true);
                 }
             } else {
-                maxIncomingUniStream = streamIndex;
                 currentIncomingUniStreamsCount++;
                 long maxStreams = (unidirectionalIncomingStreamCap - 2) / 4;
                 if (streamIndex >= maxStreams - maxUnidirectionalStreams / 2) {
@@ -357,8 +353,6 @@ class FlightControl {
             state.setState(CLOSED);
         }
 
-        state.setResetErrorCode(errorCode);
-
         if (state.getState() == CLOSED && prevState != CLOSED) {
              decrementActiveStreamCount(streamId);
              streams.remove(streamId);
@@ -378,8 +372,6 @@ class FlightControl {
             logger.debug("Received STOP_SENDING for unknown stream {}", streamId);
             return;
         }
-
-        state.setStopSendingErrorCode(errorCode);
 
         StreamState.State prevState = state.getState();
         if (state.streamType == Bidirectional) {
@@ -496,7 +488,6 @@ class FlightControl {
     }
 
     public void onStreamResetAck(long streamId) {
-        QuicConnectionControl.StreamType streamType = StreamManager.getStreamType(streamId);
         StreamState streamState = streams.get(streamId);
         if (streamState.getState() != StreamState.State.RESET_SENT) {
             logger.warn("Received ack for STREAM_RESET in state {} for stream {}", streamState.getState(), streamId);

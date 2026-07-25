@@ -52,8 +52,8 @@ public class SelectorThread implements Runnable {
     private final ConcurrentHashMap<Long, Integer> cidToSelectorMap;
     private final Map<Long, QuicConnection> activeConnections;
     private final Map<ByteBuffer, QuicConnection> initializingConnections = new HashMap<>();
-    private final MpscLinkedQueue<OutboxRecord> outputQueue = new MpscLinkedQueue<>();
 
+    @SuppressWarnings("unchecked")
     private final LinkedList<OutboxRecord>[] timerWheel = new LinkedList[2000];
     private long lastDrainedSlot = 0;
 
@@ -366,7 +366,7 @@ public class SelectorThread implements Runnable {
             log.warn(logColor(), "Selector-{}: Processing Initial packet for new CID: {}", threadId, task.allocatedCid);
 
             QuicConnection connection = activeConnections.computeIfAbsent(task.allocatedCid,
-                    cid -> new QuicConnection(task.allocatedCid, task.sender, applicationQueue,this));
+                    _ -> new QuicConnection(task.allocatedCid, task.sender, applicationQueue,this));
             connection.setCurrentTimestamp(now);
 
             assignConnectionToSelector(connection.getConnectionId());

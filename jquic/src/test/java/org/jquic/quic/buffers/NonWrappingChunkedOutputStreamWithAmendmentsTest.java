@@ -6,7 +6,6 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 
@@ -28,7 +27,7 @@ public class NonWrappingChunkedOutputStreamWithAmendmentsTest {
         
         when(myPool.requestWriteBuffer()).thenReturn(new RootPoolBuffer(buffer, myPool, true));
         
-        ChunkedOutputStreamWithAmendments stream = ChunkedOutputStreamWithAmendments.createNonWrapping(myPool, chunkSize, 0, (buf, offset, isFinal) -> buf.duplicate());
+        ChunkedOutputStreamWithAmendments stream = ChunkedOutputStreamWithAmendments.createNonWrapping(myPool, chunkSize, 0, (buf, _, _) -> buf.duplicate());
         
         byte[] data = pattern(25, 1);
         stream.write(data);

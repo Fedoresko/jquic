@@ -161,7 +161,7 @@ public class QuicPacketBuilder {
      *
      * @param packet          fully assembled packet (flipped, ready to read)
      * @param headerLength    total header length in bytes (packet number is last {@code pnLen} bytes)
-     * @param pnLen           packet number length in bytes (1вЂ“4)
+     * @param pnLen           packet number length in bytes (1-4)
      * @throws QuicCrypto.CryptoException if AES-ECB fails
      */
     private static void applyHeaderProtection(ByteBuffer packet, int headerLength, int pnLen,

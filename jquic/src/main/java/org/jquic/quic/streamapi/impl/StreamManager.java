@@ -30,7 +30,6 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.HexFormat;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
@@ -46,15 +45,11 @@ import static org.jquic.quic.streamapi.impl.StreamFrameWriter.FRAME_TYPE_RESET_S
  * worker thread only - no synchronization needed.
  */
 public class StreamManager implements ConnectionStreamManager {
-    public static final int STREAM_FRAME_HEADER_MAX_LEN = 1 + 8 + 8 + 8;
     private static final Logger logger = LoggerFactory.getLogger(StreamManager.class);
     public static final int STREAM_BUFFER_CAPACITY = 50_000;
     public static final int DATAGRAM_FRAMES = -1;
     public static final int CONNECTION_OUTBOX_LIMIT = 15000;
     private final QuicStreamResponseImpl datagramConnectionControl = new QuicStreamResponseImpl(null);
-
-    public record FrameRecord(long streamId, boolean fin, PoolBuffer data) {
-    }
 
     private final QuicConnection connection;
     private final QuicApplicationProtocolConnectionHandler handler;
@@ -67,7 +62,7 @@ public class StreamManager implements ConnectionStreamManager {
     private final Map<Long, ChunkedOutputStreamWithAmendments> streamOutputs = new HashMap<>();
     private final MessagePassingQueue<OutboxRecord> outputQueue;
 
-    private AtomicInteger outboxBytesBuffered = new AtomicInteger(0);
+    private final AtomicInteger outboxBytesBuffered = new AtomicInteger(0);
     // Stream counters - server always uses odd stream IDs
     private long nextServerBidiStreamId = 1;
     private long nextServerUniStreamId = 3;
@@ -165,30 +160,20 @@ public class StreamManager implements ConnectionStreamManager {
          * Called from Worker thread
          * Processes a frame. Called by worker thread only.
          */
-        public void processFrame(ProtocolFrame frame, StreamManager streamManager) throws IOException {
+        public void processFrame(ProtocolFrame frame) throws IOException {
             // Route based on frame type and decode using StreamFrameProcessor
-            if (frame instanceof StreamFrameData) {
-                handleFrame((StreamFrameData) frame);
-            } else if (frame instanceof ResetStreamFrameData) {
-                handleFrame((ResetStreamFrameData) frame);
-            } else if (frame instanceof StopSendingFrameData) {
-                handleFrame((StopSendingFrameData) frame);
-            } else if (frame instanceof MaxStreamDataFrameData) {
-                handleFrame((MaxStreamDataFrameData) frame);
-            } else if (frame instanceof MaxDataFrameData) {
-                handleFrame((MaxDataFrameData) frame);
-            } else if (frame instanceof MaxStreamsFrameData) {
-                handleFrame((MaxStreamsFrameData) frame);
-            } else if (frame instanceof StreamDataBlockedFrameData) {
-                handleFrame((StreamDataBlockedFrameData) frame);
-            } else if (frame instanceof StreamsBlockedFrameData) {
-                handleFrame((StreamsBlockedFrameData) frame);
-            } else if (frame instanceof StreamResetFrameAck) {
-                onStreamResetAck(((StreamResetFrameAck) frame).streamId);
-            } else if (frame instanceof DatagramFrame) {
-                handleFrame((DatagramFrame) frame);
-            } else {
-                logger.warn("Unknown frame type {}", frame.getClass().getName());
+            switch (frame) {
+                case StreamFrameData streamFrameData -> handleFrame(streamFrameData);
+                case ResetStreamFrameData resetStreamFrameData -> handleFrame(resetStreamFrameData);
+                case StopSendingFrameData stopSendingFrameData -> handleFrame(stopSendingFrameData);
+                case MaxStreamDataFrameData maxStreamDataFrameData -> handleFrame(maxStreamDataFrameData);
+                case MaxDataFrameData maxDataFrameData -> handleFrame(maxDataFrameData);
+                case MaxStreamsFrameData maxStreamsFrameData -> handleFrame(maxStreamsFrameData);
+                case StreamDataBlockedFrameData streamDataBlockedFrameData -> handleFrame(streamDataBlockedFrameData);
+                case StreamsBlockedFrameData streamsBlockedFrameData -> handleFrame(streamsBlockedFrameData);
+                case StreamResetFrameAck streamResetFrameAck -> onStreamResetAck(streamResetFrameAck.streamId);
+                case DatagramFrame datagramFrame -> handleFrame(datagramFrame);
+                default -> logger.warn("Unknown frame type {}", frame.getClass().getName());
             }
         }
 
@@ -219,7 +204,7 @@ public class StreamManager implements ConnectionStreamManager {
             StreamState state = flightControl.incomingStream(streamId);
 
             if (state == null || !state.getState().canReceive()) {
-                logger.warn("Received STREAM frame on stream {} in state {}", streamId, state.getState());
+                logger.warn("Received STREAM frame on stream {} in state {}", streamId, state);
                 return;
             }
 
@@ -346,7 +331,7 @@ public class StreamManager implements ConnectionStreamManager {
         ChunkedOutputStreamWithAmendments out = ChunkedOutputStreamWithAmendments.createNonWrapping(connection.getBufferPool(),
                 (int) connection.connectionMetadata.clientMetadata.maxUdpPayloadSize - GCM_TAG_LENGTH,
                 GCM_TAG_LENGTH + QuicFrameBuilder.MAX_SHORT_HEADER_LENGTH,
-                (buf, off, fin) -> {
+                (buf, _, fin) -> {
                     int dataSize = buf.remaining();
                     long offset = streamBuffer.allocateSendOffset(dataSize);
                     return (streamId == DATAGRAM_FRAMES) ?

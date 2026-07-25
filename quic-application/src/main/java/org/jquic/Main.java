@@ -24,8 +24,6 @@ import org.jquic.quic.QuicServerConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -35,10 +33,10 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.time.Instant;
+import java.util.AbstractMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.List;
-import java.util.AbstractMap;
 
 /**
  * Main entry point for the QUIC/HTTP3 server application.
@@ -46,10 +44,10 @@ import java.util.AbstractMap;
  * <p>Starts the QuicEngine (UDP multiplexer + eBPF steering) and an HTTP/3 server
  * with the following test endpoints:
  * <ul>
- *   <li>GET /health  вЂ“ liveness check, returns 200 OK</li>
- *   <li>GET /hello   вЂ“ friendly greeting with server timestamp</li>
- *   <li>GET /echo    вЂ“ echoes connection ID and request path back as JSON</li>
- *   <li>*            вЂ“ 404 Not Found for any other path</li>
+ *   <li>GET /health  - liveness check, returns 200 OK</li>
+ *   <li>GET /hello   - friendly greeting with server timestamp</li>
+ *   <li>GET /echo    - echoes connection ID and request path back as JSON</li>
+ *   <li>*            - 404 Not Found for any other path</li>
  * </ul>
  */
 public class Main {
@@ -79,7 +77,7 @@ public class Main {
         }
     }
 
-    public static void main(String[] args) throws Exception {
+    static void main() throws Exception {
         logger.info("Starting QUIC/HTTP3 server...");
 
         // 1. Boot the QUIC engine (acceptor + selector threads, eBPF map setup)
@@ -201,12 +199,12 @@ public class Main {
         );
     }
 
-    /** GET /health вЂ“ simple liveness probe */
+    /** GET /health - simple liveness probe */
     private static Http3Response handleHealth(Http3Request request) {
         return Http3Response.ok("OK", List.of());
     }
 
-    /** GET /hello вЂ“ friendly greeting */
+    /** GET /hello - friendly greeting */
     private static Http3Response handleHello(Http3Request request) {
         String body = "Hello from QUIC/HTTP3 server! Server time: " + Instant.now();
         return Http3Response.ok(body,
@@ -216,7 +214,7 @@ public class Main {
         );
     }
 
-    /** GET /echo вЂ“ returns request metadata as JSON */
+    /** GET /echo - returns request metadata as JSON */
     private static Http3Response handleEcho(Http3Request request) {
         String json = String.format(
                 "{\"connectionId\":%d,\"method\":\"%s\",\"path\":\"%s\",\"timestamp\":\"%s\"}",

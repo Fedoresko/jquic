@@ -78,7 +78,7 @@ class CryptoFrameRebuilderTest {
     // -------------------------------------------------------------
 
     /**
-     * RFC 9001 В§4.1.3 вЂ“ simplest case: the entire CRYPTO payload arrives in one
+     * RFC 9001 В§4.1.3 - simplest case: the entire CRYPTO payload arrives in one
      * fragment. After setExpectedLength and addPart the frame must be immediately
      * complete and rebuild() must return the exact bytes.
      */
@@ -102,7 +102,7 @@ class CryptoFrameRebuilderTest {
     // -------------------------------------------------------------
 
     /**
-     * RFC 9001 В§4.1.3 вЂ“ a receiver may buffer fragments before it has parsed the
+     * RFC 9001 В§4.1.3 - a receiver may buffer fragments before it has parsed the
      * TLS record length.  When setExpectedLength is finally called with the correct
      * value, isComplete must reflect the already-received data.
      */
@@ -152,7 +152,7 @@ class CryptoFrameRebuilderTest {
     // -------------------------------------------------------------
 
     /**
-     * RFC 9000 В§2.2 вЂ“ stream data may arrive out of order.  The CRYPTO receiver MUST
+     * RFC 9000 В§2.2 - stream data may arrive out of order.  The CRYPTO receiver MUST
      * buffer out-of-order data and deliver it in order to TLS.  Here the last fragment
      * arrives first.
      */
@@ -193,7 +193,7 @@ class CryptoFrameRebuilderTest {
     // -------------------------------------------------------------
 
     /**
-     * RFC 9000 В§2.2 вЂ“ an endpoint may receive the same stream data multiple times
+     * RFC 9000 В§2.2 - an endpoint may receive the same stream data multiple times
      * (e.g. due to retransmission).  Duplicate data MUST be silently discarded;
      * only novel bytes fill gaps.
      */
@@ -219,10 +219,10 @@ class CryptoFrameRebuilderTest {
         CryptoFrameRebuilder rebuilder = new CryptoFrameRebuilder();
         rebuilder.setExpectedLength(10);
 
-        // Bytes 0вЂ“4 arrive first
+        // Bytes 0-4 arrive first
         assertFalse(rebuilder.addPart(0, 5, buf(sequential(0, 5))));
 
-        // Retransmission covers bytes 3вЂ“9 (overlap at 3-4, novel at 5-9)
+        // Retransmission covers bytes 3-9 (overlap at 3-4, novel at 5-9)
         assertTrue(rebuilder.addPart(3, 7, buf(sequential(3, 7))));
 
         assertArrayEquals(sequential(0, 10), drain(rebuilder.rebuild()));
@@ -340,7 +340,7 @@ class CryptoFrameRebuilderTest {
     // -------------------------------------------------------------
 
     /**
-     * RFC 9001 В§4.1.3 вЂ“ TLS requires contiguous data from offset 0.  Having all bytes
+     * RFC 9001 В§4.1.3 - TLS requires contiguous data from offset 0.  Having all bytes
      * except the very first segment must NOT be considered complete.
      */
     @Test

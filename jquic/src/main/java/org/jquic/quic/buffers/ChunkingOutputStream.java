@@ -115,7 +115,7 @@ public class ChunkingOutputStream extends OutputStream {
             int end = position;
             int chunkWrappedLen = end - start;
             int positionBeforeGap = position;
-            ByteBuffer wrap = null;
+            ByteBuffer wrap;
 
             if (chunkWrappedLen > 0) {
                 // Invoke user interception code - it must set adjust buffer position and limit back for continuation.
@@ -155,6 +155,7 @@ public class ChunkingOutputStream extends OutputStream {
                     }
                     positionBeforeGap = position;
                     lastBufferLogicalStart = logicalOffset;
+                    firstChunkStart = position;
                     gaps.clear();
                 }
             } else {

@@ -17,8 +17,6 @@ package org.jquic.quic;
 
 import org.jquic.quic.buffers.ChunkedOutputStreamWithAmendments;
 import org.jquic.quic.struct.SortedIntervals;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -26,11 +24,7 @@ import java.util.Iterator;
 
 public class QuicFrameBuilder {
     public static final int CRYPTO_FRAME_MAX_HEADER_LENGTH = 1 + 8 + 8;
-    public static final int MAX_LONG_HEADER_LENGTH = 56;
     public static final int MAX_SHORT_HEADER_LENGTH = 25;
-    public static final int INITIAL_PACKET_TOKEN_LENGTH = 0;
-    public static final int PING_FRAME_LENGTH = 1;
-    private static final Logger log = LoggerFactory.getLogger(QuicFrameBuilder.class);
 
     /**
      * Creates an ACK frame with multiple ranges (RFC 9000 Section 19.3).

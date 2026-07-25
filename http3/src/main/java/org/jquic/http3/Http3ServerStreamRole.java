@@ -15,8 +15,6 @@
  */
 package org.jquic.http3;
 
-import org.jspecify.annotations.NonNull;
-
 /**
  * Represents the role of a server-initiated HTTP/3 stream as defined in RFC 9114 §6.
  */

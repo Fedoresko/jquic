@@ -39,16 +39,12 @@ import java.util.Objects;
  * <p>Built on top of one-nio's {@link HttpServer} for minimal overhead.
  */
 public class BootstrapHttpServer {
-
-    private static final Logger logger = LoggerFactory.getLogger(BootstrapHttpServer.class);
-
     private static final int PORT = 4433;
-    private final SSLContext sslContext;
     private final HttpsServer server;
 
     public BootstrapHttpServer(KeystoreManager keystoreManager) throws Exception {
 
-        sslContext = buildSslContext(keystoreManager);
+        SSLContext sslContext = buildSslContext(keystoreManager);
 
         server = HttpsServer.create(new InetSocketAddress(java.net.InetAddress.getByName("127.0.0.1"), PORT), 0);
         server.setHttpsConfigurator(new HttpsConfigurator(sslContext) {
@@ -141,9 +137,7 @@ public class BootstrapHttpServer {
                 return;
             }
 
-            String body = String.format(
-                    "U-u-uPS!"
-            );
+            String body = "U-u-uPS!";
 
             exchange.getResponseHeaders().add("Access-Control-Allow-Origin","*");
             exchange.getResponseHeaders().add("Content-Type","application/html; charset=utf-8");

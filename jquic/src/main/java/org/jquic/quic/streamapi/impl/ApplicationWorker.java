@@ -75,7 +75,7 @@ public class ApplicationWorker extends StreamWorker {
         didWork |= frameQueue.drain(currentFrameTask -> {
             try {
                 // Process the frame directly - StreamManager handles it
-                currentFrameTask.manager.frameProcessor.processFrame(currentFrameTask.frameData, currentFrameTask.manager);
+                currentFrameTask.manager.frameProcessor.processFrame(currentFrameTask.frameData);
             } catch (Exception e) {
                 logger.error("Error processing frame for connection {}", currentFrameTask.manager.getConnectionId(), e);
             }

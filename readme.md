@@ -1,4 +1,4 @@
-<img src="jquic.svg" align="left" width="200" alt="jQuic" style="margin: 20px; margin-right: 60px">
+<img src="jquic.svg" width="200" alt="jQuic" style="float: left; margin: 20px; margin-right: 60px">
 
 # jQuic: High-Performance Java QUIC Server
 

@@ -23,7 +23,6 @@ import java.util.TreeMap;
 
 public class CryptoFrameRebuilder {
     private int expectedLength = -1;
-    private ByteBuffer continuousBuffer = null;
 
     // Segment tree index tracking: Key = Offset, Value = End Offset (Offset + Length)
     private final TreeMap<Integer, Integer> segments = new TreeMap<>();
@@ -64,7 +63,6 @@ public class CryptoFrameRebuilder {
      * @param length - length of part
      * @param data - part data
      * @return returns true if frame is complete
-     * @throws IllegalStateException
      */
     public boolean addPart(int offset, int length, PoolBuffer data) throws IllegalStateException {
         int endOffset = offset + length;
@@ -83,12 +81,6 @@ public class CryptoFrameRebuilder {
         // Strategy: walk through all existing segments that overlap [offset, endOffset)
         // and collect only the sub-intervals that are not yet present, then store each gap.
 
-        // Snapshot the data bytes for the full new segment (we will index into it by position)
-//        byte[] incoming = new byte[length];
-//        data.buf().get(incoming);
-
-        // Find the first existing segment whose end > offset (it may overlap from the left)
-        Map.Entry<Integer, Integer> startEntry = segments.lowerEntry(endOffset);
         // Collect gaps: iterate from `offset` to `endOffset`, skipping covered ranges
         int gapStart = offset;
 
@@ -160,7 +152,7 @@ public class CryptoFrameRebuilder {
         }
 
         // Allocate direct if using for native I/O sockets, otherwise standard allocate
-        this.continuousBuffer = ByteBuffer.allocate(contiguousHead);
+        ByteBuffer continuousBuffer = ByteBuffer.allocate(contiguousHead);
 
         // Drain any early fragments that arrived out-of-order into our new fixed buffer
         for (Map.Entry<Integer, PoolBuffer> entry : earlyFragments.entrySet()) {
@@ -177,9 +169,9 @@ public class CryptoFrameRebuilder {
     }
 
     /**
-     * Returns at most continuous {@numBytes} from the begging of frame.
+     * Returns at most continuous {#numBytes} from the begging of frame.
      * @param numBytes - max bytes requested
-     * @return continuous bytes buffer from the start of frame (presently known), not more than {@numBytes}
+     * @return continuous bytes buffer from the start of frame (presently known), not more than {#numBytes}
      */
     public ByteBuffer peekEarlyHead(int numBytes) {
         ByteBuffer temp = ByteBuffer.allocate(numBytes);

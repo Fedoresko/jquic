@@ -42,8 +42,6 @@ public class QuicStreamEngineImpl implements QuicStreamEngine {
     private final int workerCount;
     private final ConcurrentHashMap<String, QuicApplicationProtocol> protocols = new ConcurrentHashMap<>();
 
-    private final MpmcArrayQueue<ByteBuffer> userDataBufferPool = new MpmcArrayQueue<>(1024);
-
     /**
      * Creates a new QuicStreamEngineInternal.
      * Package-private constructor - only QuicStreamEngine should create this.

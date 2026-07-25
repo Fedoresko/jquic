@@ -345,7 +345,7 @@ class FlightControlTest {
         long streamId = 3; 
         try {
             flightControl.openOutgoingStream(streamId, QuicConnectionControl.StreamType.Unidirectional);
-        } catch (QuicStreamException e) {}
+        } catch (QuicStreamException _) {}
         
         // Peer sends data on our uni stream - this is a violation!
         // RFC 9000: STREAM_STATE_ERROR
@@ -495,7 +495,7 @@ class FlightControlTest {
         for (int i = 0; i < 10; i++) {
             try {
                 flightControl.openOutgoingStream(1 + i * 4, QuicConnectionControl.StreamType.Bidirectional);
-            } catch (QuicStreamException e) {}
+            } catch (QuicStreamException _) {}
         }
         
         assertThrows(QuicStreamException.class, () -> {

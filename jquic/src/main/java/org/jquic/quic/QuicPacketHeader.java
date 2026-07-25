@@ -208,7 +208,7 @@ public class QuicPacketHeader {
         return new PacketSummary(fromFlags(flags), destinationCid);
     }
 
-    public record PacketSummary(PacketType type, byte[] dcid) {};
+    public record PacketSummary(PacketType type, byte[] dcid) {}
 
     private static PacketType fromFlags(byte flags) {
         int typeField = (flags & 0x30) >> 4;
@@ -372,19 +372,14 @@ public class QuicPacketHeader {
      * Reads a packet number of the specified length (1-4 bytes).
      */
     private static long readPacketNumber(ByteBuffer buffer, int length) {
-        switch (length) {
-            case 1:
-                return buffer.get() & 0xFF;
-            case 2:
-                return buffer.getShort() & 0xFFFF;
-            case 3:
-                return ((buffer.get() & 0xFF) << 16) | (buffer.getShort() & 0xFFFF);
-            case 4:
-                return buffer.getInt() & 0xFFFFFFFFL;
-            default:
-                // RFC 9000: Malformed packet - will be caught by try-catch in parse()
-                throw new IllegalArgumentException("Invalid packet number length: " + length);
-        }
+        // RFC 9000: Malformed packet - will be caught by try-catch in parse()
+        return switch (length) {
+            case 1 -> buffer.get() & 0xFF;
+            case 2 -> buffer.getShort() & 0xFFFF;
+            case 3 -> ((buffer.get() & 0xFF) << 16) | (buffer.getShort() & 0xFFFF);
+            case 4 -> buffer.getInt() & 0xFFFFFFFFL;
+            default -> throw new IllegalArgumentException("Invalid packet number length: " + length);
+        };
     }
 
     public enum PacketType {
@@ -393,28 +388,6 @@ public class QuicPacketHeader {
         HANDSHAKE,
         RETRY,
         ONE_RTT;
-
-        static PacketType fromFlags(byte firstByte) {
-            int flags = firstByte & 0xFF; // Convert signed byte to unsigned int
-
-            // Bit 0 determines the Header Form (1 = Long Header, 0 = Short/1-RTT Header)
-            boolean isLongHeader = (flags & 0x80) != 0;
-
-            if (!isLongHeader) {
-                return PacketType.ONE_RTT;
-            }
-
-            // For Long Headers, the packet type is encoded in Bits 2-3
-            int typeBits = (flags >> 4) & 0x03;
-
-            return switch (typeBits) {
-                case 0b00 -> PacketType.INITIAL;
-                case 0b01 -> PacketType.ZERO_RTT;
-                case 0b10 -> PacketType.HANDSHAKE;
-                case 0b11 -> PacketType.RETRY;
-                default -> throw new IllegalStateException("Unreachable bit state for 2-bit mask.");
-            };
-        }
 
         public boolean isLongHeader() {
             return this != ONE_RTT;

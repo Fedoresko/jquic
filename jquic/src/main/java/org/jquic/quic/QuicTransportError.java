@@ -22,7 +22,7 @@ package org.jquic.quic;
  * why a connection is being closed at the transport layer.  Error codes are
  * 62-bit unsigned integers on the wire; this enum covers every named code in
  * the specification plus the {@link #CRYPTO_ERROR} sentinel for the TLS-alert
- * range (0x0100 вЂ“ 0x01ff).
+ * range (0x0100 - 0x01ff).
  *
  * <h2>Usage</h2>
  * <pre>{@code
@@ -140,12 +140,7 @@ public enum QuicTransportError {
     NO_VIABLE_PATH(0x10),
 
     /**
-     * Sentinel for the CRYPTO_ERROR range (0x0100 вЂ“ 0x01ff).
-     *
-     * <p>The low 8 bits of the wire value encode the TLS alert code that
-     * caused the closure.  Use {@link #cryptoErrorCode(int)} to construct the
-     * correct wire value, and {@link #isCryptoError(long)} to detect it during
-     * parsing.
+     * Sentinel for the CRYPTO_ERROR range (0x0100 - 0x01ff).
      *
      * @see <a href="https://www.rfc-editor.org/rfc/rfc9000#section-20.1">RFC 9000 В§20.1</a>
      */
@@ -190,81 +185,9 @@ public enum QuicTransportError {
      * Returns the wire value of this error code.
      *
      * <p>For {@link #CRYPTO_ERROR} this returns the base value {@code 0x0100};
-     * use {@link #cryptoErrorCode(int)} to obtain a code that also encodes the
-     * specific TLS alert.
      */
     public long code() {
         return code;
-    }
-
-    // -------------------------------------------------------------------------
-    // Factory / reverse-lookup helpers
-    // -------------------------------------------------------------------------
-
-    /**
-     * Returns the enum constant whose wire value equals {@code code}, or
-     * {@link #PROTOCOL_VIOLATION} as a safe fallback for unknown values.
-     *
-     * <p>Values in the range {@code 0x0100}вЂ“{@code 0x01ff} are mapped to
-     * {@link #CRYPTO_ERROR} regardless of the specific TLS alert byte.
-     *
-     * @param code wire error code read from a CONNECTION_CLOSE frame
-     * @return the matching {@link QuicTransportError}
-     */
-    public static QuicTransportError fromCode(long code) {
-        if (isCryptoError(code)) {
-            return CRYPTO_ERROR;
-        }
-        for (QuicTransportError e : values()) {
-            if (e.code == code) {
-                return e;
-            }
-        }
-        // Unknown codes are treated as a protocol violation per RFC 9000 В§20.1
-        return PROTOCOL_VIOLATION;
-    }
-
-    /**
-     * Returns {@code true} when {@code code} falls in the CRYPTO_ERROR range
-     * {@code 0x0100}вЂ“{@code 0x01ff}, indicating a TLS alert was the cause.
-     *
-     * @param code wire error code read from a CONNECTION_CLOSE frame
-     */
-    public static boolean isCryptoError(long code) {
-        return code >= 0x0100L && code <= 0x01ffL;
-    }
-
-    /**
-     * Builds the wire error code for a TLS-alert-triggered connection close.
-     *
-     * <p>Per RFC 9000 В§20.1: the error code is {@code 0x0100 + alertCode},
-     * where {@code alertCode} is the TLS alert description value (0вЂ“255).
-     *
-     * @param tlsAlertCode TLS alert description value (0вЂ“255)
-     * @return wire transport error code to place in a CONNECTION_CLOSE frame
-     * @throws IllegalArgumentException if {@code tlsAlertCode} is not in 0вЂ“255
-     */
-    public static long cryptoErrorCode(int tlsAlertCode) {
-        if (tlsAlertCode < 0 || tlsAlertCode > 0xff) {
-            throw new IllegalArgumentException(
-                "TLS alert code must be in range 0вЂ“255, got: " + tlsAlertCode);
-        }
-        return 0x0100L + tlsAlertCode;
-    }
-
-    /**
-     * Extracts the TLS alert description byte from a CRYPTO_ERROR wire value.
-     *
-     * @param code wire error code that must satisfy {@link #isCryptoError(long)}
-     * @return TLS alert description (0вЂ“255)
-     * @throws IllegalArgumentException if {@code code} is not a CRYPTO_ERROR
-     */
-    public static int extractTlsAlert(long code) {
-        if (!isCryptoError(code)) {
-            throw new IllegalArgumentException(
-                "Not a CRYPTO_ERROR wire code: 0x" + Long.toHexString(code));
-        }
-        return (int) (code & 0xffL);
     }
 
     @Override

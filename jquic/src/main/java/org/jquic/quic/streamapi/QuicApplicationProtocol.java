@@ -16,7 +16,6 @@
 package org.jquic.quic.streamapi;
 
 import org.jquic.quic.streamapi.congestion.BBRv3;
-import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
 import java.util.function.Function;

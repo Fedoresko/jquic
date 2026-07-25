@@ -24,11 +24,6 @@ public class ChunkedOutputStreamWithAmendmentsImpl extends ChunkedOutputStreamWi
     }
 
     @Override
-    public void flush() throws IOException {
-        out.flush();
-    }
-
-    @Override
     public void setChunkConsumer(ChunkConsumer consumer) {
         ((ChunkingOutputStream) out).setChunkConsumer(consumer);
     }
@@ -48,16 +43,6 @@ public class ChunkedOutputStreamWithAmendmentsImpl extends ChunkedOutputStreamWi
     @Override
     public PoolBuffer pollReadyChunk() {
         return ((ChunkingOutputStream) out).pollReadyChunk();
-    }
-
-    @Override
-    public PoolBuffer peekReadyChunk() {
-        return ((ChunkingOutputStream) out).peekReadyChunk();
-    }
-
-    @Override
-    public int bufferedBytes() {
-        return 0;
     }
 
     @Override

@@ -52,26 +52,20 @@ public class StreamState {
     }
 
     private final long streamId;
-    private final boolean isServerInitiated;
     final QuicConnectionControl.StreamType streamType;
     private State state;
 
     // Flow control
-    private AtomicLong maxStreamData; // Maximum data we can send (peer's limit)
+    private final AtomicLong maxStreamData; // Maximum data we can send (peer's limit)
     private long remoteMaxStreamData; // Maximum data remote can send (our limit)
-    private AtomicLong sentBytes;     // Total bytes sent (cumulative)
+    private final AtomicLong sentBytes;     // Total bytes sent (cumulative)
     private long maxOffset;           // Total bytes received (cumulative)
     private long inFlightBytes;       // Bytes sent but not yet acknowledged
     private long bufferedBytes;       // Bytes in receive buffer
 
-    // Error codes
-    private Long resetErrorCode;
-    private Long stopSendingErrorCode;
-
     public StreamState(long streamId, boolean isServerInitiated, QuicConnectionControl.StreamType streamType,
                       long initialMaxStreamDataToSend, long initialMaxStreamToReceive) {
         this.streamId = streamId;
-        this.isServerInitiated = isServerInitiated;
         this.streamType = streamType;
         this.state = State.OPEN;
         this.maxStreamData = new AtomicLong(initialMaxStreamDataToSend);
@@ -133,10 +127,6 @@ public class StreamState {
         return maxOffset - prevOffset;
     }
 
-    public long getInFlightBytes() {
-        return inFlightBytes;
-    }
-
     public void onBytesAcknowledged(long bytes) {
         this.inFlightBytes = Math.max(0, this.inFlightBytes - bytes);
     }
@@ -144,14 +134,6 @@ public class StreamState {
     public boolean canSendBytes(long bytes) {
         // Check if we can send 'bytes' without exceeding peer's limit
         return (sentBytes.get() + bytes) <= maxStreamData.get();
-    }
-
-    public void setResetErrorCode(Long resetErrorCode) {
-        this.resetErrorCode = resetErrorCode;
-    }
-
-    public void setStopSendingErrorCode(Long stopSendingErrorCode) {
-        this.stopSendingErrorCode = stopSendingErrorCode;
     }
 }
 
