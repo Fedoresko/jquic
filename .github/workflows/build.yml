@@ -37,7 +37,7 @@ jobs:
       uses: gradle/actions/setup-gradle@v4
 
     - name: Build with Gradle
-      run: ./gradlew build :quic-application:shadowJar
+      run: gradle build :quic-application:shadowJar
 
     - name: Upload Artifacts
       uses: actions/upload-artifact@v4
