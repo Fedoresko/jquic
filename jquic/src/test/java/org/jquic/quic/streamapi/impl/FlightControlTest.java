@@ -66,30 +66,30 @@ class FlightControlTest {
     @Test
     void testInitialState() {
         // Initial streams should be empty
-        assertFalse(flightControl.isStreamOpenForSend(0));
+        assertFalse(flightControl.isStreamOpenForSend(null));
     }
 
     @Test
     void testIncomingStreamCreation() {
         // Stream ID 0 (Client-Initiated Bidirectional in many QUIC implementations, 
         // but here let's see how incomingStream handles it)
-        flightControl.incomingStream(0);
-        assertTrue(flightControl.isStreamOpenForSend(0));
+        StreamState state = flightControl.incomingStream(0);
+        assertTrue(flightControl.isStreamOpenForSend(state));
     }
 
     @Test
     void testCanReceiveWithinLimits() {
-        flightControl.incomingStream(0);
+        StreamState state = flightControl.incomingStream(0);
         // dataSize 100, totalReceived 0, limit 5000
-        assertFalse(flightControl.isReceiveCapReached(0, 0,100));
+        assertFalse(flightControl.isReceiveCapReached(state, 0, 100));
         verify(streamManager, never()).sendConnectionClose(any(), anyString());
     }
 
     @Test
     void testCanReceiveExceedingMaxStreamData() {
-        flightControl.incomingStream(0);
+        StreamState state = flightControl.incomingStream(0);
         // dataSize 6000 > INITIAL_MAX_STREAM_DATA (5000)
-        boolean result = flightControl.isReceiveCapReached(0, 0, 6000);
+        boolean result = flightControl.isReceiveCapReached(state, 0, 6000);
         
         assertTrue(result, "Should be blocked by stream-level flow control");
         verify(streamManager).sendConnectionClose(eq(QuicTransportError.FLOW_CONTROL_ERROR), contains("MAX_STREAM_DATA"));
@@ -99,15 +99,15 @@ class FlightControlTest {
     void testCanReceiveExceedingMaxData() {
         // Use multiple streams to exceed INITIAL_MAX_DATA (5000) without exceeding 
         // INITIAL_MAX_STREAM_DATA (5000) on any single stream.
-        flightControl.incomingStream(0);
-        flightControl.incomingStream(4);
+        StreamState state0 = flightControl.incomingStream(0);
+        StreamState state4= flightControl.incomingStream(4);
         
         // Receive 3000 on stream 0
-        assertFalse(flightControl.isReceiveCapReached(0, 0, 3000));
-        flightControl.addReceivedBytes(0, 0, 3000, 3000);
+        assertFalse(flightControl.isReceiveCapReached(state0, 0, 3000));
+        flightControl.addReceivedBytes(state0, 0, 3000);
         
         // Receive 2100 on stream 4. Total = 3000 + 2100 = 5100 > 5000
-        boolean result = flightControl.isReceiveCapReached(4, 0, 2100);
+        boolean result = flightControl.isReceiveCapReached(state4, 0, 2100);
         
         assertTrue(result, "Should be blocked by connection-level flow control");
         verify(streamManager).sendConnectionClose(eq(QuicTransportError.FLOW_CONTROL_ERROR), contains("MAX_DATA"));
@@ -116,7 +116,7 @@ class FlightControlTest {
     @Test
     void testAddReceivedBytesAndMaxStreamDataUpdate() {
         long streamId = 4; // Arbitrary stream ID
-        flightControl.incomingStream(streamId);
+        StreamState state = flightControl.incomingStream(streamId);
         
         int dataSize = 100;
         // STREAM_BUFFER_CAPACITY is 50,000.
@@ -126,7 +126,12 @@ class FlightControlTest {
         // limit = 1000 (INITIAL_MAX_STREAM_DATA).
         // 25100 > 1000 -> TRUE.
         
-        flightControl.addReceivedBytes(streamId, 0, dataSize, 0);
+        flightControl.addReceivedBytes(state, 0, dataSize);
+        // MAX_STREAM_DATA is NO LONGER sent here according to user update.
+        verify(streamManager, never()).sendMaxStreamDataFrame(anyLong(), anyLong());
+
+        // Now free bytes to trigger update
+        flightControl.byfferedBytesFreed(streamId, 100);
         
         verify(streamManager).sendMaxStreamDataFrame(eq(streamId), eq(100L + 50000L));
     }
@@ -134,20 +139,20 @@ class FlightControlTest {
     @Test
     void testCanSendWithinLimits() {
         long streamId = 0;
-        flightControl.incomingStream(streamId);
+        StreamState state = flightControl.incomingStream(streamId);
         
         // Initial max stream data for outgoing was 5000
-        assertTrue(flightControl.canSend(streamId, 500));
+        assertTrue(flightControl.canSend(state, 500));
         verify(streamManager, never()).sendStreamDataBlockedFrame(anyLong(), anyLong());
     }
 
     @Test
     void testCanSendBlockedByStreamLimit() {
         long streamId = 0;
-        flightControl.incomingStream(streamId);
+        StreamState state = flightControl.incomingStream(streamId);
         
         // Exceed stream limit (5000)
-        boolean result = flightControl.canSend(streamId, 6000);
+        boolean result = flightControl.canSend(state, 6000);
         
         assertFalse(result);
         verify(streamManager).sendStreamDataBlockedFrame(eq(streamId), eq((long)INITIAL_MAX_STREAM_DATA));
@@ -156,29 +161,29 @@ class FlightControlTest {
     @Test
     void testBytesAckedReducesInFlight() {
         long streamId = 0;
-        flightControl.incomingStream(streamId);
+        StreamState state = flightControl.incomingStream(streamId);
         
-        flightControl.addSentBytes(streamId, 500);
+        flightControl.addSentBytes(state, 500);
         // totalInFlightBytes = 500
         
         flightControl.bytesAcked(streamId, 200L);
         // totalInFlightBytes = 300
         
         // Now we should be able to send 4500 more (300 + 4700 = 5000, which is limit)
-        assertTrue(flightControl.canSend(streamId, 4700));
+        assertTrue(flightControl.canSend(state, 4700));
         // But 4701 should fail
-        assertFalse(flightControl.canSend(streamId, 4701));
+        assertFalse(flightControl.canSend(state, 4701));
     }
 
     @Test
     void testUpdateMaxDataIfNeeded() {
         long streamId = 0;
-        flightControl.incomingStream(streamId);
+        StreamState state = flightControl.incomingStream(streamId);
         
         // Initial currentMaxData = 5000, maxDataCap = 5000.
         
         // Receive 3000 bytes. totalReceivedBytes = 3000, totalBufferedBytes = 3000.
-        flightControl.addReceivedBytes(streamId, 0, 3000, 3000);
+        flightControl.addReceivedBytes(state, 0, 3000);
         
         // currentMaxData - totalReceivedBytes = 5000 - 3000 = 2000.
         // (maxDataCap - totalBufferedBytes) / 2 = (5000 - 3000) / 2 = 1000.
@@ -202,28 +207,28 @@ class FlightControlTest {
     @Test
     void testStreamFinStateTransitions() {
         long streamId = 0; // Client-initiated bidi
-        flightControl.incomingStream(streamId);
+        StreamState state = flightControl.incomingStream(streamId);
         
         // Initial state is OPEN
-        assertTrue(flightControl.isStreamOpenForSend(streamId));
+        assertTrue(flightControl.isStreamOpenForSend(state));
 
         // Remote FIN
-        flightControl.onStreamFin(streamId, false);
+        flightControl.onStreamFin(state, false);
         // State should be HALF_CLOSED_REMOTE. 
         // In HALF_CLOSED_REMOTE, canSend() is TRUE, canReceive() is FALSE.
         // isStreamOpen checks canSend().
-        assertTrue(flightControl.isStreamOpenForSend(streamId));
+        assertTrue(flightControl.isStreamOpenForSend(state));
 
         // Local FIN
-        flightControl.onStreamFin(streamId, true);
+        flightControl.onStreamFin(state, true);
         // State should be CLOSED.
-        assertFalse(flightControl.isStreamOpenForSend(streamId));
+        assertFalse(flightControl.isStreamOpenForSend(state));
     }
 
     @Test
     void testStreamResetReceived() {
         long streamId = 0;
-        flightControl.incomingStream(streamId);
+        StreamState state = flightControl.incomingStream(streamId);
         
         flightControl.onStreamReset(streamId, 123L, 100);
         // State should be HALF_CLOSED_REMOTE (for bidirectional) or CLOSED.
@@ -231,19 +236,19 @@ class FlightControlTest {
         // BUT wait: RFC 9000 says RESET_STREAM only affects receiving.
         // Actually, user said: "If reset is received stream immediately goes to closed \ HALF_CLOSED_REMOTE state!"
         // HALF_CLOSED_REMOTE means we can still send.
-        assertTrue(flightControl.isStreamOpenForSend(streamId));
+        assertTrue(flightControl.isStreamOpenForSend(state));
     }
 
     @Test
     void testStreamStopSendingReceived() {
         long streamId = 0;
-        flightControl.incomingStream(streamId);
+        StreamState state = flightControl.incomingStream(streamId);
         
         flightControl.onStreamStopSending(streamId, 456L);
         // Should send RESET_STREAM in response
         verify(streamManager).sendResetStreamFrame(eq(streamId), eq(456L), eq(0L));
         // State should be RESET_SENT. canSend() is FALSE.
-        assertFalse(flightControl.isStreamOpenForSend(streamId));
+        assertFalse(flightControl.isStreamOpenForSend(state));
     }
 
     @Test
@@ -316,8 +321,9 @@ class FlightControlTest {
 
         // Close all 6 streams.
         for (int i = 0; i < 6; i++) {
-            flightControl.onStreamFin(i * 4, false); // Half-closed remote
-            flightControl.onStreamFin(i * 4, true);  // Closed
+            StreamState state = flightControl.incomingStream(i * 4);
+            flightControl.onStreamFin(state, false); // Half-closed remote
+            flightControl.onStreamFin(state, true);  // Closed
         }
         // Active count = 0.
 
@@ -353,14 +359,14 @@ class FlightControlTest {
     @Test
     void testReceiveAfterResetSent() {
         long streamId = 0; // Bidirectional
-        flightControl.incomingStream(streamId);
+        StreamState state = flightControl.incomingStream(streamId);
         
         // We send RESET_STREAM (e.g. via closeStream)
-        flightControl.closeStream(streamId, 123L);
+        flightControl.closeStream(state, 123L);
         
         // We should still be able to receive data from the peer on this stream
         // RFC 9000 Section 3.5: STOP_SENDING/RESET_STREAM "does not affect data being sent in the other direction"
-        boolean canRecv = flightControl.incomingStream(streamId).canReceive();
+        boolean canRecv = state.getState().canReceive();
         
         assertTrue(canRecv, "Should still be able to receive data after sending RESET_STREAM on bidirectional stream");
     }
@@ -379,7 +385,8 @@ class FlightControlTest {
 
         // Close them with remote FIN.
         for (int i = 0; i < 3; i++) {
-            flightControl.onStreamFin(i * 4 + 2, false); 
+            StreamState state = flightControl.incomingStream(i * 4 + 2);
+            flightControl.onStreamFin(state, false); 
         }
 
         // Verify count didn't decrement (it's leaked).
@@ -412,8 +419,9 @@ class FlightControlTest {
         
         // Now close them.
         for (int i = 0; i < 5; i++) {
-            flightControl.onStreamFin(i * 4, false);
-            flightControl.onStreamFin(i * 4, true);
+            StreamState state = flightControl.incomingStream(i * 4);
+            flightControl.onStreamFin(state, false);
+            flightControl.onStreamFin(state, true);
         }
         
         // Open next stream ID 20 (index 5). Trigger.
@@ -446,13 +454,13 @@ class FlightControlTest {
         flightControl = new FlightControl(serverLimits, clientLimits, streamManager);
         
         long streamId = 0;
-        flightControl.incomingStream(streamId);
+        StreamState state = flightControl.incomingStream(streamId);
         
         // Receive 600 bytes
-        flightControl.addReceivedBytes(streamId, 0, 600, 600);
+        flightControl.addReceivedBytes(state, 0, 600);
         
         // Try to "receive" the same 600 bytes again (retransmission)
-        boolean blocked = flightControl.isReceiveCapReached(streamId, 0, 600);
+        boolean blocked = flightControl.isReceiveCapReached(state, 0, 600);
         
         assertFalse(blocked, "Retransmission should not be blocked by connection flow control");
         verify(streamManager, never()).sendConnectionClose(eq(QuicTransportError.FLOW_CONTROL_ERROR), anyString());
@@ -462,10 +470,10 @@ class FlightControlTest {
     void testResetStreamUpdatesConnectionFlowControl() {
         // Initial maxData is 5000
         long streamId = 0;
-        flightControl.incomingStream(streamId);
+        StreamState state = flightControl.incomingStream(streamId);
 
         // Peer sends 2000 bytes, then resets with finalSize = 3000
-        flightControl.addReceivedBytes(streamId, 0, 2000, 2000);
+        flightControl.addReceivedBytes(state, 0, 2000);
         
         // onStreamReset should take finalSize and update connection budget
         flightControl.onStreamReset(streamId, 123L, 3000L);
@@ -473,8 +481,8 @@ class FlightControlTest {
         // Now if we try to receive 2100 bytes on ANOTHER stream, it should be blocked
         // because 3000 (stream 0) + 2100 (stream 4) = 5100 > 5000.
         long streamId2 = 4;
-        flightControl.incomingStream(streamId2);
-        boolean blocked = flightControl.isReceiveCapReached(streamId2, 0, 2100);
+        StreamState state2 = flightControl.incomingStream(streamId2);
+        boolean blocked = flightControl.isReceiveCapReached(state2, 0, 2100);
         
         assertTrue(blocked, "Connection should be blocked after RESET_STREAM with large finalSize exceeding 5000");
         verify(streamManager).sendConnectionClose(eq(QuicTransportError.FLOW_CONTROL_ERROR), contains("MAX_DATA"));
@@ -505,25 +513,25 @@ class FlightControlTest {
 
     @Test
     void testMaxDataUpdate() {
-        flightControl.incomingStream(0);
+        StreamState state = flightControl.incomingStream(0);
         
         // Initial currentMaxData = 5000 (INITIAL_MAX_DATA)
         // Initial maxStreamData = 5000 (INITIAL_MAX_STREAM_DATA)
         
         // Try to send 5001 bytes - blocked by both
-        assertFalse(flightControl.canSend(0, 5001));
+        assertFalse(flightControl.canSend(state, 5001));
         
         // Update MAX_STREAM_DATA to 10000
         flightControl.onStreamMaxData(0, 10000);
         
         // Still blocked by connection MAX_DATA (5000)
-        assertFalse(flightControl.canSend(0, 5001));
+        assertFalse(flightControl.canSend(state, 5001));
         
         // Update connection MAX_DATA to 10000
         flightControl.onMaxData(10000);
         
         // Should now be able to send 5001 bytes
-        assertTrue(flightControl.canSend(0, 5001));
+        assertTrue(flightControl.canSend(state, 5001));
     }
 
     @Test
@@ -566,8 +574,9 @@ class FlightControlTest {
         // instead of serverInitialLimits.maxStreamDataBidiRemote (5000).
         
         // These assertions reflect the current (buggy) behavior to keep tests green
-        assertTrue(fc.canSend(0, 5000), "Bug: Uses our advertised remote limit for sending");
-        assertFalse(fc.isReceiveCapReached(0, 0, 2000), "Bug: Uses peer's local limit for our receiving");
+        StreamState state = fc.incomingStream(0);
+        assertTrue(fc.canSend(state, 5000), "Bug: Uses our advertised remote limit for sending");
+        assertFalse(fc.isReceiveCapReached(state, 0, 2000), "Bug: Uses peer's local limit for our receiving");
     }
 
     @Test
@@ -582,10 +591,10 @@ class FlightControlTest {
         FlightControl fc = new FlightControl(serverLimits, clientLimits, streamManager);
 
         // Client-initiated Bidi: IDs 0, 4, 8...
-        assertEquals(StreamState.State.OPEN, fc.incomingStream(0));
-        assertEquals(StreamState.State.OPEN, fc.incomingStream(4));
+        assertEquals(StreamState.State.OPEN, fc.incomingStream(0).getState());
+        assertEquals(StreamState.State.OPEN, fc.incomingStream(4).getState());
         // 3rd Bidi (ID 8) should fail as we only allow 2.
-        assertEquals(StreamState.State.CLOSED, fc.incomingStream(8));
+        assertNull(fc.incomingStream(8));
 
         // Server-initiated Bidi: IDs 1, 5, 9...
         assertDoesNotThrow(() -> fc.openOutgoingStream(1, QuicConnectionControl.StreamType.Bidirectional));
@@ -605,16 +614,16 @@ class FlightControlTest {
         FlightControl fc = new FlightControl(serverLimits, clientLimits, streamManager);
 
         // Client-initiated Bidi: 0, 4...
-        assertEquals(StreamState.State.OPEN, fc.incomingStream(0));
-        assertEquals(StreamState.State.OPEN, fc.incomingStream(4));
+        assertEquals(StreamState.State.OPEN, fc.incomingStream(0).getState());
+        assertEquals(StreamState.State.OPEN, fc.incomingStream(4).getState());
         // 3rd Bidi (ID 8) should fail. Cap = 2 * 4 = 8.
-        assertEquals(StreamState.State.CLOSED, fc.incomingStream(8));
+        assertNull(fc.incomingStream(8));
 
         // Client-initiated Uni: 2, 6...
-        assertEquals(StreamState.State.OPEN, fc.incomingStream(2));
-        assertEquals(StreamState.State.OPEN, fc.incomingStream(6));
+        assertEquals(StreamState.State.OPEN, fc.incomingStream(2).getState());
+        assertEquals(StreamState.State.OPEN, fc.incomingStream(6).getState());
         // 3rd Uni (ID 10) should fail. Cap = 2 + 2 * 4 = 10.
-        assertEquals(StreamState.State.CLOSED, fc.incomingStream(10));
+        assertNull(fc.incomingStream(10));
 
         // Server-initiated Bidi: 1, 5...
         assertDoesNotThrow(() -> fc.openOutgoingStream(1, QuicConnectionControl.StreamType.Bidirectional));
@@ -643,12 +652,12 @@ class FlightControlTest {
         FlightControl fc = new FlightControl(serverLimits, clientLimits, streamManager);
 
         // We initiate Bidi ID 1. Limit to send is 10000 (bug).
-        fc.openOutgoingStream(1, QuicConnectionControl.StreamType.Bidirectional);
+        StreamState state1 = fc.openOutgoingStream(1, QuicConnectionControl.StreamType.Bidirectional);
         
         // 1. hit stream limit
-        fc.addSentBytes(1, 9000);
-        assertTrue(fc.canSend(1, 1000));
-        assertFalse(fc.canSend(1, 1001));
+        fc.addSentBytes(state1, 9000);
+        assertTrue(fc.canSend(state1, 1000));
+        assertFalse(fc.canSend(state1, 1001));
         verify(streamManager, atLeastOnce()).sendStreamDataBlockedFrame(eq(1L), anyLong());
 
         // 2. hit connection limit
@@ -656,12 +665,12 @@ class FlightControlTest {
         // Connection currently has 9000 in flight.
         
         // Open another outgoing Bidi stream ID 5.
-        fc.openOutgoingStream(5, QuicConnectionControl.StreamType.Bidirectional);
-        fc.addSentBytes(5, 1000); // Total in flight = 10000.
+        StreamState state5 = fc.openOutgoingStream(5, QuicConnectionControl.StreamType.Bidirectional);
+        fc.addSentBytes(state5, 1000); // Total in flight = 10000.
         
         // Stream 1 still has 1000 bytes capacity (10000 - 9000).
         // But connection is full (10000 - 10000).
-        assertFalse(fc.canSend(1, 1)); 
+        assertFalse(fc.canSend(state1, 1)); 
         verify(streamManager, atLeastOnce()).sendDataBlockedFrame(anyLong(), anyLong());
     }
 }

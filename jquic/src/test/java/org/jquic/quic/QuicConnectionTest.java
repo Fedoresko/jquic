@@ -23,9 +23,11 @@ import org.jquic.quic.buffers.RootPoolBuffer;
 import org.jquic.quic.streamapi.ConnectionStreamManager;
 import org.jquic.quic.streamapi.QuicApplicationProtocol;
 import org.jquic.quic.streamapi.QuicApplicationProtocolConnectionHandler;
+import org.jquic.quic.streamapi.QuicConnectionControl;
 import org.jquic.quic.streamapi.frames.ProtocolFrame;
 import org.jquic.quic.streamapi.frames.StreamFrameData;
 import org.jquic.quic.streamapi.impl.QuicStreamEngineImpl;
+import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -71,28 +73,28 @@ class QuicConnectionTest {
         }
 
         @Override
-        public Integer getMaxBidirectionalStreamsPerConnection() {
+        public int getMaxBidirectionalStreamsPerConnection() {
             return 0;
         }
 
         @Override
-        public Integer getMaxUnidirectionalStreamsPerConnection() {
+        public int getMaxUnidirectionalStreamsPerConnection() {
             return 0;
         }
 
         @Override
-        public Integer getMaxStreamData() {
+        public int getMaxStreamData() {
             return 0;
         }
 
         @Override
-        public Integer getMaxData() {
+        public int getMaxData() {
             return 0;
         }
 
         @Override
         public Function<Long, QuicApplicationProtocolConnectionHandler> getConnectionHandler() {
-            return null;
+            return connectionId -> null;
         }
 
         @Override
@@ -499,7 +501,7 @@ class QuicConnectionTest {
 
         // Step 2: Subsequent packet with the same key phase bit = 1 and a higher packet number.
         // It must be processed without triggering another rotation (same phase) and must
-        // succeed вЂ” proving the connection now uses the post-rotation key for decryption.
+        // succeed - proving the connection now uses the post-rotation key for decryption.
         ByteBuffer followUpPacket = createMock1RttPacketWithKeyPhase(11L, new byte[]{0x01}, true);
         connection.process1RttPacket(new RootPoolBuffer(followUpPacket, pool, false), 0);
 
@@ -543,7 +545,7 @@ class QuicConnectionTest {
         SecretKey currentKey = connection.getTlsMetadata().clientApplicationKeys.key();
         assertNotSame(prevKey, currentKey, "prev and current keys must differ after rotation");
 
-        // Step 2: Deliver a LATE packet вЂ” packet number 5 (< lastPhaseSwitchPacketNumber = 20),
+        // Step 2: Deliver a LATE packet - packet number 5 (< lastPhaseSwitchPacketNumber = 20),
         // key phase bit = 0 (old phase). RFC 9001 В§6: must be decrypted with the PREVIOUS keys.
         usedKeys.clear();
         ByteBuffer latePacket = createMock1RttPacketWithKeyPhase(5L, new byte[]{0x01}, false);

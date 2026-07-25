@@ -24,12 +24,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * Manages a pool of worker threads that process stream frames and ACKs.
  * Each worker maintains <em>two</em> independent SPSC queues:
  * <ul>
- *   <li>{@code frameQueue} вЂ” incoming stream frames (data path)</li>
- *   <li>{@code ackQueue}   вЂ” received ACKs (flow-control path)</li>
+ *   <li>{@code frameQueue} - incoming stream frames (data path)</li>
+ *   <li>{@code ackQueue}   - received ACKs (flow-control path)</li>
  * </ul>
  * Keeping the queues separate ensures that a burst of incoming frames cannot fill the
  * shared queue and prevent ACK processing. Because ACKs drive flow-control window
- * updates, they must always be drainable regardless of frame queue pressure вЂ” this is
+ * updates, they must always be drainable regardless of frame queue pressure - this is
  * the foundation for correct backpressure.
  *
  * <p>Uses consistent hashing to assign connections to workers without lookups.</p>

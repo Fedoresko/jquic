@@ -73,8 +73,10 @@ class AcceptorThread implements Runnable {
                 // Get a buffer from pool for this receive operation
                 PoolBuffer buffer = bufferPool.requestReadBuffer();
 
+                int start = buffer.buf().position();
                 SocketAddress sender = channel.receive(buffer.buf());
-                buffer.buf().flip();
+                buffer.buf().limit(buffer.buf().position());
+                buffer.buf().position(start);
 
                 if (buffer.buf().remaining() > 0) {
                     QuicPacketHeader.PacketSummary packetSummary = QuicPacketHeader.parseSummary(buffer.buf());

@@ -21,11 +21,11 @@ import java.util.function.BiConsumer;
 public class TranscryptHashSupport {
 
     private final BiConsumer<ByteBuffer, String> transcryptHashUpdater;
-    private final ChunkedOutputStreamWithAmendmentsImpl stream;
+    private final ChunkedOutputStreamWithAmendments stream;
     private String currentMessage;
     private int prevMessageOffset;
 
-    public TranscryptHashSupport(ChunkedOutputStreamWithAmendmentsImpl stream, BiConsumer<ByteBuffer, String> transcryptHashUpdater) {
+    public TranscryptHashSupport(ChunkedOutputStreamWithAmendments stream, BiConsumer<ByteBuffer, String> transcryptHashUpdater) {
         this.transcryptHashUpdater = transcryptHashUpdater;
         prevMessageOffset = stream.getPos();
         this.stream = stream;

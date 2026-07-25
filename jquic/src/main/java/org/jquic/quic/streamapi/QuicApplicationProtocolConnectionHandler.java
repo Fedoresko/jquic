@@ -22,6 +22,12 @@ import java.io.DataOutputStream;
 
 public interface QuicApplicationProtocolConnectionHandler {
     /**
+     * Called when the QUIC connection is fully established and ready for application data.
+     * @param control - connection control object to open mandatory protocol streams.
+     */
+    default void onConnectionEstablished(@NonNull QuicConnectionControl control) {}
+
+    /**
      * Called when the server allocates a new stream.
      * @param streamId - unique stream identifier (per connection)
      * @param streamType - type of the stream (unidirectional or bidirectional)

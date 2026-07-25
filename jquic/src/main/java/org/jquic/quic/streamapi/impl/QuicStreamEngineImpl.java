@@ -87,7 +87,6 @@ public class QuicStreamEngineImpl implements QuicStreamEngine {
         }
 
         // Create connection handler
-        var handler = protocol.getConnectionHandler().apply(connectionId);
 
         // Register the appropriate worker listener based on consistent hashing
         int workerIndex = getWorkerIndex(connectionId);
@@ -95,7 +94,6 @@ public class QuicStreamEngineImpl implements QuicStreamEngine {
         // Create stream manager - always server-side (isServer = true)
         StreamManager manager = new StreamManager(
                 connection,
-                handler,
                 protocol,
                 workerPool.getStreamWorker(workerIndex),
                 outputQueue

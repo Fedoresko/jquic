@@ -24,7 +24,7 @@ import java.util.Map;
  * TLS metadata associated with a QUIC connection.
  *
  * <p>Acts as the running state object across the entire TLS 1.3 key schedule
- * (RFC 8446 Section 7). It is created first вЂ” before any crypto вЂ” and then
+ * (RFC 8446 Section 7). It is created first - before any crypto - and then
  * populated gradually as the handshake progresses:
  * <ol>
  *   <li>Constructed with the Early Secret.</li>

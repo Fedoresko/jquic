@@ -24,6 +24,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.jquic.quic.QuicTransportError.FLOW_CONTROL_ERROR;
 import static org.jquic.quic.QuicTransportError.STREAM_STATE_ERROR;
@@ -38,15 +39,15 @@ class FlightControl {
 
     final int maxStreamDataCap;
     private final long maxDataCap; // Hard limit per connection
-    private long currentMaxData; // Current MAX_DATA value advertised to peer
+    private final AtomicLong currentMaxData; // Current MAX_DATA value advertised to peer
     // Stream limits
     private final int maxBidirectionalStreams;
     private final int maxUnidirectionalStreams;
     // Connection-level flow control - receiving side
     private long totalMaxOffsetsSum = 0;
-    private long totalBufferedBytes = 0; // Total bytes currently stored in all stream buffers
+    private AtomicLong totalBufferedBytes = new AtomicLong(0); // Total bytes currently stored in all stream buffers
     // Connection-level flow control - sending side (in-flight bytes)
-    private long totalInFlightBytes = 0;
+    private AtomicLong totalInFlightBytes = new AtomicLong(0);
     private final StreamManager streamManager;
 
     private long bidirectionalOutgoingStreamCap;
@@ -71,7 +72,7 @@ class FlightControl {
         clientInitialLimits = clientLimits;
         this.maxStreamDataCap = serverLimits.maxStreamDataUni;
         this.maxDataCap = serverLimits.maxData;
-        this.currentMaxData = clientInitialLimits.maxData; // Initial value
+        this.currentMaxData = new AtomicLong(clientInitialLimits.maxData); // Initial value
         this.maxBidirectionalStreams = serverLimits.maxBidi; // Our capacity same as the initial value
         this.maxUnidirectionalStreams = serverLimits.maxUni;
         this.streamManager = streamManager;
@@ -94,7 +95,7 @@ class FlightControl {
         if (state != null) {
             state.onBytesAcknowledged(ackTotalLength);
         }
-        totalInFlightBytes -= ackTotalLength;
+        totalInFlightBytes.addAndGet(-ackTotalLength);
     }
 
     /**
@@ -103,35 +104,42 @@ class FlightControl {
      * @param freedBytes - size of payload
      */
     public void byfferedBytesFreed(long streamId, long freedBytes) {
-        totalBufferedBytes -= freedBytes;
+        totalBufferedBytes.addAndGet(-freedBytes);
+        StreamState streamState = streams.get(streamId);
+        streamState.setBufferedBytes(streamState.getBufferedBytes() - freedBytes);
         updateMaxDataIfNeeded(streamId);
+        upadteStreamMaxDataIfNeeded(streamId, streamState);
+    }
+
+    private void upadteStreamMaxDataIfNeeded(long streamId, StreamState streamState) {
+        long received = streamState.getMaxOffset();
+        long limit = streamState.getRemoteMaxStreamData();
+        long freeQueue = StreamManager.STREAM_BUFFER_CAPACITY - streamState.getBufferedBytes();
+        // Send MAX_STREAM_DATA if needed
+
+        if (received + freeQueue / 2 > limit) {
+            streamManager.sendMaxStreamDataFrame(streamId, received + freeQueue);
+            streamState.setRemoteMaxStreamData(received + freeQueue);
+        }
     }
 
     public long getTotalInFlightBytes() {
-        return totalInFlightBytes;
+        return totalInFlightBytes.get();
     }
 
     /**
      * Called when a stream receives some new data, and it is written to buffer
      * @param dataSize - payload size
-     * @param bufferedBytes - already buffered to the stream
      */
-    public void addReceivedBytes(long streamId, long offset, int dataSize, long bufferedBytes) {
-        totalBufferedBytes += dataSize;
-        StreamState streamState = streams.get(streamId);
-        long delta = streamState.updateMaxOffset(offset + dataSize);
+    public void addReceivedBytes(StreamState state, long offset, int dataSize) {
+        if (state == null) return;
+
+        state.setBufferedBytes(state.getBufferedBytes() + dataSize);
+        totalBufferedBytes.addAndGet(dataSize);
+        long delta = state.updateMaxOffset(offset + dataSize);
         totalMaxOffsetsSum += delta;
 
-        long received = streamState.getMaxOffset();
-        long limit = streamState.getRemoteMaxStreamData();
-        long freeQueue = StreamManager.STREAM_BUFFER_CAPACITY - bufferedBytes;
-        // Send MAX_STREAM_DATA if needed
-        if (received + freeQueue / 2 > limit) {
-            streamManager.sendMaxStreamDataFrame(streamId, received + freeQueue);
-            streamState.setRemoteMaxStreamData(received + freeQueue);
-        }
-
-        logger.debug("Received {} bytes of offset {} for stream {}, new max offset {} new totoal max offset sum {}", dataSize, offset, streamId, streamState.getMaxOffset(), totalMaxOffsetsSum);
+        logger.debug("Received {} bytes of offset {} for stream {}, new max offset {} new totoal max offset sum {}", dataSize, offset, state.getStreamId(), state.getMaxOffset(), totalMaxOffsetsSum);
     }
 
     /**
@@ -140,16 +148,15 @@ class FlightControl {
      * @param dataSize - payload size
      * @return true if caps are satisfied
      */
-    public boolean isReceiveCapReached(long streamId, long offset, int dataSize) {
-        StreamState streamState = streams.get(streamId);
-        long maxOffset = streamState.getMaxOffset();
+    public boolean isReceiveCapReached(StreamState state, long offset, int dataSize) {
+        long maxOffset = state.getMaxOffset();
         long delta = offset + dataSize - maxOffset;
 
-        if (offset + dataSize > streamState.getRemoteMaxStreamData()) {
+        if (offset + dataSize > state.getRemoteMaxStreamData()) {
             streamManager.sendConnectionClose(FLOW_CONTROL_ERROR, "MAX_STREAM_DATA limit reached");
             return true;
         }
-        if (totalMaxOffsetsSum + delta > currentMaxData) {
+        if (totalMaxOffsetsSum + delta > currentMaxData.get()) {
             logger.debug("Connection: would exceed maxData ({} + {} > {})",
                     totalMaxOffsetsSum, delta, currentMaxData);
 
@@ -165,38 +172,40 @@ class FlightControl {
      * @param dataSize - payload size
      * @return true is caps are satisfied.
      */
-    public boolean canSend(long streamId, int dataSize) {
-        StreamState state = streams.get(streamId);
+    public boolean canSend(StreamState state, int dataSize) {
+        if (state == null) return true;
+
+        long streamId = state.getStreamId();
         if (!state.canSendBytes(dataSize)) {
-            logger.warn("Stream {} blocked by MAX_STREAM_DATA: in-flight={}, data={}, limit={}",
-                    streamId, state.getInFlightBytes(), dataSize, state.getMaxStreamData());
-            streamManager.sendStreamDataBlockedFrame(streamId, state.getMaxStreamData());
+            logger.warn("Stream {} blocked by MAX_STREAM_DATA: sent={}, data={}, limit={}",
+                    streamId, state.getSentBytes(), dataSize, state.getMaxStreamData());
+            streamManager.sendStreamDataBlockedFrame(streamId, state.getMaxStreamData()+dataSize);
             return false;
         }
         if (!canSendMoreConnectionData(dataSize)) {
-            logger.warn("Connection blocked by MAX_DATA: in-flight={}, data={}, limit={}",
-                    totalInFlightBytes, dataSize, currentMaxData);
+            logger.info("Connection blocked by MAX_DATA: in-flight={}, data={}, limit={}",
+                    totalInFlightBytes, dataSize, currentMaxData.get());
             // Send DATA_BLOCKED frame to inform peer
-            streamManager.sendDataBlockedFrame(currentMaxData, streamId);
+            streamManager.sendDataBlockedFrame(currentMaxData.get()+dataSize, streamId);
             return false;
         }
         return true;
     }
 
     public boolean canSendMoreConnectionData(int dataSize) {
-        return totalInFlightBytes + dataSize <= currentMaxData;
+        return totalInFlightBytes.get() + dataSize <= currentMaxData.get();
     }
 
     // Update current max data counts, send max_data \ max_stream_data frames when needed.
     private void updateMaxDataIfNeeded(long streamId) {
         // New MAX_DATA = hardCapacity - bufferedBytes + totalReceived
-        long newMaxData = maxDataCap - totalBufferedBytes + totalMaxOffsetsSum;
+        long newMaxData = maxDataCap - totalBufferedBytes.get() + totalMaxOffsetsSum;
 
         // Send MAX_DATA if the increase is significant
-        if (currentMaxData - totalMaxOffsetsSum < (maxDataCap - totalBufferedBytes) / 2) {
+        if (currentMaxData.get() - totalMaxOffsetsSum < (maxDataCap - totalBufferedBytes.get()) / 2) {
             logger.debug("Current maxData {} totalReceivedBytes {} maxDataCap {} totalBufferedBytes {}", currentMaxData, totalMaxOffsetsSum, maxDataCap, totalBufferedBytes);
             streamManager.sendMaxDataFrame(newMaxData, streamId);
-            currentMaxData = newMaxData;
+            currentMaxData.set(newMaxData);
         }
     }
 
@@ -204,7 +213,7 @@ class FlightControl {
      * Server requests to open a new stream
      * @param streamType - bidirectional/unidirectional
      */
-    public void openOutgoingStream(long streamId, QuicConnectionControl.StreamType streamType) throws QuicStreamException {
+    public StreamState openOutgoingStream(long streamId, QuicConnectionControl.StreamType streamType) throws QuicStreamException {
         long limit = streamType == Bidirectional ?
                 bidirectionalOutgoingStreamCap : unidirectionalOutgoingStreamCap;
 
@@ -216,14 +225,16 @@ class FlightControl {
             streamType == Bidirectional ? serverInitialLimits.maxStreamDataBidiLocal : serverInitialLimits.maxStreamDataUni,
             streamType == Bidirectional ? clientInitialLimits.maxStreamDataBidiRemote : clientInitialLimits.maxStreamDataUni);
         streams.put(streamId, state);
+        return state;
     }
 
     /**
      * Stream FIN flag was received (or send)
      * @param local - if TRUE than it was outbound FIN, inbound in another case.
      */
-    public void onStreamFin(long streamId, boolean local) {
-        StreamState streamState = streams.get(streamId);
+    public void onStreamFin(StreamState streamState, boolean local) {
+        if (streamState == null) return;
+
         StreamState.State prevState = streamState.getState();
         if (local) {
             if (streamState.getState() == StreamState.State.OPEN) {
@@ -233,16 +244,16 @@ class FlightControl {
             }
         } else {
             if (streamState.getState() == StreamState.State.OPEN) {
-                decrementActiveStreamCount(streamId);
+                decrementActiveStreamCount(streamState.getStreamId());
                 streamState.setState(StreamState.State.HALF_CLOSED_REMOTE);
             } else if (streamState.getState() == StreamState.State.HALF_CLOSED_LOCAL) {
-                decrementActiveStreamCount(streamId);
+                decrementActiveStreamCount(streamState.getStreamId());
                 streamState.setState(CLOSED);
             }
         }
 
         if (prevState != CLOSED && streamState.getState() == CLOSED) {
-            streams.remove(streamId);
+            streams.remove(streamState.getStreamId());
         }
     }
 
@@ -261,10 +272,10 @@ class FlightControl {
      * Stream data received. Either a new stream or some existing one.
      * @return state object
      */
-    public StreamState.State incomingStream(long streamId) {
+    public StreamState incomingStream(long streamId) {
         if (streamId % 2 != 0) { //not incoming stream
             streamManager.sendConnectionClose(STREAM_STATE_ERROR, "Wrong incoming stream id "+streamId);
-            return CLOSED;
+            return null;
         }
 
         QuicConnectionControl.StreamType type = StreamManager.getStreamType(streamId);
@@ -274,7 +285,7 @@ class FlightControl {
         if (streamId >= cap) {
             logger.debug("Stream limit reached for stream {}: cap is {}", streamId, cap);
             streamManager.sendConnectionClose(QuicTransportError.STREAM_LIMIT_ERROR, "MAX_STREAM_CAP");
-            return CLOSED;
+            return null;
         }
 
         boolean isNew = !streams.containsKey(streamId);
@@ -307,32 +318,32 @@ class FlightControl {
             }
         }
 
-        return state.getState();
+        return state;
     }
 
     /**
      * Stream reset frame received.
      */
-    public void onStreamReset(long streamId, long errorCode, long finalSize) {
+    public StreamState onStreamReset(long streamId, long errorCode, long finalSize) {
         StreamState state = streams.get(streamId);
         logger.warn("Received RESET_STREAM for setram {}", streamId);
         if (state == null) {
             logger.debug("Received RESET_STREAM for unknown stream {}", streamId);
-            return;
+            return null;
         }
         if (state.streamType == Unidirectional && (streamId & 0x01) != 0) {
             streamManager.sendConnectionClose(STREAM_STATE_ERROR , "Stream reset cannot be send by receiver");
-            return;
+            return null;
         }
         if (finalSize > state.getRemoteMaxStreamData()) {
             streamManager.sendConnectionClose(FLOW_CONTROL_ERROR, "Stream reset final size exceeds stream max data cap");
-            return;
+            return null;
         }
         long delta = state.updateMaxOffset(finalSize);
         totalMaxOffsetsSum += delta;
-        if (totalMaxOffsetsSum > currentMaxData) {
+        if (totalMaxOffsetsSum > currentMaxData.get()) {
             streamManager.sendConnectionClose(FLOW_CONTROL_ERROR, "Stream reset final size exceeds max data cap");
-            return;
+            return null;
         }
 
         StreamState.State prevState = state.getState();
@@ -352,6 +363,8 @@ class FlightControl {
              decrementActiveStreamCount(streamId);
              streams.remove(streamId);
         }
+
+        return state;
     }
 
     /**
@@ -392,10 +405,11 @@ class FlightControl {
      *  MAX_STREAM_DATA frame received.
      */
     public void onStreamMaxData(long streamId, long maximumData) {
+        logger.warn("Received MAX_STREAM_DATA for stream {}, new MAX {}", streamId,  maximumData);
         StreamState state = streams.get(streamId);
-        if (state != null) {
+        if (state != null && state.getMaxStreamData() < maximumData) {
             state.setMaxStreamData(maximumData);
-            logger.debug("Updated MAX_STREAM_DATA for stream {} to {}", streamId, maximumData);
+            logger.warn("Updated MAX_STREAM_DATA for stream {} to {}", streamId, maximumData);
         }
     }
 
@@ -403,9 +417,10 @@ class FlightControl {
      *  MAX_DATA frame received.
      */
     public void onMaxData(long maximumData) {
-        if (maximumData > this.currentMaxData) {
-            this.currentMaxData = maximumData;
-            logger.debug("Updated connection MAX_DATA to {}", maximumData);
+        logger.warn("Received MAX_DATA for connection, new MAX {}", maximumData);
+        if (maximumData > this.currentMaxData.get()) {
+            this.currentMaxData.set(maximumData);
+            logger.warn("Updated connection MAX_DATA to {}", maximumData);
         }
     }
 
@@ -441,19 +456,23 @@ class FlightControl {
      * Stream data sent into a stream. Used to update byte counts.
      * @param dataSize - payload size
      */
-    public void addSentBytes(long streamId, int dataSize) {
-        StreamState state = streams.get(streamId);
+    public void addSentBytes(StreamState state, int dataSize) {
+        if (state == null) return;
+
         state.addSentBytes(dataSize); // Also updates stream in-flight
-        totalInFlightBytes += dataSize;
-        logger.debug("Add sent {} bytes for stream {} now it has {} and total sent {}", dataSize, streamId, state.getSentBytes(), totalInFlightBytes);
+        totalInFlightBytes.addAndGet(dataSize);
+        logger.debug("Add sent {} bytes for stream {} now it has {} and total sent {}", dataSize, state.getStreamId(), state.getSentBytes(), totalInFlightBytes);
     }
 
     /**
      * User code has requested closing stream with an error.
      */
-    public void closeStream(long streamId, long errorCode) {
+    public void closeStream(StreamState streamState, long errorCode) {
+        if (streamState == null) return;
+
+        long streamId = streamState.getStreamId();
         QuicConnectionControl.StreamType streamType = StreamManager.getStreamType(streamId);
-        StreamState streamState = streams.get(streamId);
+
         if (streamType == Bidirectional) {
             streamState.setState(StreamState.State.RESET_SENT);
             streamManager.sendResetStreamFrame(streamId, errorCode, streamState.getSentBytes());
@@ -472,8 +491,7 @@ class FlightControl {
     /**
      * Check if stream in a state for sending data.
      */
-    public boolean isStreamOpenForSend(long streamId) {
-        StreamState streamState = streams.get(streamId);
+    public boolean isStreamOpenForSend(StreamState streamState) {
         return streamState != null && streamState.getState().canSend();
     }
 
@@ -488,5 +506,8 @@ class FlightControl {
         streams.remove(streamId);
     }
 
+    public long getBytesBuffered() {
+        return totalBufferedBytes.get();
+    }
 }
 

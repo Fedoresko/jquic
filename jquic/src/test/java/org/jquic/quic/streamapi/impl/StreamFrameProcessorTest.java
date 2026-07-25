@@ -34,7 +34,7 @@ public class StreamFrameProcessorTest {
         buffer.flip();
         buffer.position(headerMaxLen);
 
-        ByteBuffer encoded = StreamFrameProcessor.encodeDatagramFrame(buffer, true);
+        ByteBuffer encoded = StreamFrameWriter.encodeDatagramFrame(buffer, true);
 
         assertEquals(0x31, encoded.get());
         long length = QuicVarint.read(encoded);
@@ -56,7 +56,7 @@ public class StreamFrameProcessorTest {
         buffer.flip();
         buffer.position(headerMaxLen);
 
-        ByteBuffer encoded = StreamFrameProcessor.encodeDatagramFrame(buffer, false);
+        ByteBuffer encoded = StreamFrameWriter.encodeDatagramFrame(buffer, false);
 
         assertEquals(0x30, encoded.get());
         byte[] actualData = new byte[encoded.remaining()];

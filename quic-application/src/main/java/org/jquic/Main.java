@@ -24,9 +24,21 @@ import org.jquic.quic.QuicServerConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
+import java.nio.channels.FileChannel;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.time.Instant;
-import java.util.AbstractMap;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.List;
+import java.util.AbstractMap;
 
 /**
  * Main entry point for the QUIC/HTTP3 server application.
@@ -43,6 +55,29 @@ import java.util.List;
 public class Main {
 
     private static final Logger logger = LoggerFactory.getLogger(Main.class);
+    private static final Path filePath = Path.of("./bmloadw");
+    private static MemorySegment mappedSegment;
+    private static final Arena arena = Arena.ofShared();
+    private static FileChannel channel;
+    private static final Map<String, MemorySegment> resources = new ConcurrentHashMap<>();
+
+    static {
+        try {
+            channel = FileChannel.open(filePath, StandardOpenOption.READ);
+            long fileSize = channel.size();
+            mappedSegment = channel.map(
+                    FileChannel.MapMode.READ_ONLY,
+                    0,
+                    fileSize,
+                    arena
+            );
+        } catch (Exception e) {
+            try {
+                channel.close();
+            } catch (IOException _) {}
+            arena.close();
+        }
+    }
 
     public static void main(String[] args) throws Exception {
         logger.info("Starting QUIC/HTTP3 server...");
@@ -76,6 +111,9 @@ public class Main {
 
         // Keep the main thread alive
         Thread.currentThread().join();
+
+        channel.close();
+        arena.close();
     }
 
     /**
@@ -89,8 +127,67 @@ public class Main {
             case "/hello"  -> handleHello(request);
             case "/echo"   -> handleEcho(request);
             case "/bootstrap" -> handleBootstrap(request);
-            default        -> Http3Response.notFound();
+            case "/bmloadw" -> handleJpg(request);
+            default -> handleResource(request);
         };
+    }
+
+    private static Http3Response handleJpg(Http3Request request) {
+        if (request.getMethod().equals("GET")) {
+            return new Http3Response(200, "image/jpeg",
+                    mappedSegment.toArray(ValueLayout.OfByte.JAVA_BYTE), List.of());
+        } else {
+            return new Http3Response(405, "text/plain; charset=utf-8",
+                    "Method not allowed".getBytes(StandardCharsets.UTF_8), List.of());
+        }
+    }
+
+    private static Http3Response handleResource(Http3Request request) {
+        String path = request.getPath();
+        String requestMethod = request.getMethod();
+
+        if (requestMethod.equals("PUT") || requestMethod.equals("POST")) {
+            try {
+                // Ensure path doesn't escape directory or contain invalid characters for file name
+                // For simplicity in this requirement, we use path as is, but maybe sanitize it
+                String fileName = path.replace("/", "_").replace("\\", "_");
+                if (fileName.startsWith("_")) fileName = fileName.substring(1);
+                if (fileName.isEmpty()) fileName = "root";
+
+                Path resourcePath = Path.of(fileName);
+                byte[] data = request.data.getBytes(StandardCharsets.UTF_8);
+
+                java.nio.file.Files.write(resourcePath, data,
+                        StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+
+                try (FileChannel fc = FileChannel.open(resourcePath, StandardOpenOption.READ)) {
+                    MemorySegment segment = fc.map(FileChannel.MapMode.READ_ONLY, 0, fc.size(), arena);
+                    resources.put(path, segment);
+                }
+
+                logger.warn("Resource {} has been successfully uploaded {}", resourcePath, new  String(data, StandardCharsets.UTF_8));
+
+                return Http3Response.ok("Resource stored",
+                        List.of(new AbstractMap.SimpleEntry<>("access-control-allow-origin", "*")));
+            } catch (Exception e) {
+                logger.error("Failed to store resource {}", path, e);
+                return new Http3Response(500, "text/plain; charset=utf-8", "Internal Server Error".getBytes(StandardCharsets.UTF_8), List.of());
+            }
+        } else if (requestMethod.equals("GET")) {
+            MemorySegment segment = resources.get(path);
+            if (segment == null) {
+                return new Http3Response(404, "text/plain; charset=utf-8", "Not Found".getBytes(StandardCharsets.UTF_8), List.of());
+            }
+
+            logger.warn("Resource {} has been successfully retrieved", path);
+
+            return new Http3Response(200, "application/octet-stream",
+                    segment.toArray(ValueLayout.OfByte.JAVA_BYTE),
+                    List.of(new AbstractMap.SimpleEntry<>("access-control-allow-origin", "*")));
+        } else {
+            return new Http3Response(405, "text/plain; charset=utf-8", "Method Not Allowed".getBytes(StandardCharsets.UTF_8),
+                    List.of(new AbstractMap.SimpleEntry<>("Allow", "GET, POST, PUT")));
+        }
     }
 
     private static Http3Response handleBootstrap(Http3Request request) {

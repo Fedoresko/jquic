@@ -78,7 +78,7 @@ public class CryptoFrameRebuilder {
             throw new IllegalStateException("Provided ByteBuffer has fewer remaining bytes than specified length");
         }
 
-        // 2. Split the new segment into gaps вЂ” only fill ranges not already covered.
+        // 2. Split the new segment into gaps - only fill ranges not already covered.
         //
         // Strategy: walk through all existing segments that overlap [offset, endOffset)
         // and collect only the sub-intervals that are not yet present, then store each gap.
@@ -106,7 +106,7 @@ public class CryptoFrameRebuilder {
 
             int gapEnd;
             if (next == null || next.getKey() >= endOffset) {
-                // No existing segment blocks the rest вЂ” gap runs to endOffset
+                // No existing segment blocks the rest - gap runs to endOffset
                 gapEnd = endOffset;
             } else {
                 // Gap runs up to the start of the next existing segment

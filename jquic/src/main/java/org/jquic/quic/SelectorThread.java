@@ -61,7 +61,7 @@ public class SelectorThread implements Runnable {
 
     // Timeout management: PriorityQueue ordered by timeout timestamp
     private final TimeoutHeap<QuicConnection> timeoutHeap = new TimeoutHeap<>(QuicConnection.class);
-    private long lastTimeoutCheck = System.currentTimeMillis();
+    private long lastTimeoutCheck = System.nanoTime() / 1_000_000;
     private static final long TIMEOUT_CHECK_INTERVAL_MS = 1000; // Check every second
     private int idleCounter = 0;
 
@@ -136,13 +136,15 @@ public class SelectorThread implements Runnable {
 
                 boolean hadWork = false;
 
+                int start = buffer.buf().position();
                 // Process packets from socket
                 SocketAddress sender = (idleCounter > 100) ?
                         channel.receiveBlocking(buffer.buf(), metricsHolder) :
                         channel.receive(buffer.buf(), metricsHolder);
 
                 if (sender != null) {
-                    buffer.buf().flip();
+                    buffer.buf().limit(buffer.buf().position());
+                    buffer.buf().position(start);
                     processPacket(now, buffer, sender, "socket", metricsHolder[0]);
                     hadWork = true;
                     buffer = getBufferPool().requestReadBuffer();
@@ -484,7 +486,7 @@ public class SelectorThread implements Runnable {
             boolean isLongHeader = (flags & 0x80) != 0;
 
             if (!isLongHeader) {
-                // Short header has no length field вЂ” consume the rest of the datagram
+                // Short header has no length field - consume the rest of the datagram
                 datagram.position(datagram.limit());
                 return;
             }
@@ -499,12 +501,12 @@ public class SelectorThread implements Runnable {
             // For INITIAL packets there is also a token; for RETRY/ZERO_RTT there is none,
             // but we check the type just in case.
             int typeField = (flags & 0x30) >> 4;
-            if (typeField == 0x00) { // INITIAL вЂ” has a token length varint
+            if (typeField == 0x00) { // INITIAL - has a token length varint
                 long tokenLen = QuicVarint.read(datagram);
                 datagram.position((int) (datagram.position() + tokenLen));
             }
 
-            // Payload length (varint) вЂ” includes the packet-number bytes and ciphertext
+            // Payload length (varint) - includes the packet-number bytes and ciphertext
             long payloadLength = QuicVarint.read(datagram);
             datagram.position((int) (datagram.position() + payloadLength));
 

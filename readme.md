@@ -16,6 +16,7 @@
     *   **TCP Prague**: Designed for L4S (Low Latency, Low Loss, Scalable throughput) using ECN.
     *   **Copa**: Delay-based congestion control for practical internet use.
     *   **TCP Cubic**: RFC 8312 compliant standard congestion control.
+    *   **Whatever you want**: jQuic delegates congestion control to the application level leaving space for streamId based packet prioritization or any other strategies.
 *   **Linux-Specific Optimizations**:
     *   **eBPF Routing**: Native eBPF-based socket routing for efficient multi-socket packet distribution.
     *   **Native ECN (Explicit Congestion Notification)**: Direct support for ECN bits via native C integration for L4S compatibility.

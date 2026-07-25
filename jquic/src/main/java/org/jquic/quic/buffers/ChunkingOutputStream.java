@@ -1,18 +1,3 @@
-/*
- * Copyright 2026 Fedor Malyshev
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
 package org.jquic.quic.buffers;
 
 import org.jctools.queues.SpscLinkedQueue;
@@ -21,21 +6,15 @@ import org.jspecify.annotations.NonNull;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
-import java.util.Iterator;
-import java.util.Map;
-import java.util.NoSuchElementException;
-import java.util.TreeMap;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.*;
 
 /**
- * This class supports writing in a zero-copy buffer with splitting data in chunks
- * It accepts a ByteBuffer large enough to contain all final data
- * It calls callback, that could wrap chunk data with some headers\trailers, and adjust buffer position to the start of the next chunk.
- * It supports goBack to update reserved placeholder with actual data\header.
+ * Alternative implementation of ChunkingOutputStream that does not use wrap-around.
+ * It allocates a new buffer from the pool when the current one is full.
  */
 public class ChunkingOutputStream extends OutputStream {
     private ByteBuffer buf;
-    private PoolBuffer pbuf;
+    private volatile PoolBuffer pbuf;
     private final BufferPool pool;
     private final int chunkSize;
     private ChunkedOutputStreamWithAmendments.ChunkWrapper chunkWrapper;
@@ -44,7 +23,7 @@ public class ChunkingOutputStream extends OutputStream {
     private final TreeMap<Integer, Integer> gaps = new TreeMap<>();
     private final SpscLinkedQueue<PoolBuffer> wrappedChunks = new SpscLinkedQueue<>();
     private final int capacity;
-    private final long trailingPadding;
+    private final int trailingPadding;
     private ChunkedOutputStreamWithAmendments.ChunkConsumer chunkConsumer;
 
     private boolean historyMode = false;
@@ -53,7 +32,7 @@ public class ChunkingOutputStream extends OutputStream {
     private int firstChunkStart;
     private int lastBufferLogicalStart;
     private int position;
-    private AtomicInteger lastUnreadOffset = new AtomicInteger(Integer.MAX_VALUE);
+    private boolean isClosed = false;
 
     /**
      * Create Stream
@@ -72,7 +51,7 @@ public class ChunkingOutputStream extends OutputStream {
         capacity = buf.limit();
         lastBufferLogicalStart = 0;
         this.trailingPadding = trailingPadding;
-        if (capacity < chunkSize) {
+        if (buf.remaining() < chunkSize + trailingPadding) {
             throw new IllegalArgumentException("Chunk size is more than buffer size");
         }
     }
@@ -97,12 +76,8 @@ public class ChunkingOutputStream extends OutputStream {
         }
         position++;
 
-        if (buf.remaining() == 0) {
-            buf.position(0);
-        }
-
-        if (position - chunkStart == chunkSize || position >= unreadDataStart()) {
-            triggerCallback(false);
+        if (position - chunkStart == chunkSize || atTheBufferEdge()) {
+            triggerCallback();
         }
     }
 
@@ -110,10 +85,10 @@ public class ChunkingOutputStream extends OutputStream {
     public void write(byte @NonNull [] b, int off, int len) throws IOException {
         int bytesWritten = 0;
         while (bytesWritten < len) {
-            int spaceLim = buf.remaining();
+            int spaceLim = Math.max(0, buf.remaining() - trailingPadding);
 
-            int spaceLeft = (int)Math.min(unreadDataStart() - position, chunkSize - (position - chunkStart));
-            int bytesToCopy = Math.min(Math.min(spaceLeft, len - bytesWritten), spaceLim);
+            int spaceLeft = Math.min(chunkSize - (position - chunkStart), spaceLim);
+            int bytesToCopy = Math.min(spaceLeft, len - bytesWritten);
 
             buf.put(b, off + bytesWritten, bytesToCopy);
             bytesWritten += bytesToCopy;
@@ -122,28 +97,126 @@ public class ChunkingOutputStream extends OutputStream {
                 logicalOffset += bytesToCopy;
             }
 
-            if (position - chunkStart == chunkSize || position >= unreadDataStart()) {
-                triggerCallback(false);
-            }
-
-            if (buf.remaining() == 0) {
-                buf.position(0);
+            if (position - chunkStart == chunkSize || atTheBufferEdge()) {
+                triggerCallback();
             }
         }
+    }
+
+    private void triggerCallback() throws IOException {
+        if (historyMode) {
+            Integer gapEnd = gaps.get(position);
+            if (gapEnd == null) throw new IllegalStateException("Unexpected in history mode at position " + position);
+            chunkStart = gapEnd;
+            position = gapEnd;
+            buf.position(position);
+        } else {
+            int start = chunkStart;
+            int end = position;
+            int chunkWrappedLen = end - start;
+            int positionBeforeGap = position;
+            ByteBuffer wrap = null;
+
+            if (chunkWrappedLen > 0) {
+                // Invoke user interception code - it must set adjust buffer position and limit back for continuation.
+                ByteBuffer chunk = buf.duplicate().position(chunkStart).limit(position);
+                wrap = (chunkWrapper != null) ?
+                        chunkWrapper.wrapBuffer(chunk, logicalOffset - (position - chunkStart), isClosed())
+                        : chunk;
+
+                start = wrap.position();
+                end = wrap.limit();
+                chunkWrappedLen = wrap.remaining();
+            }
+
+            if (chunkWrappedLen > 0) {
+                if (pbuf != null) {
+                    PoolBuffer borrow = pbuf.borrow();
+                    borrow.buf().position(start).limit(end);
+                    if (chunkConsumer != null) {
+                        chunkConsumer.accept(borrow);
+                    } else {
+                        wrappedChunks.offer(borrow);
+                    }
+                }
+            }
+
+            int advance = (chunkWrappedLen > chunkSize ? chunkWrappedLen - chunkSize : 0) + trailingPadding;
+
+            if (buf.limit() - position <= advance + trailingPadding) {
+                if (pbuf != null) {
+                    pbuf.release();
+                    pbuf = pool.requestWriteBuffer();
+
+                    buf = pbuf.buf();
+                    position = buf.position();
+                    if (buf.limit() < chunkSize + trailingPadding) {
+                        throw new IllegalArgumentException("Chunk size is more than buffer size");
+                    }
+                    positionBeforeGap = position;
+                    lastBufferLogicalStart = logicalOffset;
+                    gaps.clear();
+                }
+            } else {
+                position += advance;
+            }
+
+            chunkStart = position;
+            buf.position(position);
+            if (positionBeforeGap != chunkStart) {
+                gaps.put(positionBeforeGap, chunkStart);
+            }
+        }
+    }
+
+    @Override
+    public void close() throws IOException {
+        if(!isClosed) {
+            isClosed = true;
+            flush();
+            if (pbuf != null) {
+                pbuf.release();
+                pbuf = null;
+            }
+        }
+    }
+
+    // Need to wrap the last data that has not reached chunkSize yet.
+    public void flush() throws IOException {
+        toPresent();
+        if (position > chunkStart) {
+            triggerCallback();
+        }
+    }
+
+    public PoolBuffer pollReadyChunk() {
+        return wrappedChunks.poll();
+    }
+
+    public PoolBuffer peekReadyChunk() {
+        return wrappedChunks.peek();
+    }
+
+    private boolean isClosed() {
+        return isClosed;
+    }
+
+    private boolean atTheBufferEdge() {
+        return buf.remaining() <= trailingPadding;
     }
 
     /**
      * Go to some previously written position to fill-in placeholder.
      * History mode if ON.
      *
-     * @param position - position in underlying buffer.
+     * @param logicalPos - position in underlying buffer.
      */
-    public void goBack(int position) {
-        if (position < lastBufferLogicalStart || position >= logicalOffset) {
-            throw new IllegalArgumentException("Invalid position: " + position + ". Current logical offset is " + logicalOffset + " Last buffer logical start is: "+ lastBufferLogicalStart);
+    public void goBack(int logicalPos) {
+        if (logicalPos < lastBufferLogicalStart || logicalPos >= logicalOffset) {
+            throw new IllegalArgumentException("Invalid position: " + logicalPos + ". Current logical offset is " + logicalOffset + " Last buffer logical start is: "+ lastBufferLogicalStart);
         }
         historyMode = true;
-        LogicalPosition pos = getLogicalPosition(position);
+        LogicalPosition pos = getLogicalPosition(logicalPos);
         if (this.position - (pos.chunkStart() + pos.rpos()) > capacity) {
             throw new IllegalArgumentException("Can't go too way back");
         }
@@ -151,7 +224,11 @@ public class ChunkingOutputStream extends OutputStream {
         this.chunkStart = pos.chunkStart();
         lastPosition = this.position;
         this.position = pos.chunkStart() + pos.rpos();
-        buf.position(this.position % capacity);
+        buf.position(this.position);
+    }
+
+
+    private record LogicalPosition(int rpos, Integer chunkStart) {
     }
 
     private @NonNull LogicalPosition getLogicalPosition(int position) {
@@ -165,10 +242,7 @@ public class ChunkingOutputStream extends OutputStream {
         }
         return new LogicalPosition(rpos, chunkStart);
     }
-
-    private record LogicalPosition(int rpos, Integer chunkStart) {
-    }
-
+    
     /**
      * @return - current logical offset - number of bytes written.
      */
@@ -183,136 +257,9 @@ public class ChunkingOutputStream extends OutputStream {
         if (historyMode) {
             historyMode = false;
             position = lastPosition;
-            buf.position(lastPosition % capacity);
+            buf.position(lastPosition );
             chunkStart = lastChunkStart;
         }
-    }
-
-    private void triggerCallback(boolean flush) throws IOException {
-        if (historyMode) {
-            Integer gapEnd = gaps.get(position);
-            if (gapEnd == null) throw new IllegalStateException("Unexpected in history mode at position " + position);
-            chunkStart = gapEnd;
-            position = gapEnd;
-            buf.position(position % capacity);
-        } else {
-            int start = chunkStart;
-            int end = position;
-            int chunkWrappedLen = end - start;
-            int positionBeforeGap = position;
-            ByteBuffer wrap = null;
-
-            if (chunkWrappedLen > 0) {
-                // Invoke user interception code - it must set adjust buffer position and limit back for continuation.
-                int newLimit = positionBeforeGap % capacity;
-                ByteBuffer chunk = buf.duplicate().position(chunkStart % capacity).limit(newLimit == 0 ? capacity : newLimit);
-                wrap = (chunkWrapper != null) ?
-                        chunkWrapper.wrapBuffer(chunk, logicalOffset - (positionBeforeGap - chunkStart) - lastBufferLogicalStart, flush)
-                        : chunk;
-
-                start = chunkStart + (wrap.position() - (chunkStart % capacity));
-                end = chunkStart + (wrap.limit() - (chunkStart % capacity));
-                chunkWrappedLen = wrap.remaining();
-            }
-
-
-            if (chunkWrappedLen > 0) {
-                if (chunkStart + chunkWrappedLen > unreadDataStart()) {
-                    throw new IllegalStateException("Buffer is full");
-                }
-                PoolBuffer pchunk = pbuf.borrow();
-                pchunk.buf().position(start % capacity).limit(end % capacity);
-
-                if (chunkConsumer != null) {
-                    chunkConsumer.accept(pchunk);
-                    int exch = lastUnreadOffset.compareAndExchange(Integer.MAX_VALUE, chunkWrappedLen);
-                    if (exch != Integer.MAX_VALUE) {
-                        lastUnreadOffset.addAndGet(chunkWrappedLen);
-                    }
-                } else {
-                    wrappedChunks.offer(pchunk);
-                }
-
-                lastUnreadOffset.compareAndSet(Integer.MAX_VALUE, chunkStart);
-            }
-
-            if (chunkStart + chunkWrappedLen >= unreadDataStart()) {
-                if (pbuf != null) {
-                    pbuf.release();
-                }
-                lastBufferLogicalStart = logicalOffset;
-                pbuf = pool.requestWriteBuffer();
-                buf = pbuf.buf();
-                chunkStart = buf.position();
-                position = buf.position();
-                firstChunkStart = chunkStart;
-                lastUnreadOffset.set(Integer.MAX_VALUE);
-                gaps.clear();
-                System.out.println("Requested new Buffer");
-            } else {
-
-                int advance = chunkWrappedLen > chunkSize ? chunkWrappedLen - chunkSize : 0;
-
-                if (buf.remaining() < Math.max(chunkWrappedLen, chunkSize)) {
-                    int headerSize = Math.max(0, chunkStart - start);
-                    advance = buf.remaining() + headerSize;
-                }
-
-                position += advance;
-
-                chunkStart = position;
-                buf.position(position % capacity);
-                buf.limit(capacity);
-                gaps.put(positionBeforeGap, chunkStart);
-            }
-        }
-    }
-
-    private long unreadDataStart() {
-        return (long)lastUnreadOffset.get() + capacity - trailingPadding;
-    }
-
-    @Override
-    public void close() throws IOException {
-        super.close();
-        if (pbuf != null) {
-            pbuf.release();
-            pbuf = null;
-        }
-    }
-
-    // Need to wrap the last data that has not reached chunkSize yet.
-    public void flush() throws IOException {
-        toPresent();
-        if (position > chunkStart) {
-            triggerCallback(true);
-        }
-    }
-
-    public PoolBuffer pollReadyChunk() {
-        PoolBuffer chunk = wrappedChunks.poll();
-        if (chunk != null) {
-            int exch = lastUnreadOffset.compareAndExchange(Integer.MAX_VALUE, chunk.buf().remaining());
-            if (exch != Integer.MAX_VALUE) {
-                lastUnreadOffset.addAndGet(chunk.buf().remaining());
-            }
-        } else {
-            if (pbuf != null) {
-                pbuf.release();
-                pbuf = null;
-            }
-        }
-        return chunk;
-    }
-
-
-    public PoolBuffer peekReadyChunk() {
-        return wrappedChunks.peek();
-    }
-
-    public int bufferedBytes() {
-        int luo = lastUnreadOffset.get();
-        return lastBufferLogicalStart + chunkStart - (luo == Integer.MAX_VALUE ? 0 : luo);
     }
 
     public Iterator<ByteBuffer> readyContentFrom(int pos) {
@@ -322,9 +269,8 @@ public class ChunkingOutputStream extends OutputStream {
         int curPos = lpos.chunkStart() + lpos.rpos();
         if (position - curPos > capacity) throw new IllegalArgumentException("Start position is too early away.");
 
-        return new Iterator<ByteBuffer>() {
+        return new Iterator<>() {
             int curPos = lpos.chunkStart() + lpos.rpos();
-
 
             @Override
             public boolean hasNext() {
@@ -339,12 +285,12 @@ public class ChunkingOutputStream extends OutputStream {
 
                 ByteBuffer res;
                 if (nextGap == null) {
-                    int newLimit = position % capacity;
-                    res = buf.duplicate().position(curPos % capacity).limit(newLimit == 0 && position > curPos ? capacity : newLimit);
+                    int newLimit = position;
+                    res = buf.duplicate().position(curPos).limit(newLimit == 0 && position > curPos ? capacity : newLimit);
                     curPos = position;
                 } else {
-                    int newLimit = nextGap.getKey() % capacity;
-                    res = buf.duplicate().position(curPos % capacity).limit(newLimit == 0 && nextGap.getKey() > curPos ? capacity : newLimit);
+                    int newLimit = nextGap.getKey();
+                    res = buf.duplicate().position(curPos).limit(newLimit == 0 && nextGap.getKey() > curPos ? capacity : newLimit);
                     curPos = nextGap.getValue();
                 }
                 return res;

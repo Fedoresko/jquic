@@ -39,6 +39,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -47,7 +48,7 @@ import static org.mockito.Mockito.when;
  * These tests verify that GCM authentication tags are properly verified,
  * that transcript hashes are accumulated correctly, and that the full
  * Initial в†’ Handshake в†’ 1-RTT sequence works higher-to-higher.
- * NO MOCKING of QuicCrypto вЂ” all encryption/decryption is real.
+ * NO MOCKING of QuicCrypto - all encryption/decryption is real.
  */
 class QuicConnectionCryptoIntegrationTest {
     static {
@@ -85,7 +86,7 @@ class QuicConnectionCryptoIntegrationTest {
                     new org.jquic.quic.streamapi.impl.QuicStreamEngineImpl(1);
                 QuicApplicationProtocol protocol = mock(QuicApplicationProtocol.class);
                 when(protocol.getProtocolName()).thenReturn("h3");
-                when(protocol.getConnectionHandler()).thenReturn(cid -> mock(org.jquic.quic.streamapi.QuicApplicationProtocolConnectionHandler.class));
+                when(protocol.getConnectionHandler()).thenReturn(connectionId -> mock(org.jquic.quic.streamapi.QuicApplicationProtocolConnectionHandler.class));
                 
                 org.jquic.quic.streamapi.CongestionControl cc = mock(org.jquic.quic.streamapi.CongestionControl.class);
                 when(cc.timeWindowMs()).thenReturn(100);
@@ -123,6 +124,7 @@ class QuicConnectionCryptoIntegrationTest {
                 destinationCid,
             TEST_CID_BUF,
             0,
+            0,
             cryptoFrame,
             clientKeys
         );
@@ -159,6 +161,7 @@ class QuicConnectionCryptoIntegrationTest {
         PoolBuffer initialPacket = QuicPacketBuilder.buildInitialPacket(pool,
                 destinationCid,
             TEST_CID_BUF,
+            0,
             0,
             framebuffer,
             clientKeys
@@ -222,7 +225,7 @@ class QuicConnectionCryptoIntegrationTest {
         while (plaintext.hasRemaining()) plaintext.put((byte) 0x00);
         plaintext.flip();
         PoolBuffer packet = QuicPacketBuilder.build1RttPacket(pool,
-                destinationCidBytes(TEST_CONNECTION_ID), 5, plaintext,
+                destinationCidBytes(TEST_CONNECTION_ID), 5, 0, plaintext,
             meta1Rtt.clientApplicationKeys, meta1Rtt.clientApplicationHeaderProtection, (byte) 0);
 
         connection.process1RttPacket(packet, 0);
@@ -273,7 +276,7 @@ class QuicConnectionCryptoIntegrationTest {
 
         PoolBuffer packet = QuicPacketBuilder.build1RttPacket(pool,
                 destinationCidBytes(TEST_CONNECTION_ID),
-                5, plaintext, meta1Rtt.clientApplicationKeys, meta1Rtt.clientApplicationHeaderProtection, (byte) 0);
+                5, 0, plaintext, meta1Rtt.clientApplicationKeys, meta1Rtt.clientApplicationHeaderProtection, (byte) 0);
 
         // Tamper with the last byte of the GCM authentication tag
         ByteBuffer tamperedBuf = packet.buf();
@@ -299,7 +302,7 @@ class QuicConnectionCryptoIntegrationTest {
         
         assertEquals(QuicConnection.State.INITIAL, connection.getState());
 
-        // в”Ђв”Ђ Phase 1: Initial packet (ClientHello) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+        // -- Phase 1: Initial packet (ClientHello) -----------------------------
         QuicCrypto.PacketProtectionKeysWithHP[] initKeys = QuicCrypto.deriveInitialKeys(TEST_CID);
         ByteBuffer clientHello = buildMinimalClientHello();
         
@@ -311,7 +314,7 @@ class QuicConnectionCryptoIntegrationTest {
         cryptoFrame.flip();
 
         PoolBuffer initialPacket = QuicPacketBuilder.buildInitialPacket(pool,
-                TEST_CID, TEST_CID_BUF, 0, cryptoFrame, initKeys[0]);
+                TEST_CID, TEST_CID_BUF, 0, 0, cryptoFrame, initKeys[0]);
 
         connection.processInitialAndRespond(initialPacket);
 
@@ -326,7 +329,7 @@ class QuicConnectionCryptoIntegrationTest {
         ConnectionMetadata meta = connection.getTlsMetadata();
         assertNotNull(meta.clientHandshakeTrafficSecret, "Handshake secrets must be derived");
 
-        // в”Ђв”Ђ Phase 2: Handshake packet (client Finished) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+        // -- Phase 2: Handshake packet (client Finished) -----------------------
         // The server flight (EE, Cert, CV, server Finished) has already been added 
         // to the transcript by QuicConnection during sendHandshakePacket().
         
@@ -344,7 +347,7 @@ class QuicConnectionCryptoIntegrationTest {
         finishedCryptoFrame.flip();
 
         PoolBuffer handshakePacket = QuicPacketBuilder.buildHandshakePacket(pool,
-                TEST_CID, TEST_CID_BUF, 0, finishedCryptoFrame, meta.clientHandshakeKeys);
+                TEST_CID, TEST_CID_BUF, 0, 0, finishedCryptoFrame, meta.clientHandshakeKeys);
 
         connection.processHandshakePacket(handshakePacket);
 
@@ -352,7 +355,7 @@ class QuicConnectionCryptoIntegrationTest {
             "Server state should be ESTABLISHED after client Finished");
         assertNotNull(meta.clientApplicationKeys, "1-RTT keys must be derived");
 
-        // в”Ђв”Ђ Phase 3: 1-RTT packet (PING) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+        // -- Phase 3: 1-RTT packet (PING) --------------------------------------
         ByteBuffer pingFrame = ByteBuffer.allocate(10);
         pingFrame.put((byte) 0x01); // PING
         // Add padding to ensure packet is long enough for HP sampling (>= 20 bytes ciphertext)
@@ -361,7 +364,7 @@ class QuicConnectionCryptoIntegrationTest {
         pingFrame.flip();
 
         PoolBuffer rttPacket = QuicPacketBuilder.build1RttPacket(pool,
-                TEST_CID, 1, pingFrame, meta.clientApplicationKeys, meta.clientApplicationHeaderProtection, (byte) 0);
+                TEST_CID, 1, 0, pingFrame, meta.clientApplicationKeys, meta.clientApplicationHeaderProtection, (byte) 0);
 
         connection.process1RttPacket(rttPacket, 0);
         List<ByteBuffer> rttResponses = getOutboundPackets(connection);
@@ -391,7 +394,7 @@ class QuicConnectionCryptoIntegrationTest {
 
         // Create truncated packet (header only, no payload + tag)
         ByteBuffer truncatedPacket = ByteBuffer.allocate(100);
-        truncatedPacket.put((byte) 0xC0); // Long header, Initial
+        truncatedPacket.put((byte) (0x80 | 0x40 | 0x00 | 0)); // Long header, Initial, pnLen=1
         truncatedPacket.putInt(0x00000001); // Version
         truncatedPacket.put((byte) 8);
         truncatedPacket.putLong(TEST_CONNECTION_ID);

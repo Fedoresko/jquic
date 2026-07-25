@@ -67,11 +67,11 @@ public class QuicPacketBuilder {
      * @throws QuicCrypto.CryptoException if encryption fails
      */
     public static PoolBuffer buildInitialPacket(BufferPool bufferPool, byte [] destinationCid, ByteBuffer sourceCid,
-                                                long packetNumber, ByteBuffer packetBuffer, QuicCrypto.PacketProtectionKeysWithHP keys) throws QuicCrypto.CryptoException {
+                                                long packetNumber, long largestAcked, ByteBuffer packetBuffer, QuicCrypto.PacketProtectionKeysWithHP keys) throws QuicCrypto.CryptoException {
         int encryptedPayloadSize = packetBuffer.remaining() + GCM_TAG_LENGTH;
-        int pnLen = encodedPnLength(packetNumber);
+        int pnLen = QuicPacketHeader.calculatePnLength(packetNumber, largestAcked);
 
-        QuicPacketHeader header = new QuicPacketHeader(new QuicPacketHeader.PacketNumber(pnLen, packetNumber, (byte) 0),
+        QuicPacketHeader header = new QuicPacketHeader(new QuicPacketHeader.PacketNumber(pnLen, packetNumber, (byte) 0x10),
                 QUIC_VERSION_1, destinationCid, sourceCid.array(), QuicPacketHeader.PacketType.INITIAL,
                 new byte[0], encryptedPayloadSize + pnLen, (byte)0
         );
@@ -106,12 +106,12 @@ public class QuicPacketBuilder {
      * @throws QuicCrypto.CryptoException if encryption fails
      */
     public static PoolBuffer buildHandshakePacket(BufferPool bufferPool, byte [] destinationCid, ByteBuffer sourceCid,
-                                                  long packetNumber, ByteBuffer payload, QuicCrypto.PacketProtectionKeysWithHP keys)
+                                                  long packetNumber, long largestAcked, ByteBuffer payload, QuicCrypto.PacketProtectionKeysWithHP keys)
             throws QuicCrypto.CryptoException {
         int encryptedPayloadSize = payload.remaining() + GCM_TAG_LENGTH; // + GCM tag
-        int pnLen = encodedPnLength(packetNumber);
+        int pnLen = QuicPacketHeader.calculatePnLength(packetNumber, largestAcked);
 
-        QuicPacketHeader header = new QuicPacketHeader(new QuicPacketHeader.PacketNumber(pnLen, packetNumber, (byte) 0),
+        QuicPacketHeader header = new QuicPacketHeader(new QuicPacketHeader.PacketNumber(pnLen, packetNumber, (byte) 0x10),
             QUIC_VERSION_1, destinationCid, sourceCid.array(),
             QuicPacketHeader.PacketType.HANDSHAKE, new byte[0], encryptedPayloadSize + pnLen, (byte)0 );
 
@@ -125,16 +125,21 @@ public class QuicPacketBuilder {
      * 
      * @param destinationCid Destination connection ID
      * @param packetNumber Packet number
+     * @param largestAcked Largest acknowledged packet number
      * @param plaintext Plaintext payload (QUIC frames) to encrypt
      * @param keys Security keys (RFC 9001 Section 5.4)
      * @return Complete 1-RTT packet ready to send
      * @throws QuicCrypto.CryptoException if encryption fails
      */
-    public static PoolBuffer build1RttPacket(BufferPool bufferPool, byte [] destinationCid, long packetNumber,
+    public static PoolBuffer build1RttPacket(BufferPool bufferPool, byte [] destinationCid, long packetNumber, long largestAcked,
                                              ByteBuffer plaintext, QuicCrypto.PacketProtectionKeys keys, Cipher hp_key, byte keyPhase) throws QuicCrypto.CryptoException {
-        int pnLen = encodedPnLength(packetNumber);
+        int pnLen = QuicPacketHeader.calculatePnLength(packetNumber, largestAcked);
 
-        QuicPacketHeader header = new QuicPacketHeader(new QuicPacketHeader.PacketNumber(pnLen, packetNumber, (byte) 0),
+        if (plaintext.hasRemaining() && plaintext.duplicate().get() == 0) {
+            log.error("!!!!!!Very Strange packet");
+        }
+
+        QuicPacketHeader header = new QuicPacketHeader(new QuicPacketHeader.PacketNumber(pnLen, packetNumber, (byte) (0x40 | (keyPhase << 2))),
                 QUIC_VERSION_1, destinationCid, null,
                 QuicPacketHeader.PacketType.ONE_RTT, null, -1, keyPhase);
 
@@ -198,17 +203,6 @@ public class QuicPacketBuilder {
         }
     }
 
-    /**
-     * Returns the minimum number of bytes (1вЂ“4) required to encode {@code packetNumber}
-     * as a QUIC packet number field (RFC 9000 В§17.1).
-     */
-    private static int encodedPnLength(long packetNumber) {
-        if (packetNumber <= 0xFFL)       return 1;
-        if (packetNumber <= 0xFFFFL)     return 2;
-        if (packetNumber <= 0xFFFFFFL)   return 3;
-        return 4;
-    }
-
     static PoolBuffer writeStatelessResetFrame(BufferPool bufferPool, long connectionId, int incomingPacketSize, byte[] statelessResetToken) {
         // RFC 9000: Stateless Reset should be smaller than incoming packet
         // to avoid amplification attacks, but at least 21 bytes
@@ -216,7 +210,10 @@ public class QuicPacketBuilder {
                 Math.min(incomingPacketSize - 1, 1200));
 
         PoolBuffer buffer = bufferPool.requestWriteBuffer();
+
         ByteBuffer frameBuffer = buffer.buf();
+
+        int start = buffer.buf().position();
 
         // First byte must have fixed bit (0x40) set to appear as valid short header
         byte firstByte = (byte) (0x40 | (SECURE_RANDOM.nextInt() & 0x3F));
@@ -237,7 +234,7 @@ public class QuicPacketBuilder {
         frameBuffer.put(ZERO_BLOCK, 0, resetSize - frameBuffer.position());
 
         frameBuffer.limit(frameBuffer.position());
-        frameBuffer.flip();
+        frameBuffer.position(start);
         return buffer;
     }
 }

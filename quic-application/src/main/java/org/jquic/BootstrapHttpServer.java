@@ -69,7 +69,6 @@ public class BootstrapHttpServer {
 
         server.createContext("/bootstrap", new RootHandler());
         server.createContext("/hello", new BadHandler());
-        server.createContext("/resource", new ResourceHandler());
 
     }
 

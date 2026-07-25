@@ -28,7 +28,7 @@ public class Http3Response {
     private final byte[] body;
     private final List<Map.Entry<String, String>> headers;
 
-    private Http3Response(int statusCode, String contentType, byte[] body, List<Map.Entry<String, String>> headers) {
+    public Http3Response(int statusCode, String contentType, byte[] body, List<Map.Entry<String, String>> headers) {
         this.statusCode = statusCode;
         this.contentType = contentType;
         this.body = body;

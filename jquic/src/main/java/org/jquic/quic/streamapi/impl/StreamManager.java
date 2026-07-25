@@ -15,16 +15,12 @@
  */
 package org.jquic.quic.streamapi.impl;
 
-import org.jquic.quic.PacketNumberSpace;
-import org.jquic.quic.QuicConnection;
-import org.jquic.quic.QuicTransportError;
-import org.jquic.quic.QuicVarint;
+import org.jctools.queues.MessagePassingQueue;
+import org.jquic.quic.*;
 import org.jquic.quic.buffers.ChunkedOutputStreamWithAmendments;
-import org.jquic.quic.buffers.ChunkedOutputStreamWithAmendmentsImpl;
 import org.jquic.quic.buffers.PoolBuffer;
 import org.jquic.quic.streamapi.*;
 import org.jquic.quic.streamapi.frames.*;
-import org.jctools.queues.MessagePassingQueue;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
@@ -36,9 +32,11 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.LockSupport;
 
 import static org.jquic.quic.QuicCrypto.GCM_TAG_LENGTH;
-import static org.jquic.quic.streamapi.impl.StreamFrameProcessor.FRAME_TYPE_RESET_STREAM;
+import static org.jquic.quic.streamapi.impl.StreamFrameWriter.FRAME_TYPE_RESET_STREAM;
 
 /**
  * Manages all streams for a single QUIC connection.
@@ -52,7 +50,8 @@ public class StreamManager implements ConnectionStreamManager {
     private static final Logger logger = LoggerFactory.getLogger(StreamManager.class);
     public static final int STREAM_BUFFER_CAPACITY = 50_000;
     public static final int DATAGRAM_FRAMES = -1;
-    private final QuicStreamResponseImpl connectionControl = new QuicStreamResponseImpl();
+    public static final int CONNECTION_OUTBOX_LIMIT = 15000;
+    private final QuicStreamResponseImpl datagramConnectionControl = new QuicStreamResponseImpl(null);
 
     public record FrameRecord(long streamId, boolean fin, PoolBuffer data) {
     }
@@ -62,32 +61,30 @@ public class StreamManager implements ConnectionStreamManager {
     private final ApplicationWorker streamWorker;
     private final CongestionControl congestionControl;
     private final FlightControl flightControl;
-    private final QuicConnectionControl responseHandler = new QuicStreamResponseImpl();
 
     // Stream management
     private final Map<Long, StreamBuffer> streamBuffers = new HashMap<>();
     private final Map<Long, ChunkedOutputStreamWithAmendments> streamOutputs = new HashMap<>();
     private final MessagePassingQueue<OutboxRecord> outputQueue;
 
-    private int outboxBytesBuffered = 0;
+    private AtomicInteger outboxBytesBuffered = new AtomicInteger(0);
     // Stream counters - server always uses odd stream IDs
     private long nextServerBidiStreamId = 1;
     private long nextServerUniStreamId = 3;
 
     public StreamManager(QuicConnection connection,
-                         QuicApplicationProtocolConnectionHandler handler,
                          QuicApplicationProtocol protocol,
                          ApplicationWorker streamWorker, MessagePassingQueue<OutboxRecord> outputQueue) {
         this.connection = connection;
-        this.handler = handler;
         this.streamWorker = streamWorker;
         this.congestionControl = protocol.getCongestionControl();
-
-        handler.setOutgoingDatagramStream(createOutputStream(DATAGRAM_FRAMES));
-
         flightControl = new FlightControl(connection.connectionMetadata.serverInitialStreamLimits,
-                connection.connectionMetadata.clientMetadata.initialStreamLimits,this);
+                connection.connectionMetadata.clientMetadata.initialStreamLimits, this);
         this.outputQueue = outputQueue;
+
+        handler = protocol.getConnectionHandler().apply(connection.getConnectionId());
+        handler.setOutgoingDatagramStream(createOutputStream(new StreamState(DATAGRAM_FRAMES, false, QuicConnectionControl.StreamType.Bidirectional, Long.MAX_VALUE, Long.MAX_VALUE)));
+        handler.onConnectionEstablished(new QuicStreamResponseImpl(null));
     }
 
     // Called from Selector thread
@@ -137,12 +134,12 @@ public class StreamManager implements ConnectionStreamManager {
             nextServerUniStreamId += 4;
         }
 
-        flightControl.openOutgoingStream(streamId, streamType);
+        StreamState state = flightControl.openOutgoingStream(streamId, streamType);
         // Create stream state
         StreamBuffer buffer = new StreamBuffer(streamId, flightControl.maxStreamDataCap);
         streamBuffers.put(streamId, buffer);
 
-        ChunkedOutputStreamWithAmendmentsImpl outputStream = createOutputStream(streamId);
+        ChunkedOutputStreamWithAmendments outputStream = createOutputStream(state);
         streamOutputs.put(streamId, outputStream);
         handler.onNewServerStreamAllocated(streamId, outputStream, streamType);
 
@@ -186,10 +183,12 @@ public class StreamManager implements ConnectionStreamManager {
                 handleFrame((StreamDataBlockedFrameData) frame);
             } else if (frame instanceof StreamsBlockedFrameData) {
                 handleFrame((StreamsBlockedFrameData) frame);
-            } else  if (frame instanceof StreamResetFrameAck) {
+            } else if (frame instanceof StreamResetFrameAck) {
                 onStreamResetAck(((StreamResetFrameAck) frame).streamId);
             } else if (frame instanceof DatagramFrame) {
-                handleFrame((DatagramFrame)frame);
+                handleFrame((DatagramFrame) frame);
+            } else {
+                logger.warn("Unknown frame type {}", frame.getClass().getName());
             }
         }
 
@@ -197,7 +196,7 @@ public class StreamManager implements ConnectionStreamManager {
             //Copy buffer data into a new java byte array and release the native mem buffer.
             ByteBuffer buffer = ByteBuffer.allocate(frame.datagram.buf().remaining());
             buffer.put(frame.datagram.buf());
-            handler.onDatagramReceived(buffer.array(), connectionControl);
+            handler.onDatagramReceived(buffer.array(), datagramConnectionControl);
             frame.datagram.release();
         }
 
@@ -217,22 +216,22 @@ public class StreamManager implements ConnectionStreamManager {
             boolean hasFin = frame.fin;
 
             // Ensure stream and buffer exist
-            StreamState.State state = flightControl.incomingStream(streamId);
+            StreamState state = flightControl.incomingStream(streamId);
 
-            if (state == null || !state.canReceive()) {
-                logger.warn("Received STREAM frame on stream {} in state {}", streamId, state);
+            if (state == null || !state.getState().canReceive()) {
+                logger.warn("Received STREAM frame on stream {} in state {}", streamId, state.getState());
                 return;
             }
 
             if (!streamBuffers.containsKey(streamId)) {
                 streamBuffers.put(streamId, new StreamBuffer(streamId, flightControl.maxStreamDataCap));
                 QuicConnectionControl.StreamType streamType = getStreamType(streamId);
-                ChunkedOutputStreamWithAmendmentsImpl outputStream = null;
+                ChunkedOutputStreamWithAmendments outputStream = null;
                 if (streamType == QuicConnectionControl.StreamType.Bidirectional) {
-                    outputStream = createOutputStream(streamId);
+                    outputStream = createOutputStream(state);
                     streamOutputs.put(streamId, outputStream);
                 }
-                handler.onNewClientStreamAllocated(streamId, responseHandler, outputStream, streamType);
+                handler.onNewClientStreamAllocated(streamId, new QuicStreamResponseImpl(state), outputStream, streamType);
             }
 
             StreamBuffer streamBuffer = streamBuffers.get(streamId);
@@ -243,13 +242,14 @@ public class StreamManager implements ConnectionStreamManager {
             // Update state
             int dataSize = data.buf().remaining();
 
-            if (flightControl.isReceiveCapReached(streamId, offset, dataSize)) return;
-            flightControl.addReceivedBytes(streamId, offset, dataSize, streamBuffer.getBufferedBytes());
+            if (flightControl.isReceiveCapReached(state, offset, dataSize)) return;
+
+            flightControl.addReceivedBytes(state, offset, dataSize);
 
             // Add data to the reassembly buffer - StreamBuffer enforces maxStreamData limit
             if (streamBuffer.addIncomingData(offset, data, hasFin)) {
                 // Deliver contiguous data to handler
-                deliverStreamData(streamId, null);
+                deliverStreamData(state, null);
             } else {
                 logger.warn("Connection {} stream {} has reached MAX_STREAM_DATA", getConnectionId(), streamId);
                 connection.closeConnection(QuicTransportError.FLOW_CONTROL_ERROR, "MAX_STREAM_DATA limit reached");
@@ -261,10 +261,13 @@ public class StreamManager implements ConnectionStreamManager {
             long errorCode = frame.errorCode;
             logger.info("Stream {} reset by peer with error code {}", streamId, errorCode);
 
-            flightControl.onStreamReset(streamId, errorCode, frame.finalSize);
+
+            StreamState state = flightControl.onStreamReset(streamId, errorCode, frame.finalSize);
+
+            streamOutputs.remove(streamId).close();
 
             // Deliver any buffered data with error code
-            frameProcessor.deliverStreamData(streamId, errorCode);
+            frameProcessor.deliverStreamData(state, errorCode);
             streamBuffers.remove(streamId).free();
         }
 
@@ -273,6 +276,7 @@ public class StreamManager implements ConnectionStreamManager {
         }
 
         private void handleFrame(MaxStreamDataFrameData frame) {
+            logger.warn("Processing MaxStreamDataFrameData {} max: {}", frame.streamId, frame.maximumData);
             flightControl.onStreamMaxData(frame.streamId, frame.maximumData);
         }
 
@@ -297,30 +301,31 @@ public class StreamManager implements ConnectionStreamManager {
         /**
          * Delivers stream data to handler. MUST be called from worker thread only.
          */
-        private void deliverStreamData(long streamId, @Nullable Long errorCode) throws IOException {
+        private void deliverStreamData(StreamState state, @Nullable Long errorCode) throws IOException {
+            long streamId = state.getStreamId();
             StreamBuffer buffer = streamBuffers.get(streamId);
             if (buffer == null) return;
 
             long bufferedBytesBefore = buffer.getBufferedBytes();
             StreamBuffer.StreamData data = buffer.readAvailableData();
+
             if (data != null) {
                 long bufferedBytesAfter = buffer.getBufferedBytes();
                 long freedBytes = bufferedBytesBefore - bufferedBytesAfter;
-
                 // Update totalBufferedBytes when data is freed from buffer
                 flightControl.byfferedBytesFreed(streamId, freedBytes);
 
-                handler.onStreamDataReceived(streamId, responseHandler, data.getData(), data.isLast(), errorCode);
+                handler.onStreamDataReceived(streamId, new QuicStreamResponseImpl(state), data.getData(), data.isLast(), errorCode);
 
                 if (data.isLast()) {
-                    flightControl.onStreamFin(streamId, false);
+                    flightControl.onStreamFin(state, false);
                     StreamBuffer removed = streamBuffers.remove(streamId);
                     if (removed != null) {
                         removed.free();
                     }
                 }
             } else if (errorCode != null) {
-                handler.onStreamDataReceived(streamId, responseHandler, new byte[0], true, errorCode);
+                handler.onStreamDataReceived(streamId, new QuicStreamResponseImpl(state) , new byte[0], true, errorCode);
             }
         }
 
@@ -335,34 +340,22 @@ public class StreamManager implements ConnectionStreamManager {
         }
     }
 
-    private @NonNull ChunkedOutputStreamWithAmendmentsImpl createOutputStream(long streamId) {
+    private @NonNull ChunkedOutputStreamWithAmendments createOutputStream(StreamState state) {
+        long streamId = state.getStreamId();
         final StreamBuffer streamBuffer = streamBuffers.get(streamId);
-        ChunkedOutputStreamWithAmendmentsImpl out = new ChunkedOutputStreamWithAmendmentsImpl(connection.getBufferPool(),
+        ChunkedOutputStreamWithAmendments out = ChunkedOutputStreamWithAmendments.createNonWrapping(connection.getBufferPool(),
                 (int) connection.connectionMetadata.clientMetadata.maxUdpPayloadSize - GCM_TAG_LENGTH,
-                GCM_TAG_LENGTH,
+                GCM_TAG_LENGTH + QuicFrameBuilder.MAX_SHORT_HEADER_LENGTH,
                 (buf, off, fin) -> {
                     int dataSize = buf.remaining();
                     long offset = streamBuffer.allocateSendOffset(dataSize);
-                    ByteBuffer encodedFrame = (streamId == DATAGRAM_FRAMES) ?
-                            StreamFrameProcessor.encodeDatagramFrame(buf.duplicate(), true)
-                            : StreamFrameProcessor.encodeStreamFrame(
+                    return (streamId == DATAGRAM_FRAMES) ?
+                            StreamFrameWriter.encodeDatagramFrame(buf.duplicate(), true)
+                            : StreamFrameWriter.encodeStreamFrame(
                             streamId, offset, buf.duplicate(), fin);
-
-                    if (logger.isDebugEnabled()) {
-                        byte[] tt = new byte[encodedFrame.remaining()];
-                        encodedFrame.duplicate().get(tt);
-                        logger.debug("Sending STREAM resp {}", HexFormat.of().formatHex(tt));
-                    }
-                    int chunkEnd = encodedFrame.limit();
-                    buf.limit(buf.capacity());
-                    buf.position(chunkEnd + STREAM_FRAME_HEADER_MAX_LEN);
-                    if (fin) {
-                        streamOutputs.remove(streamId);
-                    }
-                    return encodedFrame;
                 }
         );
-        out.setChunkConsumer(buf -> appendOutgoingData(streamId, buf));
+        out.setChunkConsumer(buf -> appendOutgoingData(state, buf));
         return out;
     }
 
@@ -370,35 +363,47 @@ public class StreamManager implements ConnectionStreamManager {
      * Appends ready to send Buffer from a stream to outputQueue.
      * Called from the Worker thread.
      */
-    public void appendOutgoingData(long streamId, PoolBuffer data) throws IOException {
+    public void appendOutgoingData(StreamState state, PoolBuffer data) throws IOException {
+        long streamId = state.getStreamId();
         if (connection.getState() != QuicConnection.State.ESTABLISHED) {
             logger.error("Connection is in wrong state " + connection.getState());
+            data.release();
             return;
         }
 
-        if (streamId != DATAGRAM_FRAMES && !flightControl.isStreamOpenForSend(streamId)) {
+        if (streamId != DATAGRAM_FRAMES && !flightControl.isStreamOpenForSend(state)) {
             throw new IOException("Stream " + streamId + " cannot send data in stream.");
         }
 
         int dataSize = data.buf().remaining();
 
-        if (streamId != DATAGRAM_FRAMES && !flightControl.canSend(streamId, dataSize)) {
-            logger.warn("Cannot push more data for stream {}", streamId);
-            throw new IOException("Cannot push more data for stream " + streamId);
+        while (outboxBytesBuffered.get() + dataSize > CONNECTION_OUTBOX_LIMIT) {
+            LockSupport.parkNanos(1000000L); //TODO: We need to wait for over a tick time.
         }
 
-        long delayNs = getCongestionDelayNanos(streamId, dataSize, dataSize);
+        while (streamId != DATAGRAM_FRAMES && !flightControl.canSend(state, dataSize)) {
+            long smoothedRtt = connection.getApplicationSpace().getSmoothedRtt();
+            LockSupport.parkNanos(smoothedRtt * 1_000_000L);
+            if (connection.getState() != QuicConnection.State.ESTABLISHED) {
+                data.release();
+                return;
+            }
+        }
 
-        logger.warn("Connection {} stream {} has been data {}b to be sent in {} ns", connection.getConnectionId(), streamId, dataSize, delayNs);
+        long delayNs = getCongestionDelayNanos(state.getStreamId(), dataSize, outboxBytesBuffered.get());
+
+        logger.debug("Connection {} stream {} has been data {}b to be sent in {} ns", connection.getConnectionId(), streamId, dataSize, delayNs);
 
         outputQueue.relaxedOffer(new OutboxRecord(getConnectionId(), System.nanoTime() + delayNs, data));
 
-        outboxBytesBuffered += dataSize;
+        flightControl.addSentBytes(state, dataSize);
+
+        outboxBytesBuffered.addAndGet(dataSize);
     }
 
     @Override
     public void onDataSend(int dataSize) {
-        outboxBytesBuffered -= dataSize;
+        outboxBytesBuffered.addAndGet(-dataSize);
     }
 
     @Override
@@ -416,46 +421,47 @@ public class StreamManager implements ConnectionStreamManager {
 
     private long getCongestionDelayNanos(long streamId, int dataSize, int bufferedBytes) {
         PacketNumberSpace.WindowedStats windowedStats = connection.getApplicationSpace().getWindowedStats();
-        StreamBuffer streamBuffer = streamBuffers.get(streamId);
         return congestionControl.getDelay(
-            System.currentTimeMillis(),
-            dataSize,
-            connection.getConnectionId(),
-            streamId,
-            connection.getApplicationSpace().getSmoothedRtt(),
-            connection.getApplicationSpace().getLatestRtt(),
-            connection.getApplicationSpace().getMinRtt(),
-            windowedStats.bytesAckedInLastRtt(),
-            windowedStats.bytesLostInLastRtt(),
-            windowedStats.bytesAcked(),
-            windowedStats.bytesLost(),
-            windowedStats.packetsAcked(),
-            connection.getApplicationSpace().getLossTime(),
-            flightControl.getTotalInFlightBytes(),
-            streamBuffer != null ? flightControl.maxStreamDataCap - streamBuffer.getBufferedBytes() : flightControl.maxStreamDataCap ,
-            bufferedBytes,
-            connection.getApplicationSpace().getServerCeCounter(),
-            windowedStats.intervalCePackets()
+                System.currentTimeMillis(),
+                dataSize,
+                connection.getConnectionId(),
+                streamId,
+                connection.getApplicationSpace().getSmoothedRtt(),
+                connection.getApplicationSpace().getLatestRtt(),
+                connection.getApplicationSpace().getMinRtt(),
+                windowedStats.bytesAckedInLastRtt(),
+                windowedStats.bytesLostInLastRtt(),
+                windowedStats.bytesAcked(),
+                windowedStats.bytesLost(),
+                windowedStats.packetsAcked(),
+                connection.getApplicationSpace().getLossTime(),
+                flightControl.getTotalInFlightBytes(),
+                flightControl.maxStreamDataCap - flightControl.getBytesBuffered(),
+                bufferedBytes,
+                connection.getApplicationSpace().getServerCeCounter(),
+                windowedStats.intervalCePackets()
         );
     }
 
     /**
      * Closes a stream by sending STOP_SENDING.
      */
-    public void closeStream(long streamId, long errorCode) throws QuicStreamException {
+    public void closeStream(long streamId, StreamState state, long errorCode) throws QuicStreamException {
+        if (state == null) return;
+
         if (connection.getState() != QuicConnection.State.ESTABLISHED) {
             throw new QuicStreamException("Connection is in wrong state " + connection.getState());
         }
         if (!streamBuffers.containsKey(streamId)) {
             throw new QuicStreamException("Stream " + streamId + " does not exist");
         }
-        flightControl.closeStream(streamId, errorCode);
+        flightControl.closeStream(state,  errorCode);
     }
 
     void sendMaxStreamsFrame(long maximumStreams, boolean bidirectional) {
-        PoolBuffer frame = StreamFrameProcessor.encodeMaxStreamsFrame(connection.getBufferPool(), maximumStreams, bidirectional);
+        PoolBuffer frame = StreamFrameWriter.encodeMaxStreamsFrame(connection.getBufferPool(), maximumStreams, bidirectional);
         try {
-            long delayNs = getCongestionDelayNanos(0, frame.buf().remaining(), outboxBytesBuffered);
+            long delayNs = getCongestionDelayNanos(0, frame.buf().remaining(), outboxBytesBuffered.get());
             outputQueue.offer(new OutboxRecord(getConnectionId(), System.nanoTime() + delayNs, frame));
             logger.debug("Sent MAX_STREAMS frame: maxStreams={}, bidirectional={}", maximumStreams, bidirectional);
         } catch (Exception e) {
@@ -464,9 +470,9 @@ public class StreamManager implements ConnectionStreamManager {
     }
 
     void sendMaxStreamDataFrame(long streamId, long maximumData) {
-        PoolBuffer frame = StreamFrameProcessor.encodeMaxStreamDataFrame(connection.getBufferPool(), streamId, maximumData);
+        PoolBuffer frame = StreamFrameWriter.encodeMaxStreamDataFrame(connection.getBufferPool(), streamId, maximumData);
         try {
-            long delayNs = getCongestionDelayNanos(streamId, frame.buf().remaining(), outboxBytesBuffered);
+            long delayNs = getCongestionDelayNanos(streamId, frame.buf().remaining(), outboxBytesBuffered.get());
             outputQueue.offer(new OutboxRecord(getConnectionId(), System.nanoTime() + delayNs, frame));
         } catch (Exception e) {
             logger.error("Failed to send MAX_STREAM_DATA frame", e);
@@ -474,9 +480,9 @@ public class StreamManager implements ConnectionStreamManager {
     }
 
     void sendMaxDataFrame(long maximumData, long streamId) {
-        PoolBuffer frame = StreamFrameProcessor.encodeMaxDataFrame(connection.getBufferPool(), maximumData);
+        PoolBuffer frame = StreamFrameWriter.encodeMaxDataFrame(connection.getBufferPool(), maximumData);
         try {
-            long delayNs = getCongestionDelayNanos(streamId, frame.buf().remaining(), outboxBytesBuffered);
+            long delayNs = getCongestionDelayNanos(streamId, frame.buf().remaining(), outboxBytesBuffered.get());
             outputQueue.offer(new OutboxRecord(getConnectionId(), System.nanoTime() + delayNs, frame));
             logger.debug("Sent MAX_DATA frame: maxData={}", maximumData);
         } catch (Exception e) {
@@ -485,9 +491,9 @@ public class StreamManager implements ConnectionStreamManager {
     }
 
     void sendResetStreamFrame(long streamId, long errorCode, long finalSize) {
-        PoolBuffer frame = StreamFrameProcessor.encodeResetStreamFrame(connection.getBufferPool(), streamId, errorCode, finalSize);
+        PoolBuffer frame = StreamFrameWriter.encodeResetStreamFrame(connection.getBufferPool(), streamId, errorCode, finalSize);
         try {
-            long delayNs = getCongestionDelayNanos(streamId, frame.buf().remaining(), outboxBytesBuffered);
+            long delayNs = getCongestionDelayNanos(streamId, frame.buf().remaining(), outboxBytesBuffered.get());
             outputQueue.offer(new OutboxRecord(getConnectionId(), System.nanoTime() + delayNs, frame));
         } catch (Exception e) {
             logger.error("Failed to send RESET_STREAM frame", e);
@@ -495,9 +501,9 @@ public class StreamManager implements ConnectionStreamManager {
     }
 
     void sendStopSendingFrame(long streamId, long errorCode) {
-        PoolBuffer frame = StreamFrameProcessor.encodeStopSendingFrame(connection.getBufferPool(), streamId, errorCode);
+        PoolBuffer frame = StreamFrameWriter.encodeStopSendingFrame(connection.getBufferPool(), streamId, errorCode);
         try {
-            long delayNs = getCongestionDelayNanos(streamId, frame.buf().remaining(), outboxBytesBuffered);
+            long delayNs = getCongestionDelayNanos(streamId, frame.buf().remaining(), outboxBytesBuffered.get());
             outputQueue.offer(new OutboxRecord(getConnectionId(), System.nanoTime() + delayNs, frame));
         } catch (Exception e) {
             logger.error("Failed to send STOP_SENDING frame", e);
@@ -505,9 +511,9 @@ public class StreamManager implements ConnectionStreamManager {
     }
 
     void sendStreamDataBlockedFrame(long streamId, long limit) {
-        PoolBuffer frame = StreamFrameProcessor.encodeStreamDataBlockedFrame(connection.getBufferPool(), streamId, limit);
+        PoolBuffer frame = StreamFrameWriter.encodeStreamDataBlockedFrame(connection.getBufferPool(), streamId, limit);
         try {
-            long delayNs = getCongestionDelayNanos(streamId, frame.buf().remaining(), outboxBytesBuffered);
+            long delayNs = getCongestionDelayNanos(streamId, frame.buf().remaining(), outboxBytesBuffered.get());
             outputQueue.offer(new OutboxRecord(getConnectionId(), System.nanoTime() + delayNs, frame));
         } catch (Exception e) {
             logger.error("Failed to send STREAM_DATA_BLOCKED frame", e);
@@ -522,9 +528,9 @@ public class StreamManager implements ConnectionStreamManager {
      * Sends DATA_BLOCKED frame to inform peer we're blocked at connection level.
      */
     void sendDataBlockedFrame(long limit, long streamId) {
-        PoolBuffer frame = StreamFrameProcessor.encodeDataBlockedFrame(connection.getBufferPool(), limit);
+        PoolBuffer frame = StreamFrameWriter.encodeDataBlockedFrame(connection.getBufferPool(), limit);
         try {
-            long delayNs = getCongestionDelayNanos(streamId, frame.buf().remaining(), outboxBytesBuffered);
+            long delayNs = getCongestionDelayNanos(streamId, frame.buf().remaining(), outboxBytesBuffered.get());
             outputQueue.offer(new OutboxRecord(getConnectionId(), System.nanoTime() + delayNs, frame));
             logger.debug("Sent DATA_BLOCKED frame: limit={}", limit);
         } catch (Exception e) {
@@ -535,7 +541,13 @@ public class StreamManager implements ConnectionStreamManager {
     /**
      * Implementation of QuicStreamResponse for this manager.
      */
-    private class QuicStreamResponseImpl implements QuicConnectionControl {
+    public class QuicStreamResponseImpl implements QuicConnectionControl {
+        private final StreamState streamState;
+
+        private QuicStreamResponseImpl(StreamState streamState) {
+            this.streamState = streamState;
+        }
+
         @Override
         public void closeConnection(long errorCode, String reason) {
             connection.closeConnection(errorCode, reason);
@@ -548,7 +560,7 @@ public class StreamManager implements ConnectionStreamManager {
 
         @Override
         public void closeStream(long streamId, long errorCode) throws QuicStreamException {
-            StreamManager.this.closeStream(streamId, errorCode);
+            StreamManager.this.closeStream(streamId, streamState, errorCode);
         }
     }
 }

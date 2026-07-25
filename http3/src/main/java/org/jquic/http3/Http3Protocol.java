@@ -49,22 +49,22 @@ public class Http3Protocol implements QuicApplicationProtocol {
     }
 
     @Override
-    public Integer getMaxBidirectionalStreamsPerConnection() {
+    public int getMaxBidirectionalStreamsPerConnection() {
         return MAX_BIDIRECTIONAL_STREAMS;
     }
 
     @Override
-    public Integer getMaxUnidirectionalStreamsPerConnection() {
+    public int getMaxUnidirectionalStreamsPerConnection() {
         return MAX_UNIDIRECTIONAL_STREAMS;
     }
 
     @Override
-    public Integer getMaxStreamData() {
+    public int getMaxStreamData() {
         return MAX_STREAM_DATA;
     }
 
     @Override
-    public Integer getMaxData() {
+    public int getMaxData() {
         return MAX_DATA;
     }
 
@@ -90,7 +90,7 @@ public class Http3Protocol implements QuicApplicationProtocol {
         return new CongestionControl() {
             @Override
             public long getDelay(long currentTimeMs, long dataSize, long connectionId, long streamId, long smoothedRtt, long lastRtt, long minRtt, long bytesAckedInRtt, long bytesLostInRtt, long bytesAckedInWindow, long bytesLostInWindow, long packetsAckedInWindow, long lastLostTimeMs, long inFlightData, long receiveBufferRemaining, long sendBufferSize, long ceCounter, long cePacketsInWindow) {
-                return 0;
+                return 1000000;
             }
 
             @Override

@@ -44,7 +44,7 @@ public class PacketNumberSpace {
     private long largestReceivedPacketNumber = -1;
     private final SortedIntervals receivedPackets = new SortedIntervals(255);
 
-    // Sent packet tracking вЂ” TreeMap keeps packet numbers sorted so the packet-threshold
+    // Sent packet tracking - TreeMap keeps packet numbers sorted so the packet-threshold
     // pass in detectLostPackets can use headMap() instead of scanning the full table.
     private final TreeMap<Long, SentPacket> sentPackets = new TreeMap<>();
     private long largestAckedPacketNumber = -1;
@@ -206,7 +206,7 @@ public class PacketNumberSpace {
 
         // Find newly acked packets.
         // For each ACK range, subMap() seeks directly to the matching window in our TreeMap
-        // in O(log n), then iterates only the entries that actually fall within it вЂ” O(log n + k).
+        // in O(log n), then iterates only the entries that actually fall within it - O(log n + k).
         // We never enumerate packet numbers from the peer-supplied ranges themselves, so a
         // malicious enormous range costs nothing beyond a single O(log n) tree seek.
         Set<Long> newlyAcked = new HashSet<>();
@@ -344,7 +344,7 @@ public class PacketNumberSpace {
             long pn = entry.getKey();
             SentPacket packet = entry.getValue();
             lostPackets.put(pn, packet);
-            logger.warn("{}: Packet {} declared lost (packet threshold: {} below largest acked {})",
+            logger.info("{}: Packet {} declared lost (packet threshold: {} below largest acked {})",
                     phase, pn, largestAckedPacketNumber - pn, largestAckedPacketNumber);
         }
 
@@ -356,7 +356,7 @@ public class PacketNumberSpace {
             if (!sentPackets.containsKey(packet.packetNumber)) continue;
             if (packet.packetNumber >= largestAckedPacketNumber) continue;
             lostPackets.put(packet.packetNumber, packet);
-            logger.warn("{}: Packet {} declared lost (time threshold: sent {}ms ago, threshold: {}ms)",
+            logger.info("{}: Packet {} declared lost (time threshold: sent {}ms ago, threshold: {}ms)",
                     phase, packet.packetNumber, timestampMs - packet.sentTime, lossDelay);
         }
 
@@ -369,7 +369,7 @@ public class PacketNumberSpace {
             }
         }
 
-        // Update loss time: the next expiry is simply the heap minimum вЂ” O(1).
+        // Update loss time: the next expiry is simply the heap minimum - O(1).
         SentPacket next = lossHeap.peek();
         lossTime = (next != null) ? next.getTimeoutTimestamp() : 0;
 
@@ -392,6 +392,10 @@ public class PacketNumberSpace {
 
     public long getLargestReceivedPacketNumber() {
         return largestReceivedPacketNumber;
+    }
+
+    public long getLargestAckedPacketNumber() {
+        return largestAckedPacketNumber;
     }
 
     public long getPTO() {

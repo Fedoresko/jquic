@@ -96,8 +96,35 @@ public class QuicPacketHeader {
         }
     }
 
+    /**
+     * RFC 9000 Appendix A.2. Packet Number Encoding
+     * Calculates the minimum length (1-4) required to encode the packet number.
+     */
+    public static int calculatePnLength(long packetNumber, long largestAcked) {
+        long delta = packetNumber - largestAcked;
+        // RFC 9000: The number of bits required to represent 2 * delta
+        // If delta is huge, we might need more than 4 bytes, but QUIC only supports up to 4.
+        long delta2 = delta * 2;
+        if (delta2 >= 0 && delta2 <= (1L << 8)) return 1;
+        if (delta2 >= 0 && delta2 <= (1L << 16)) return 2;
+        if (delta2 >= 0 && delta2 <= (1L << 24)) return 3;
+        return 4;
+    }
+
+    /**
+     * RFC 9000 Appendix A.2. Packet Number Encoding
+     * Truncates the packet number to the specified length.
+     */
+    public static long truncatePacketNumber(long packetNumber, int pnLen) {
+        long mask = (1L << (pnLen * 8)) - 1;
+        if (pnLen == 8) mask = -1L;
+        return packetNumber & mask;
+    }
+
     public void write(ByteBuffer header) {
-        header.put(flags);
+        byte unmaskedFlags = (byte) (flags | (pnLength - 1));
+        header.put(unmaskedFlags);
+        long truncatedPn = truncatePacketNumber(packetNumber, pnLength);
         if (packetType.isLongHeader()) {
             // Version
             header.putInt(version);
@@ -111,7 +138,7 @@ public class QuicPacketHeader {
 
             // Token length (0 for server Initial)
             if (packetType == PacketType.INITIAL) {
-                header.put((byte) token.length);
+                QuicVarint.write(header, token.length);
                 header.put(token);
             }
 
@@ -119,12 +146,14 @@ public class QuicPacketHeader {
             QuicVarint.write(header, this.payloadLength);
 
             // Packet number (pnLen bytes, big-endian)
-            writePacketNumber(header, packetNumber, pnLength);
+            writePacketNumber(header, truncatedPn, pnLength);
         } else {
-            header.put(destinationCid);
+            if (destinationCid.length > 0) {
+                header.put(destinationCid);
+            }
 
             // Packet number (pnLen bytes, big-endian)
-            writePacketNumber(header, packetNumber, pnLength);
+            writePacketNumber(header, truncatedPn, pnLength);
         }
     }
 
@@ -133,7 +162,7 @@ public class QuicPacketHeader {
      * Returns a masked header that needs unmask() to be called.
      * Returns null if the packet is malformed (RFC 9000: silently discard).
      */
-    public static QuicPacketHeader parse(ByteBuffer packet, @Nullable Cipher headerProtection) {
+    public static QuicPacketHeader parse(ByteBuffer packet, @Nullable Cipher headerProtection, long largestPn) {
         try {
             int startPosition = packet.position();
 
@@ -142,9 +171,9 @@ public class QuicPacketHeader {
             boolean isLongHeader = (flags & 0x80) != 0;
 
             if (isLongHeader) {
-                return parseLongHeader(packet, startPosition, flags, headerProtection);
+                return parseLongHeader(packet, startPosition, flags, headerProtection, largestPn);
             } else {
-                return parseShortHeader(packet, startPosition, flags, headerProtection);
+                return parseShortHeader(packet, startPosition, flags, headerProtection, largestPn);
             }
         } catch (Exception e) {
             // RFC 9000: Silently discard malformed packets
@@ -192,7 +221,7 @@ public class QuicPacketHeader {
         };
     }
 
-    private static QuicPacketHeader parseLongHeader(ByteBuffer packet, int startPosition, byte flags, Cipher headerProtection) {
+    private static QuicPacketHeader parseLongHeader(ByteBuffer packet, int startPosition, byte flags, Cipher headerProtection, long largestPn) {
         // Read version (4 bytes)
         int version = packet.getInt();
 
@@ -219,7 +248,7 @@ public class QuicPacketHeader {
 
         // Read payload length (varint)
         long payloadLength = QuicVarint.read(packet);
-        PacketNumber packetNumber = readPacketNumber(packet, true, flags, startPosition, headerProtection);
+        PacketNumber packetNumber = readPacketNumber(packet, true, flags, startPosition, headerProtection, largestPn);
 
         int headerLen = packet.position() - startPosition;
         byte [] rawData = new byte[headerLen];
@@ -229,13 +258,13 @@ public class QuicPacketHeader {
                                          packetType, token, payloadLength, (byte) 0, rawData);
     }
 
-    private static QuicPacketHeader parseShortHeader(ByteBuffer packet, int startPosition, byte flags, Cipher headerProtection) {
+    private static QuicPacketHeader parseShortHeader(ByteBuffer packet, int startPosition, byte flags, Cipher headerProtection, long largestPn) {
         // Short header has DCID but no length field (must know from connection context)
         // For now, assume 8-byte DCID
         byte[] destinationCid = new byte[8];
         packet.get(destinationCid);
 
-        PacketNumber packetNumber = readPacketNumber(packet, false, flags, startPosition, headerProtection);
+        PacketNumber packetNumber = readPacketNumber(packet, false, flags, startPosition, headerProtection, largestPn);
 
         int headerLen = packet.position() - startPosition;
         byte [] rawData = new byte[headerLen];
@@ -246,12 +275,14 @@ public class QuicPacketHeader {
 
     public record PacketNumber(int pnLength, long packetNumber, byte flags) {}
 
-    public static PacketNumber readPacketNumber(ByteBuffer packet, boolean isLongHeader, byte protectedFlags, int startPosition, @Nullable Cipher headerProtection) {
+    public static PacketNumber readPacketNumber(ByteBuffer packet, boolean isLongHeader, byte protectedFlags, int startPosition, @Nullable Cipher headerProtection, long largestPn) {
         if (headerProtection == null) {
             int pnLength = getPacketNumberLength(protectedFlags);
-            return new PacketNumber(pnLength, readPacketNumber(packet, pnLength), protectedFlags);
+            long truncatedPn = readPacketNumber(packet, pnLength);
+            long fullPn = decodePacketNumber(largestPn, truncatedPn, pnLength * 8);
+            return new PacketNumber(pnLength, fullPn, protectedFlags);
         } else {
-            return readPacketNumberMasked(packet, isLongHeader, protectedFlags, startPosition, headerProtection);
+            return readPacketNumberMasked(packet, isLongHeader, protectedFlags, startPosition, headerProtection, largestPn);
         }
     }
 
@@ -260,7 +291,7 @@ public class QuicPacketHeader {
      *
      * @return Unmasked QuicPacketHeader with correct packet number, or null if unmasking fails
      */
-    public static PacketNumber readPacketNumberMasked(ByteBuffer packet, boolean isLongHeader, byte protectedFlags, int startPosition, @NonNull Cipher headerProtection) {
+    public static PacketNumber readPacketNumberMasked(ByteBuffer packet, boolean isLongHeader, byte protectedFlags, int startPosition, @NonNull Cipher headerProtection, long largestPn) {
 
         try {
             // Sample starts 4 bytes after packet number starts
@@ -290,18 +321,42 @@ public class QuicPacketHeader {
             int pnLength = (unmaskedFlags & 0x03) + 1;
 
             // Unmask packet number bytes
-            long packetNumber = 0;
+            long truncatedPn = 0;
             for (int i = 0; i < pnLength; i++) {
                 byte protectedByte = packet.get();
                 byte unmaskedByte = (byte) (protectedByte ^ mask[1 + i]);
                 packet.position(packet.position()-1).put(unmaskedByte);
-                packetNumber = (packetNumber << 8) | (unmaskedByte & 0xFF);
+                truncatedPn = (truncatedPn << 8) | (unmaskedByte & 0xFF);
             }
 
-            return new PacketNumber(pnLength, packetNumber, unmaskedFlags);
+            long fullPn = decodePacketNumber(largestPn, truncatedPn, pnLength * 8);
+
+            return new PacketNumber(pnLength, fullPn, unmaskedFlags);
         } catch (Exception e) {
             // RFC 9000: Silently discard malformed packets
             return null;
+        }
+    }
+
+    /**
+     * RFC 9000 Appendix A. Packet Number Decoding
+     */
+    public static long decodePacketNumber(long largestPn, long truncatedPn, int pnNbits) {
+        long expectedPn = largestPn + 1;
+        long pnWin = 1L << pnNbits;
+        long pnHalfWin = pnWin / 2;
+        long pnMask = pnWin - 1;
+
+        if (pnNbits == 64) pnMask = -1L;
+
+        long candidatePn = (expectedPn & ~pnMask) | truncatedPn;
+
+        if (candidatePn <= expectedPn - pnHalfWin && candidatePn < (1L << 62) - pnWin) {
+            return candidatePn + pnWin;
+        } else if (candidatePn > expectedPn + pnHalfWin && candidatePn >= pnWin) {
+            return candidatePn - pnWin;
+        } else {
+            return candidatePn;
         }
     }
 

@@ -20,9 +20,33 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
 
-
+/**
+ * This class supports writing in a zero-copy buffer with splitting data in chunks
+ * It works upon an underlying ByteBuffer pool able to allocate a large enough number of buffers to contain all final data.
+ * Data is written using standard java.io.DataOutputStream methods.
+ * It calls chunkWrapper callback, that could wrap chunk data with some user headers\trailers and adjust the buffer position
+ * to the place of the next chunk.
+ * It supports amendAtPos to update reserved placeholder in original data limited to size of current buffer.
+ * Use pollReadyChunk() to collect all wrapped chunks with final data or set ChunkConsumer to consume chunks as soon as they appear.
+ * Use readyContentFrom() to collect recently written data without wrapping but with all amendments applied
+ * limited to size of current buffer.
+ */
 public abstract class ChunkedOutputStreamWithAmendments extends DataOutputStream {
-    public ChunkedOutputStreamWithAmendments(OutputStream out) {
+    /**
+     * Create new NonWrappingChunkedOutputStreamWithAmendments
+     *
+     * @param pool         - pool for underlying ByteBuffers.
+     * @param chunkSize    - fixed size of chunk for written data to be split into
+     * @param trailingPadding - reserved size between wrapped chunks on buffer (could be used for further wrapping)
+     * @param chunkWrapper - callback that wraps a chunk with optional header\footer, returns the result as ButeBuffer,
+     *                     and adjusts passed ByteBuffer position where to continue writes (reserve header space).
+     */
+    public static ChunkedOutputStreamWithAmendments createNonWrapping(BufferPool pool, int chunkSize, int trailingPadding,
+                                                                      ChunkWrapper chunkWrapper) {
+        return new ChunkedOutputStreamWithAmendmentsImpl(pool, chunkSize, trailingPadding, chunkWrapper);
+    }
+
+    ChunkedOutputStreamWithAmendments(OutputStream out) {
         super(out);
     }
 
@@ -31,10 +55,22 @@ public abstract class ChunkedOutputStreamWithAmendments extends DataOutputStream
     }
 
     public interface ChunkWrapper {
+        /**
+         * Wrap created chunk with header\footer; wrapped buffers are passed to consumers,
+         * leaving trailingPadding between
+         * @param buf - current chunk boundaries
+         * @param offset - logical offset (bytes written before chunk start)
+         * @param isFinal - if stream was closed
+         * @return return boundaries of wrapped chunk
+         */
         ByteBuffer wrapBuffer(ByteBuffer buf, int offset, boolean isFinal);
     }
 
     public interface ChunkConsumer {
+        /**
+         * Get the next generated chunk
+         * @param buf - borrowed link to underlying buffer with written chunk boundaries
+         */
         void accept(PoolBuffer buf) throws IOException;
     }
 
@@ -63,7 +99,7 @@ public abstract class ChunkedOutputStreamWithAmendments extends DataOutputStream
     public abstract int getPos();
 
     /**
-     * Poll ready and wrapped chunk.
+     * Poll a borrowed link to ready and wrapped chunk.
      *
      * @return the first added chunk in queue, null if nothing left.
      */

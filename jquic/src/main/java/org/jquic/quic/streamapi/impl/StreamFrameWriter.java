@@ -28,8 +28,8 @@ import java.nio.ByteBuffer;
  * STREAM, RESET_STREAM, STOP_SENDING, MAX_STREAM_DATA, MAX_STREAMS,
  * STREAM_DATA_BLOCKED, STREAMS_BLOCKED (RFC 9000 Section 19)
  */
-public class StreamFrameProcessor {
-    private static final Logger logger = LoggerFactory.getLogger(StreamFrameProcessor.class);
+public class StreamFrameWriter {
+    private static final Logger logger = LoggerFactory.getLogger(StreamFrameWriter.class);
 
     // Frame types (RFC 9000 Section 19)
     public static final byte FRAME_TYPE_RESET_STREAM = 0x04;
@@ -57,12 +57,12 @@ public class StreamFrameProcessor {
 
         // Frame type with flags
         byte frameType = FRAME_TYPE_STREAM;
-        if (offset > 0) frameType |= 0x04; // OFF bit
+        if (offset >= 0) frameType |= 0x04; // OFF bit
         frameType |= 0x02; // LEN bit (always include length)
         if (fin) frameType |= 0x01; // FIN bit
 
         int strIdSize = QuicVarint.sizeOf(streamId);
-        int offSize = offset > 0 ? QuicVarint.sizeOf(offset) : 0;
+        int offSize = offset >= 0 ? QuicVarint.sizeOf(offset) : 0;
         int dataLenSize = QuicVarint.sizeOf(dataLength);
         int headerLen = 1 + strIdSize + offSize + dataLenSize;
 
@@ -70,7 +70,7 @@ public class StreamFrameProcessor {
         buffer.position(dataPosition - headerLen);
         buffer.put(frameType);
         QuicVarint.write(buffer, streamId);
-        if (offset > 0) {
+        if (offset >= 0) {
             QuicVarint.write(buffer, offset);
         }
         QuicVarint.write(buffer, dataLength);
@@ -86,23 +86,16 @@ public class StreamFrameProcessor {
     public static PoolBuffer encodeResetStreamFrame(BufferPool pool, long streamId, long errorCode, long finalSize) {
         logger.debug("Encoding reset stream frame for stream id {}", streamId);
         PoolBuffer buffer = pool.requestWriteBuffer();
+        int start = buffer.buf().position();
         buffer.buf().put(FRAME_TYPE_RESET_STREAM);
         QuicVarint.write(buffer.buf(), streamId);
         QuicVarint.write(buffer.buf(), errorCode);
         QuicVarint.write(buffer.buf(), finalSize);
-        buffer.buf().flip();
+        buffer.buf().put(new byte[32]); //PADDING
+        buffer.buf().limit(buffer.buf().position());
+        buffer.buf().position(start);
         return buffer;
     }
-//
-//    /**
-//     * Decodes a RESET_STREAM frame.
-//     */
-//    public static ResetStreamFrameData decodeResetStreamFrame(ByteBuffer buffer) {
-//        long streamId = QuicVarint.read(buffer);
-//        long errorCode = QuicVarint.read(buffer);
-//        long finalSize = QuicVarint.read(buffer);
-//        return new ResetStreamFrameData(streamId, errorCode, finalSize);
-//    }
 
     /**
      * Encodes a MAX_DATA frame (connection-level flow control).
@@ -112,9 +105,12 @@ public class StreamFrameProcessor {
     public static PoolBuffer encodeMaxDataFrame(BufferPool pool, long maximumData) {
         logger.warn("maximum data frame is {}", maximumData);
         PoolBuffer buffer = pool.requestWriteBuffer();
+        int start = buffer.buf().position();
         buffer.buf().put(FRAME_TYPE_MAX_DATA);
         QuicVarint.write(buffer.buf(), maximumData);
-        buffer.buf().flip();
+        buffer.buf().put(new byte[32]); //PADDING
+        buffer.buf().limit(buffer.buf().position());
+        buffer.buf().position(start);
         return buffer;
     }
 
@@ -125,9 +121,12 @@ public class StreamFrameProcessor {
     public static PoolBuffer encodeDataBlockedFrame(BufferPool pool, long limit) {
         logger.warn("Encoding data blocked frame");
         PoolBuffer buffer = pool.requestWriteBuffer();
+        int start = buffer.buf().position();
         buffer.buf().put((byte) 0x14); // DATA_BLOCKED frame type
         QuicVarint.write(buffer.buf(), limit);
-        buffer.buf().flip();
+        buffer.buf().put(new byte[32]); //PADDING
+        buffer.buf().limit(buffer.buf().position());
+        buffer.buf().position(start);
         return buffer;
     }
 
@@ -138,76 +137,60 @@ public class StreamFrameProcessor {
     public static PoolBuffer encodeStopSendingFrame(BufferPool pool, long streamId, long errorCode) {
         logger.warn("Stream {} has stop sending", streamId);
         PoolBuffer buffer = pool.requestWriteBuffer();
+        int start = buffer.buf().position();
         buffer.buf().put(FRAME_TYPE_STOP_SENDING);
         QuicVarint.write(buffer.buf(), streamId);
         QuicVarint.write(buffer.buf(), errorCode);
-        buffer.buf().flip();
+        buffer.buf().put(new byte[32]); //PADDING
+        buffer.buf().limit(buffer.buf().position());
+        buffer.buf().position(start);
         return buffer;
     }
-
-//    /**
-//     * Decodes a STOP_SENDING frame.
-//     */
-//    public static StopSendingFrameData decodeStopSendingFrame(ByteBuffer buffer) {
-//        long streamId = QuicVarint.read(buffer);
-//        long errorCode = QuicVarint.read(buffer);
-//        return new StopSendingFrameData(streamId, errorCode);
-//    }
 
     /**
      * Encodes a MAX_STREAM_DATA frame (RFC 9000 Section 19.10).
      * Format: type(0x11) | stream_id | maximum_data
      */
     public static PoolBuffer encodeMaxStreamDataFrame(BufferPool pool, long streamId, long maximumData) {
-        logger.warn("Stream {} has stream data", streamId);
         PoolBuffer buffer = pool.requestWriteBuffer();
+        int start = buffer.buf().position();
         buffer.buf().put(FRAME_TYPE_MAX_STREAM_DATA);
         QuicVarint.write(buffer.buf(), streamId);
         QuicVarint.write(buffer.buf(), maximumData);
-        buffer.buf().flip();
+        buffer.buf().put(new byte[32]); //PADDING
+        buffer.buf().limit(buffer.buf().position());
+        buffer.buf().position(start);
         return buffer;
     }
 
-//    /**
-//     * Decodes a MAX_STREAM_DATA frame.
-//     */
-//    public static MaxStreamDataFrameData decodeMaxStreamDataFrame(ByteBuffer buffer) {
-//        long streamId = QuicVarint.read(buffer);
-//        long maximumData = QuicVarint.read(buffer);
-//        return new MaxStreamDataFrameData(streamId, maximumData);
-//    }
-//
     /**
      * Encodes a MAX_STREAMS frame (RFC 9000 Section 19.11).
      * Format: type(0x12/0x13) | maximum_streams
      */
     public static PoolBuffer encodeMaxStreamsFrame(BufferPool pool, long maximumStreams, boolean bidirectional) {
         PoolBuffer buffer = pool.requestWriteBuffer();
+        int start = buffer.buf().position();
         buffer.buf().put(bidirectional ? FRAME_TYPE_MAX_STREAMS_BIDI : FRAME_TYPE_MAX_STREAMS_UNI);
         QuicVarint.write(buffer.buf(), maximumStreams);
-        buffer.buf().flip();
+        buffer.buf().put(new byte[32]); //PADDING
+        buffer.buf().limit(buffer.buf().position());
+        buffer.buf().position(start);
         return buffer;
     }
-//
-//    /**
-//     * Decodes a MAX_STREAMS frame.
-//     */
-//    public static MaxStreamsFrameData decodeMaxStreamsFrame(ByteBuffer buffer) {
-//        long maximumStreams = QuicVarint.read(buffer);
-//        return new MaxStreamsFrameData(maximumStreams);
-//    }
 
     /**
      * Encodes a STREAM_DATA_BLOCKED frame (RFC 9000 Section 19.13).
      * Format: type(0x15) | stream_id | limit
      */
     public static PoolBuffer encodeStreamDataBlockedFrame(BufferPool pool, long streamId, long limit) {
-        logger.warn("Stream {} has stream data", streamId);
         PoolBuffer buffer = pool.requestWriteBuffer();
+        int start = buffer.buf().position();
         buffer.buf().put(FRAME_TYPE_STREAM_DATA_BLOCKED);
         QuicVarint.write(buffer.buf(), streamId);
         QuicVarint.write(buffer.buf(), limit);
-        buffer.buf().flip();
+        buffer.buf().put(new byte[32]); //PADDING
+        buffer.buf().limit(buffer.buf().position());
+        buffer.buf().position(start);
         return buffer;
     }
 

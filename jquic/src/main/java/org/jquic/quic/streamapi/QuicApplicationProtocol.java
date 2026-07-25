@@ -16,6 +16,7 @@
 package org.jquic.quic.streamapi;
 
 import org.jquic.quic.streamapi.congestion.BBRv3;
+import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
 import java.util.function.Function;
@@ -28,22 +29,23 @@ public interface QuicApplicationProtocol {
     /**
      * Returns the maximum number of bidirectional streams per connection simultaneously.
      */
-    Integer getMaxBidirectionalStreamsPerConnection();
+    int getMaxBidirectionalStreamsPerConnection();
     /**
      * Returns the maximum number of unidirectional streams per connection simultaneously.
      */
-    Integer getMaxUnidirectionalStreamsPerConnection();
+    int getMaxUnidirectionalStreamsPerConnection();
     /**
      * Returns the maximum size of data that can be buffered for a single stream (unacknowleged packets).
      */
-    Integer getMaxStreamData();
+    int getMaxStreamData();
     /**
      * Returns the maximum size of data that can be buffered for a single connection (unacknowleged packets).
      */
-    Integer getMaxData();
+    int getMaxData();
 
     /**
-     * Returns a function that creates a new connection handler for the given connection ID.
+     * Called when a new connection is established.
+     * @return Connection handler
      */
     Function<Long, QuicApplicationProtocolConnectionHandler> getConnectionHandler();
 

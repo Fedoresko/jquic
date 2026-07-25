@@ -21,6 +21,7 @@ import java.io.IOException;
 import java.nio.channels.Channels;
 import java.nio.channels.WritableByteChannel;
 import java.util.TreeMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Buffers incoming and outgoing data for a single QUIC stream.
@@ -41,7 +42,7 @@ public class StreamBuffer {
     private long bufferedBytes = 0; // Bytes buffered but not yet delivered to application
 
     // Outgoing data tracking
-    private long nextSendOffset = 0;
+    private AtomicLong nextSendOffset = new AtomicLong(0);
 
     public StreamBuffer(long streamId, int streamBufferCapacity) {
         this.streamId = streamId;
@@ -163,9 +164,7 @@ public class StreamBuffer {
      * Called when application sends data on this stream.
      */
     public long allocateSendOffset(int dataLength) {
-        long offset = nextSendOffset;
-        nextSendOffset += dataLength;
-        return offset;
+        return nextSendOffset.getAndAdd(dataLength);
     }
 
     /**

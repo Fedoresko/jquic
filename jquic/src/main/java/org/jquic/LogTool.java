@@ -27,7 +27,7 @@ public class LogTool {
     
     public void info(String color, String format, Object ... args) {
         // РџРµСЂРµРґР°РµРј РЅР°Р·РІР°РЅРёРµ ANSI-С†РІРµС‚Р° РёР»Рё РєР»СЋС‡РµРІРѕРµ СЃР»РѕРІРѕ
-        MDC.put("moduleColor", color); // 35 вЂ” СЌС‚Рѕ РєРѕРґ Magenta (РїСѓСЂРїСѓСЂРЅС‹Р№) РІ ANSI
+        MDC.put("moduleColor", color); // 35 - СЌС‚Рѕ РєРѕРґ Magenta (РїСѓСЂРїСѓСЂРЅС‹Р№) РІ ANSI
 
         logger.info(format, args);
 
@@ -36,7 +36,7 @@ public class LogTool {
 
     public void info(String color, String format, Throwable e, Object ... args) {
         // РџРµСЂРµРґР°РµРј РЅР°Р·РІР°РЅРёРµ ANSI-С†РІРµС‚Р° РёР»Рё РєР»СЋС‡РµРІРѕРµ СЃР»РѕРІРѕ
-        MDC.put("moduleColor", color); // 35 вЂ” СЌС‚Рѕ РєРѕРґ Magenta (РїСѓСЂРїСѓСЂРЅС‹Р№) РІ ANSI
+        MDC.put("moduleColor", color); // 35 - СЌС‚Рѕ РєРѕРґ Magenta (РїСѓСЂРїСѓСЂРЅС‹Р№) РІ ANSI
 
         logger.info(format, e, args);
 
@@ -45,7 +45,7 @@ public class LogTool {
 
     public void warn(String color, String format, Object ... args) {
         // РџРµСЂРµРґР°РµРј РЅР°Р·РІР°РЅРёРµ ANSI-С†РІРµС‚Р° РёР»Рё РєР»СЋС‡РµРІРѕРµ СЃР»РѕРІРѕ
-        MDC.put("moduleColor", color); // 35 вЂ” СЌС‚Рѕ РєРѕРґ Magenta (РїСѓСЂРїСѓСЂРЅС‹Р№) РІ ANSI
+        MDC.put("moduleColor", color); // 35 - СЌС‚Рѕ РєРѕРґ Magenta (РїСѓСЂРїСѓСЂРЅС‹Р№) РІ ANSI
 
         logger.warn(format, args);
 
@@ -54,7 +54,7 @@ public class LogTool {
 
     public void warn(String color, String format, Throwable e, Object ... args) {
         // РџРµСЂРµРґР°РµРј РЅР°Р·РІР°РЅРёРµ ANSI-С†РІРµС‚Р° РёР»Рё РєР»СЋС‡РµРІРѕРµ СЃР»РѕРІРѕ
-        MDC.put("moduleColor", color); // 35 вЂ” СЌС‚Рѕ РєРѕРґ Magenta (РїСѓСЂРїСѓСЂРЅС‹Р№) РІ ANSI
+        MDC.put("moduleColor", color); // 35 - СЌС‚Рѕ РєРѕРґ Magenta (РїСѓСЂРїСѓСЂРЅС‹Р№) РІ ANSI
 
         logger.warn(format, e, args);
 
@@ -63,7 +63,7 @@ public class LogTool {
 
     public void debug(String color, String format, Object ... args) {
         // РџРµСЂРµРґР°РµРј РЅР°Р·РІР°РЅРёРµ ANSI-С†РІРµС‚Р° РёР»Рё РєР»СЋС‡РµРІРѕРµ СЃР»РѕРІРѕ
-        MDC.put("moduleColor", color); // 35 вЂ” СЌС‚Рѕ РєРѕРґ Magenta (РїСѓСЂРїСѓСЂРЅС‹Р№) РІ ANSI
+        MDC.put("moduleColor", color); // 35 - СЌС‚Рѕ РєРѕРґ Magenta (РїСѓСЂРїСѓСЂРЅС‹Р№) РІ ANSI
 
         logger.debug(format, args);
 
@@ -72,7 +72,7 @@ public class LogTool {
 
     public void debug(String color, String format, Throwable e, Object ... args) {
         // РџРµСЂРµРґР°РµРј РЅР°Р·РІР°РЅРёРµ ANSI-С†РІРµС‚Р° РёР»Рё РєР»СЋС‡РµРІРѕРµ СЃР»РѕРІРѕ
-        MDC.put("moduleColor", color); // 35 вЂ” СЌС‚Рѕ РєРѕРґ Magenta (РїСѓСЂРїСѓСЂРЅС‹Р№) РІ ANSI
+        MDC.put("moduleColor", color); // 35 - СЌС‚Рѕ РєРѕРґ Magenta (РїСѓСЂРїСѓСЂРЅС‹Р№) РІ ANSI
 
         logger.debug(format, e, args);
 
@@ -81,7 +81,7 @@ public class LogTool {
 
     public void error(String color, String format, Object ... args) {
         // РџРµСЂРµРґР°РµРј РЅР°Р·РІР°РЅРёРµ ANSI-С†РІРµС‚Р° РёР»Рё РєР»СЋС‡РµРІРѕРµ СЃР»РѕРІРѕ
-        MDC.put("moduleColor", color); // 35 вЂ” СЌС‚Рѕ РєРѕРґ Magenta (РїСѓСЂРїСѓСЂРЅС‹Р№) РІ ANSI
+        MDC.put("moduleColor", color); // 35 - СЌС‚Рѕ РєРѕРґ Magenta (РїСѓСЂРїСѓСЂРЅС‹Р№) РІ ANSI
 
         logger.error(format, args);
 
@@ -90,7 +90,7 @@ public class LogTool {
 
     public void error(String color, String format, Throwable e, Object ... args) {
         // РџРµСЂРµРґР°РµРј РЅР°Р·РІР°РЅРёРµ ANSI-С†РІРµС‚Р° РёР»Рё РєР»СЋС‡РµРІРѕРµ СЃР»РѕРІРѕ
-        MDC.put("moduleColor", color); // 35 вЂ” СЌС‚Рѕ РєРѕРґ Magenta (РїСѓСЂРїСѓСЂРЅС‹Р№) РІ ANSI
+        MDC.put("moduleColor", color); // 35 - СЌС‚Рѕ РєРѕРґ Magenta (РїСѓСЂРїСѓСЂРЅС‹Р№) РІ ANSI
 
         logger.error(format, e, args);
 
