@@ -201,7 +201,6 @@ public class BpfRouting {
      *
      * @param cid        The cid as an integer
      * @param selectorId The selectorId as a long (file descriptor or other data)
-     * @throws IOException if communication with daemon fails
      */
     public static void updateRouting(long cid, int selectorId) {
         if (!isReady) {

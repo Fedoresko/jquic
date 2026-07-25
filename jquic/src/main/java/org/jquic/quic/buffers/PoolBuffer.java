@@ -38,7 +38,7 @@ public interface PoolBuffer {
 
     /**
      * Returns reference ByteBuffer to underlying Pool Buffer.
-     * @return reference ButeBuffer or null after {@release()}
+     * @return reference ButeBuffer or null after
      */
     ByteBuffer buf();
 }

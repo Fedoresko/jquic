@@ -24,7 +24,7 @@ import java.util.*;
 
 /**
  * Manages packet number space for a specific encryption level (Initial, Handshake, or Application).
- * Implements packet number allocation, ACK tracking, and loss detection per RFC 9000 & 9002.
+ * Implements packet number allocation, ACK tracking, and loss detection per RFC 9000 and 9002.
  */
 public class PacketNumberSpace {
     private static final Logger logger = LoggerFactory.getLogger(PacketNumberSpace.class);

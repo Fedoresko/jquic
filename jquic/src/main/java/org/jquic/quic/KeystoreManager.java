@@ -135,9 +135,9 @@ public class KeystoreManager {
 
     /**
      * Encodes certificate chain in TLS Certificate message format (RFC 8446 Section 4.4.2).
-     * Format: certificate_list<0..2^24-1> where each entry is:
-     *   - cert_data<1..2^24-1> (DER-encoded certificate)
-     *   - extensions<0..2^16-1> (empty for now)
+     * Format: certificate_list &lt;0..2^24-1&gt; where each entry is:
+     *   - cert_data&lt;1..2^24-1&gt; (DER-encoded certificate)
+     *   - extensions&lt;0..2^16-1&gt; (empty for now)
      */
     public byte[] encodeCertificateChainTls() throws CertificateEncodingException {
         // Calculate total size
