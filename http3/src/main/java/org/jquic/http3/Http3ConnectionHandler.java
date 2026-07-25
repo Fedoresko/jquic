@@ -386,7 +386,6 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
 
     private void finishStream(long streamId) {
         futures.remove(streamId).thenAcceptAsync(dataOutputStream -> {
-            System.out.println("Finished stream " + streamId);
             try {
                 dataOutputStream.close();
             } catch (IOException _) {}

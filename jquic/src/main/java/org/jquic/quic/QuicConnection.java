@@ -84,6 +84,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
     ConnectionStreamManager connectionStreamManager;
     private long currentTimestamp;
     private final byte[] statelessResetToken;
+    private final QuicVersion quicVersion;
 
     // ALPN - negotiated application protocol (RFC 9001 Section 8.1)
     private String negotiatedProtocol = null;
@@ -117,7 +118,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
     byte[] clientCid;
     private final SelectorThread selector;
 
-    public QuicConnection(long connectionId, SocketAddress remoteAddress, MessagePassingQueue<OutboxRecord> outputQueue, SelectorThread selector) {
+    public QuicConnection(long connectionId, QuicVersion version, SocketAddress remoteAddress, MessagePassingQueue<OutboxRecord> outputQueue, SelectorThread selector) {
         this.connectionId = connectionId;
         this.connectionIdBytes = ByteBuffer.allocate(8).putLong(connectionId);
         this.remoteAddress = remoteAddress;
@@ -126,6 +127,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
         this.currentTimestamp = System.currentTimeMillis();
         this.timeoutTimestamp = idleTimeoutMs + currentTimestamp;
         this.selector = selector;
+        this.quicVersion = version;
         statelessResetToken = QuicCrypto.generateStatelessResetToken(ByteBuffer.allocate(8).putLong(connectionId).array());
         logger.info("Connection {} initial tiemout set to {}", connectionId, timeoutTimestamp);
     }
@@ -356,7 +358,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
             connectionMetadata.originalDCid = destinationCid;
             isNewConnection = true;
             try {
-                QuicCrypto.PacketProtectionKeysWithHP[] keys = QuicCrypto.deriveInitialKeys(
+                QuicCrypto.PacketProtectionKeysWithHP[] keys = QuicCrypto.deriveInitialKeys(quicVersion,
                         destinationCid);
                 connectionMetadata.clientInitialKeys = keys[0];
                 connectionMetadata.serverInitialKeys = keys[1];
@@ -560,7 +562,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
                 // The correct order is: ClientHello в†’ ServerHello в†’ Certificate в†’
                 // CertificateVerify в†’ server Finished в†’ client Finished.
 
-                QuicCrypto.createApplicationKeys(connectionMetadata);
+                QuicCrypto.createApplicationKeys(quicVersion, connectionMetadata);
                 logger.debug("1-RTT application keys derived (transcript complete)");
 
                 connectionMetadata.updateTranscript(clientFinishedBytes);
@@ -629,7 +631,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
         }
         if (differentKeyPhase && header.packetNumber > connectionMetadata.lastPhaseSwitchPacketNumber) {
             try {
-                rotateApplicationKeys(connectionMetadata);
+                rotateApplicationKeys(quicVersion, connectionMetadata);
                 connectionMetadata.lastPhaseSwitchPacketNumber = header.packetNumber;
             } catch (QuicCrypto.CryptoException e) {
                 logger.error("Could not rotate secrets", e);
@@ -952,7 +954,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
 
                 sendInitialResponse();
 
-                QuicCrypto.generateHandshakeSecrets(connectionMetadata);
+                QuicCrypto.generateHandshakeSecrets(quicVersion, connectionMetadata);
 
                 // Generate Handshake response with server Certificate/Finished.
                 // This updates the transcript with: Certificate, CertificateVerify, server Finished.
@@ -1115,6 +1117,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
         try {
             completePacket = switch (phase) {
                 case INITIAL -> QuicPacketBuilder.buildInitialPacket(
+                        quicVersion,
                         getBufferPool(),
                         clientCid,      // DCID = connection ID
                         connectionIdBytes,      // SCID = connection ID (server uses same)
@@ -1124,6 +1127,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
                         connectionMetadata.serverInitialKeys
                     );
                 case HANDSHAKE -> QuicPacketBuilder.buildHandshakePacket(
+                        quicVersion,
                         getBufferPool(),
                         clientCid,      // DCID = connection ID
                         connectionIdBytes,      // SCID = connection ID (server uses same)
@@ -1133,6 +1137,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
                         connectionMetadata.serverHandshakeKeys
                     );
                 case APPLICATION ->  QuicPacketBuilder.build1RttPacket(
+                        quicVersion,
                         getBufferPool(),
                         clientCid,
                         packetNumber,

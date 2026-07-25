@@ -1,5 +1,7 @@
 package org.jquic.quic;
 
+import org.jquic.quic.buffers.BufferPool;
+import org.jquic.quic.buffers.PoolBuffer;
 import org.junit.jupiter.api.Test;
 import javax.crypto.Cipher;
 import javax.crypto.spec.SecretKeySpec;
@@ -249,6 +251,7 @@ public class QuicPacketHeaderTest {
         buf.putInt(1); // version
         buf.put((byte) dcid.length);
         buf.put(dcid);
+        buf.put((byte) 0); // scid length 0
         buf.flip();
 
         QuicPacketHeader.PacketSummary summary = QuicPacketHeader.parseSummary(buf);
@@ -332,7 +335,7 @@ public class QuicPacketHeaderTest {
         // 1. Long Header (Initial)
         QuicPacketHeader header = new QuicPacketHeader(
                 new QuicPacketHeader.PacketNumber(2, 0x12345678L, (byte) 0),
-                0x00000001, dcid, scid, QuicPacketHeader.PacketType.INITIAL, token, 100, (byte) 0);
+                QuicVersion.QUIC_VERSION_1, dcid, scid, QuicPacketHeader.PacketType.INITIAL, token, 100, (byte) 0);
 
         ByteBuffer buf = ByteBuffer.allocate(header.headerLength);
         header.write(buf);
@@ -366,7 +369,7 @@ public class QuicPacketHeaderTest {
         buf = ByteBuffer.allocate(100);
         header = new QuicPacketHeader(
                 new QuicPacketHeader.PacketNumber(1, 0x12345678L, (byte) 0),
-                0, dcid, null, QuicPacketHeader.PacketType.ONE_RTT, null, -1, (byte) 1);
+                QuicVersion.UNKNOWN, dcid, null, QuicPacketHeader.PacketType.ONE_RTT, null, -1, (byte) 1);
         header.write(buf);
         buf.flip();
 
@@ -432,7 +435,7 @@ public class QuicPacketHeaderTest {
             int pnLen = QuicPacketHeader.calculatePnLength(clientPn, clientLargestSeen == -1 ? 0 : clientLargestSeen);
             QuicPacketHeader clientHeader = new QuicPacketHeader(
                     new QuicPacketHeader.PacketNumber(pnLen, clientPn, (byte) 0),
-                    0, dcid, null, QuicPacketHeader.PacketType.ONE_RTT, null, -1, (byte) 0);
+                    QuicVersion.UNKNOWN, dcid, null, QuicPacketHeader.PacketType.ONE_RTT, null, -1, (byte) 0);
             
             ByteBuffer buf = ByteBuffer.allocate(clientHeader.headerLength + 10); // + some payload space
             clientHeader.write(buf);
@@ -450,7 +453,7 @@ public class QuicPacketHeaderTest {
             pnLen = QuicPacketHeader.calculatePnLength(serverPn, serverLargestSeen == -1 ? 0 : serverLargestSeen);
             QuicPacketHeader serverHeader = new QuicPacketHeader(
                     new QuicPacketHeader.PacketNumber(pnLen, serverPn, (byte) 0),
-                    0, dcid, null, QuicPacketHeader.PacketType.ONE_RTT, null, -1, (byte) 0);
+                    QuicVersion.UNKNOWN, dcid, null, QuicPacketHeader.PacketType.ONE_RTT, null, -1, (byte) 0);
             
             buf = ByteBuffer.allocate(serverHeader.headerLength + 10);
             serverHeader.write(buf);
@@ -463,5 +466,150 @@ public class QuicPacketHeaderTest {
             assertEquals(serverPn, parsedByClient.packetNumber, "Client failed to decode server PN at exchange " + i);
             clientLargestSeen = Math.max(clientLargestSeen, parsedByClient.packetNumber);
         }
+    }
+
+    @Test
+    public void testVersionNegotiation() {
+        byte[] dcid = new byte[] {1, 2, 3, 4, 5, 6, 7, 8};
+        byte[] scid = new byte[] {8, 7, 6, 5, 4, 3, 2, 1};
+        int unsupportedVersion = 0x12345678;
+
+        // Simulate a Long Header packet with unsupported version
+        ByteBuffer buf = ByteBuffer.allocate(100);
+        buf.put((byte) 0xC0); // Long header
+        buf.putInt(unsupportedVersion);
+        buf.put((byte) dcid.length);
+        buf.put(dcid);
+        buf.put((byte) scid.length);
+        buf.put(scid);
+        buf.flip();
+
+        QuicPacketHeader.PacketSummary summary = QuicPacketHeader.parseSummary(buf);
+        assertNotNull(summary);
+        assertEquals(QuicVersion.UNKNOWN, summary.version());
+        assertArrayEquals(dcid, summary.dcid());
+        assertArrayEquals(scid, summary.scid());
+
+        // Now test building a Version Negotiation packet
+        PoolBuffer vnPoolBuffer = QuicPacketBuilder.buildVersionNegotiationPacket(new BufferPool(), scid, dcid);
+        ByteBuffer vnBuf = vnPoolBuffer.buf();
+
+        byte firstByte = vnBuf.get();
+        assertTrue((firstByte & 0x80) != 0, "VN packet must have header form set to 1");
+        assertTrue((firstByte & 0x40) != 0, "Fixed bit should be set in our implementation");
+
+        assertEquals(0, vnBuf.getInt(), "Version must be 0 for VN packet");
+
+        assertEquals((byte) scid.length, vnBuf.get());
+        byte[] readDcid = new byte[scid.length];
+        vnBuf.get(readDcid);
+        assertArrayEquals(scid, readDcid, "VN DCID should be received SCID");
+
+        assertEquals((byte) dcid.length, vnBuf.get());
+        byte[] readScid = new byte[dcid.length];
+        vnBuf.get(readScid);
+        assertArrayEquals(dcid, readScid, "VN SCID should be received DCID");
+
+        assertEquals(QuicVersion.QUIC_VERSION_1.val, vnBuf.getInt(), "Supported version 1 must be present");
+        assertEquals(QuicVersion.QUIC_VERSION_2.val, vnBuf.getInt(), "Supported version 2 must be present");
+        assertFalse(vnBuf.hasRemaining());
+
+        vnPoolBuffer.release();
+    }
+
+    @Test
+    public void testQuicV2PacketTypeParsing() {
+        byte[] dcid = new byte[]{1, 2, 3, 4, 5, 6, 7, 8};
+        byte[] scid = new byte[]{8, 7, 6, 5, 4, 3, 2, 1};
+        
+        // RFC 9369 QUIC V2 Long Header Types:
+        // Initial: 0b01 (0x10)
+        // Zero-RTT: 0b10 (0x20)
+        // Handshake: 0b11 (0x30)
+        // Retry: 0b00 (0x00)
+
+        // 1. Initial
+        byte flags = (byte) (0x80 | 0x40 | 0x10); // Long, Fixed, Initial (V2)
+        ByteBuffer buf = ByteBuffer.allocate(100);
+        buf.put(flags);
+        buf.putInt(QuicVersion.QUIC_VERSION_2.val);
+        buf.put((byte) dcid.length).put(dcid);
+        buf.put((byte) scid.length).put(scid);
+        buf.flip();
+
+        QuicPacketHeader.PacketSummary summary = QuicPacketHeader.parseSummary(buf);
+        assertNotNull(summary);
+        assertEquals(QuicPacketHeader.PacketType.INITIAL, summary.type());
+        assertEquals(QuicVersion.QUIC_VERSION_2, summary.version());
+
+        // 2. Handshake
+        buf.clear();
+        flags = (byte) (0x80 | 0x40 | 0x30); // Long, Fixed, Handshake (V2)
+        buf.put(flags);
+        buf.putInt(QuicVersion.QUIC_VERSION_2.val);
+        buf.put((byte) dcid.length).put(dcid);
+        buf.put((byte) scid.length).put(scid);
+        buf.flip();
+
+        summary = QuicPacketHeader.parseSummary(buf);
+        assertNotNull(summary);
+        assertEquals(QuicPacketHeader.PacketType.HANDSHAKE, summary.type());
+
+        // 3. Zero-RTT
+        buf.clear();
+        flags = (byte) (0x80 | 0x40 | 0x20); // Long, Fixed, Zero-RTT (V2)
+        buf.put(flags);
+        buf.putInt(QuicVersion.QUIC_VERSION_2.val);
+        buf.put((byte) dcid.length).put(dcid);
+        buf.put((byte) scid.length).put(scid);
+        buf.flip();
+
+        summary = QuicPacketHeader.parseSummary(buf);
+        assertNotNull(summary);
+        assertEquals(QuicPacketHeader.PacketType.ZERO_RTT, summary.type());
+
+        // 4. Retry
+        buf.clear();
+        flags = (byte) (0x80 | 0x40 | 0x00); // Long, Fixed, Retry (V2)
+        buf.put(flags);
+        buf.putInt(QuicVersion.QUIC_VERSION_2.val);
+        buf.put((byte) dcid.length).put(dcid);
+        buf.put((byte) scid.length).put(scid);
+        buf.flip();
+
+        summary = QuicPacketHeader.parseSummary(buf);
+        assertNotNull(summary);
+        assertEquals(QuicPacketHeader.PacketType.RETRY, summary.type());
+    }
+
+    @Test
+    public void testQuicV2HeaderWriting() {
+        byte[] dcid = new byte[]{1, 2, 3, 4, 5, 6, 7, 8};
+        byte[] scid = new byte[]{8, 7, 6, 5, 4, 3, 2, 1};
+
+        // Test Initial packet for QUIC V2
+        QuicPacketHeader header = new QuicPacketHeader(
+                new QuicPacketHeader.PacketNumber(1, 100, (byte) 0),
+                QuicVersion.QUIC_VERSION_2, dcid, scid, QuicPacketHeader.PacketType.INITIAL, new byte[0], 0, (byte) 0);
+
+        ByteBuffer buf = ByteBuffer.allocate(header.headerLength);
+        header.write(buf);
+        buf.flip();
+
+        // Flags should be 0x80 | 0x40 | 0x10 (Initial V2) | 0x00 (1 byte PN) = 0xD0
+        assertEquals((byte) 0xD0, buf.get());
+        assertEquals(QuicVersion.QUIC_VERSION_2.val, buf.getInt());
+        
+        // Test Handshake packet for QUIC V2
+        header = new QuicPacketHeader(
+                new QuicPacketHeader.PacketNumber(1, 101, (byte) 0),
+                QuicVersion.QUIC_VERSION_2, dcid, scid, QuicPacketHeader.PacketType.HANDSHAKE, null, 0, (byte) 0);
+
+        buf = ByteBuffer.allocate(header.headerLength);
+        header.write(buf);
+        buf.flip();
+
+        // Flags should be 0x80 | 0x40 | 0x30 (Handshake V2) | 0x00 (1 byte PN) = 0xF0
+        assertEquals((byte) 0xF0, buf.get());
     }
 }

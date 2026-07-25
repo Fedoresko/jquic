@@ -24,8 +24,6 @@ import javax.crypto.Cipher;
 import java.nio.ByteBuffer;
 import java.util.Objects;
 
-import static org.jquic.quic.QuicPacketBuilder.QUIC_VERSION_1;
-
 /**
  * Represents a QUIC packet header with header protection still applied.
  * The packet number and lower bits of the flags byte are still masked.
@@ -46,23 +44,23 @@ public class QuicPacketHeader {
     public final byte[] rawData;
 
     public QuicPacketHeader(PacketNumber packetNumber,
-                            int quicVersion, byte[] destinationCid,
+                            QuicVersion quicVersion, byte[] destinationCid,
                             byte[] sourceCid, PacketType packetType, byte[] token, long payloadLength, byte keyPhase) {
         this(packetNumber, quicVersion, destinationCid, sourceCid, packetType, token, payloadLength, keyPhase, null);
     }
 
     public QuicPacketHeader(PacketNumber packetNumber,
-                            int quicVersion, byte[] destinationCid,
+                            QuicVersion quicVersion, byte[] destinationCid,
                             byte[] sourceCid, PacketType packetType, byte[] token, long payloadLength, byte keyPhase, byte[] rawData) {
 
         flags = packetType.isLongHeader() ?
-                buildLongHeaderFlags(packetType, packetNumber.pnLength) :
+                buildLongHeaderFlags(quicVersion, packetType, packetNumber.pnLength) :
                 buildShortHeaderFlags((byte)0, keyPhase, packetNumber.pnLength);
 
         this.packetNumber = packetNumber.packetNumber;
         this.pnLength = packetNumber.pnLength;
         this.packetType = packetType;
-        this.version = quicVersion;
+        this.version = quicVersion.val;
         this.destinationCid = destinationCid;
         this.sourceCid = sourceCid;
         this.token = token;
@@ -182,48 +180,68 @@ public class QuicPacketHeader {
     }
 
     public static PacketSummary parseSummary(ByteBuffer packet) {
-        int pos = packet.position();
-        byte flags = packet.get();
+        try {
+            int pos = packet.position();
+            byte flags = packet.get();
 
-        if ((flags & 0x40) == 0) return null; //not valid QIUC packet
+            if ((flags & 0x40) == 0) {
+                log.info("Not valid QUIC packet");
+                return null; //not valid QIUC packet
+            }
 
-        if ( (flags & 0x80) == 0 ) {
-            byte[] destinationCid = new byte[8];
+            if ((flags & 0x80) == 0) {
+                byte[] destinationCid = new byte[8];
+                packet.get(destinationCid);
+
+                packet.position(pos);
+                return new PacketSummary(PacketType.ONE_RTT, QuicVersion.UNKNOWN, destinationCid, null); // Not long header
+            }
+
+            QuicVersion version = QuicVersion.of(packet.getInt());
+
+            // Read DCID
+            int dcidLen = packet.get() & 0xFF;
+            byte[] destinationCid = new byte[dcidLen];
             packet.get(destinationCid);
 
-            packet.position(pos);
-            return new PacketSummary(PacketType.ONE_RTT, destinationCid); // Not long header
-        }
+            // Read SCID
+            int scidLen = packet.get() & 0xFF;
+            byte[] sourceCid = new byte[scidLen];
+            packet.get(sourceCid);
 
-        int version = packet.getInt();
-        if (version != QUIC_VERSION_1) {
+            packet.position(pos);
+            return new PacketSummary(fromFlags(version, flags), version, destinationCid, sourceCid);
+        } catch (Exception e) {
             return null;
         }
-
-        // Read DCID
-        int dcidLen = packet.get() & 0xFF;
-        byte[] destinationCid = new byte[dcidLen];
-        packet.get(destinationCid);
-        packet.position(pos);
-        return new PacketSummary(fromFlags(flags), destinationCid);
     }
 
-    public record PacketSummary(PacketType type, byte[] dcid) {}
+    public record PacketSummary(PacketType type, QuicVersion version, byte[] dcid, byte[] scid) {}
 
-    private static PacketType fromFlags(byte flags) {
+    private static PacketType fromFlags(QuicVersion quicVersion, byte flags) {
         int typeField = (flags & 0x30) >> 4;
-        return switch (typeField) {
-            case 0x00 -> PacketType.INITIAL;
-            case 0x01 -> PacketType.ZERO_RTT;
-            case 0x02 -> PacketType.HANDSHAKE;
-            case 0x03 -> PacketType.RETRY;
-            default -> null;
-        };
+        if (quicVersion == QuicVersion.QUIC_VERSION_2) {
+            return switch (typeField) {
+                case 0x01 -> PacketType.INITIAL;
+                case 0x02 -> PacketType.ZERO_RTT;
+                case 0x03 -> PacketType.HANDSHAKE;
+                case 0x00 -> PacketType.RETRY;
+                default -> null;
+            };
+        } else {
+            return switch (typeField) {
+                case 0x00 -> PacketType.INITIAL;
+                case 0x01 -> PacketType.ZERO_RTT;
+                case 0x02 -> PacketType.HANDSHAKE;
+                case 0x03 -> PacketType.RETRY;
+                default -> null;
+            };
+        }
     }
 
     private static QuicPacketHeader parseLongHeader(ByteBuffer packet, int startPosition, byte flags, Cipher headerProtection, long largestPn) {
         // Read version (4 bytes)
-        int version = packet.getInt();
+        QuicVersion version = QuicVersion.of(packet.getInt());
 
         // Read DCID
         int dcidLen = packet.get() & 0xFF;
@@ -236,7 +254,7 @@ public class QuicPacketHeader {
         packet.get(sourceCid);
 
         // Determine packet type from flags
-        PacketType packetType = fromFlags(flags);
+        PacketType packetType = fromFlags(version, flags);
         byte[] token;
         if (Objects.requireNonNull(packetType) == PacketType.INITIAL) {// Read token
             long tokenLen = QuicVarint.read(packet);
@@ -270,7 +288,7 @@ public class QuicPacketHeader {
         byte [] rawData = new byte[headerLen];
         packet.duplicate().position(startPosition).get(rawData);
 
-        return new QuicPacketHeader(packetNumber, 0, destinationCid, null, PacketType.ONE_RTT, null, -1, (byte) (packetNumber.flags >> 2 & 0x01), rawData);
+        return new QuicPacketHeader(packetNumber, QuicVersion.UNKNOWN, destinationCid, null, PacketType.ONE_RTT, null, -1, (byte) (packetNumber.flags >> 2 & 0x01), rawData);
     }
 
     public record PacketNumber(int pnLength, long packetNumber, byte flags) {}
@@ -394,20 +412,31 @@ public class QuicPacketHeader {
         }
     }
 
-    private static byte buildLongHeaderFlags(PacketType packetType, int pnLength) {
+    private static byte buildLongHeaderFlags(QuicVersion version, PacketType packetType, int pnLength) {
         // Bit 0: Header Form must be 1 (0x80) for a Long Header
         // Bit 1: Fixed Bit must be 1 (0x40)
         int flags = 0x80 | 0x40;
 
-        // Bits 4-5: Type-Specific bits (Reserved, must be 0 for Initial/Handshake)
-        int typeBits = switch (packetType) {
-            case INITIAL -> 0b00;
-            case ZERO_RTT -> 0b01;
-            case HANDSHAKE -> 0b10;
-            case RETRY -> 0b11;
-            default -> 0;
-        };
-        flags |= (typeBits << 4);     // Set Packet Type (Bits 2-3)
+        // Bits 4-5: Type-Specific bits
+        int typeBits;
+        if (version == QuicVersion.QUIC_VERSION_2) {
+            typeBits = switch (packetType) {
+                case INITIAL -> 0b01;
+                case ZERO_RTT -> 0b10;
+                case HANDSHAKE -> 0b11;
+                case RETRY -> 0b00;
+                default -> 0;
+            };
+        } else {
+            typeBits = switch (packetType) {
+                case INITIAL -> 0b00;
+                case ZERO_RTT -> 0b01;
+                case HANDSHAKE -> 0b10;
+                case RETRY -> 0b11;
+                default -> 0;
+            };
+        }
+        flags |= (typeBits << 4);
 
         // Bits 6-7: Packet Number Length (Mapped from 1-4 bytes to 0-3 index)
         int pnLengthBits = pnLength - 1;

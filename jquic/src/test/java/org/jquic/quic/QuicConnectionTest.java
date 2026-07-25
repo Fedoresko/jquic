@@ -23,11 +23,9 @@ import org.jquic.quic.buffers.RootPoolBuffer;
 import org.jquic.quic.streamapi.ConnectionStreamManager;
 import org.jquic.quic.streamapi.QuicApplicationProtocol;
 import org.jquic.quic.streamapi.QuicApplicationProtocolConnectionHandler;
-import org.jquic.quic.streamapi.QuicConnectionControl;
 import org.jquic.quic.streamapi.frames.ProtocolFrame;
 import org.jquic.quic.streamapi.frames.StreamFrameData;
 import org.jquic.quic.streamapi.impl.QuicStreamEngineImpl;
-import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -144,7 +142,7 @@ class QuicConnectionTest {
         frameBuilderMock = Mockito.mockStatic(QuicFrameBuilder.class, Answers.CALLS_REAL_METHODS);
         selectorMock = mock(SelectorThread.class);
         when(selectorMock.getBufferPool()).thenReturn(pool);
-        connection = new QuicConnection(TEST_CID, TEST_ADDRESS, new SpscLinkedQueue<>(), selectorMock);
+        connection = new QuicConnection(TEST_CID, QuicVersion.QUIC_VERSION_1, TEST_ADDRESS, new SpscLinkedQueue<>(), selectorMock);
         Field streamEngineInternal = QuicEngine.class.getDeclaredField("streamEngineInternal");
         streamEngineInternal.setAccessible(true);
         QuicStreamEngineImpl value = new QuicStreamEngineImpl(0);
@@ -443,7 +441,7 @@ class QuicConnectionTest {
         connection.process1RttPacket(new RootPoolBuffer(packet, pool, false), 0);
 
         // rotateApplicationKeys must have been called exactly once
-        cryptoMock.verify(() -> QuicCrypto.rotateApplicationKeys(any()), times(1));
+        cryptoMock.verify(() -> QuicCrypto.rotateApplicationKeys(any(), any()), times(1));
 
         ConnectionMetadata meta = connection.getTlsMetadata();
 
@@ -477,7 +475,7 @@ class QuicConnectionTest {
         ByteBuffer packet = createMock1RttPacketWithKeyPhase(5L, new byte[]{0x01}, false);
         connection.process1RttPacket(new RootPoolBuffer(packet, pool, false), 0);
 
-        cryptoMock.verify(() -> QuicCrypto.rotateApplicationKeys(any()), never());
+        cryptoMock.verify(() -> QuicCrypto.rotateApplicationKeys(any(), any()), never());
 
         // Keys must be unchanged
         assertSame(keyBefore, connection.getTlsMetadata().clientApplicationKeys.key(),
@@ -506,7 +504,7 @@ class QuicConnectionTest {
         connection.process1RttPacket(new RootPoolBuffer(followUpPacket, pool, false), 0);
 
         // rotateApplicationKeys called exactly once (only for the first phase flip)
-        cryptoMock.verify(() -> QuicCrypto.rotateApplicationKeys(any()), times(1));
+        cryptoMock.verify(() -> QuicCrypto.rotateApplicationKeys(any(), any()), times(1));
 
         // Keys must remain the post-rotation keys after the follow-up packet
         assertSame(rotatedKey, connection.getTlsMetadata().clientApplicationKeys.key(),
@@ -577,7 +575,7 @@ class QuicConnectionTest {
         assertEquals((byte) 0, connection.getTlsMetadata().currentPhase,
                 "currentPhase should be 0 after second rotation");
 
-        cryptoMock.verify(() -> QuicCrypto.rotateApplicationKeys(any()), times(2));
+        cryptoMock.verify(() -> QuicCrypto.rotateApplicationKeys(any(), any()), times(2));
     }
 
     // ========================================================================
@@ -1189,12 +1187,12 @@ class QuicConnectionTest {
         QuicCrypto.PacketProtectionKeysWithHP mockKeys = new QuicCrypto.PacketProtectionKeysWithHP(
                 mock(SecretKey.class), new byte[12], null
         );
-        mock.when(() -> QuicCrypto.deriveInitialKeys(any(byte[].class)))
+        mock.when(() -> QuicCrypto.deriveInitialKeys(any(QuicVersion.class), any(byte[].class)))
                 .thenReturn(new QuicCrypto.PacketProtectionKeysWithHP[]{mockKeys, mockKeys});
 
         mock.when(() -> QuicCrypto.signData(any(byte[].class), anyShort())).thenReturn(new byte[16]);
 
-        mock.when(() -> QuicCrypto.generateHandshakeSecrets(any())).thenAnswer(inv -> {
+        mock.when(() -> QuicCrypto.generateHandshakeSecrets(any(), any())).thenAnswer(inv -> {
             ConnectionMetadata metadata = inv.getArgument(0);
             metadata.clientHandshakeKeys = mockKeys;
             metadata.serverHandshakeKeys = mockKeys;
@@ -1206,7 +1204,7 @@ class QuicConnectionTest {
         mock.when(() -> QuicCrypto.processClientHello(any(ConnectionMetadata.class), any(ByteBuffer.class)))
                 .thenReturn(mockMetadata);
 
-        mock.when(() -> QuicCrypto.createApplicationKeys(any(ConnectionMetadata.class))).thenAnswer(inv -> {
+        mock.when(() -> QuicCrypto.createApplicationKeys(any(), any(ConnectionMetadata.class))).thenAnswer(inv -> {
              ConnectionMetadata metadata = inv.getArgument(0);
              metadata.clientApplicationHeaderProtection = null;
              metadata.serverApplicationHeaderProtection = null;

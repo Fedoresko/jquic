@@ -29,18 +29,15 @@ import static org.jquic.quic.QuicCrypto.GCM_TAG_LENGTH;
 
 /**
  * Builds complete QUIC packets with proper headers and encryption (RFC 9000 Section 17, RFC 9001 Section 5).
- * 
  * This builder encapsulates the correct QUIC packet construction process:
  * 1. Build packet header
  * 2. Encrypt payload with header as Associated Data (AEAD)
  * 3. Combine header + encrypted payload (with 16-byte GCM tag)
- * 
  * Per RFC 9001 Section 5.4.1, the AEAD function authenticates the packet header using Associated Data.
  * The GCM authentication tag protects BOTH the header and the encrypted payload.
  */
 public class QuicPacketBuilder {
     // QUIC version 1 (RFC 9000)
-    public static final int QUIC_VERSION_1 = 0x00000001;
     public static final int STATELESS_RESET_TOKEN_LENGTH = 16; // RFC 9000: 16 bytes
     private static final Logger log = LoggerFactory.getLogger(QuicPacketBuilder.class);
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
@@ -49,13 +46,11 @@ public class QuicPacketBuilder {
 
     /**
      * Builds Initial packet with long header and proper AEAD encryption (RFC 9000 Section 17.2.2, RFC 9001 Section 5).
-     * 
      * This method correctly implements the QUIC packet protection:
      * 1. Constructs packet header
      * 2. Encrypts payload using AES-GCM with header as Associated Data
      * 3. Combines header + encrypted payload (which includes 16-byte GCM tag)
-     * 
-     * Format: flags(1) | version(4) | DCID_len(1) | DCID(8) | SCID_len(1) | SCID(8) | 
+     * Format: flags(1) | version(4) | DCID_len(1) | DCID(8) | SCID_len(1) | SCID(8) |
      *         token_len(varint) | length(varint) | packet_number(varint) | encrypted_payload(*)
      * 
      * @param destinationCid Destination connection ID
@@ -66,13 +61,13 @@ public class QuicPacketBuilder {
      * @return Complete Initial packet ready to send
      * @throws QuicCrypto.CryptoException if encryption fails
      */
-    public static PoolBuffer buildInitialPacket(BufferPool bufferPool, byte [] destinationCid, ByteBuffer sourceCid,
+    public static PoolBuffer buildInitialPacket(QuicVersion quicVersion, BufferPool bufferPool, byte [] destinationCid, ByteBuffer sourceCid,
                                                 long packetNumber, long largestAcked, ByteBuffer packetBuffer, QuicCrypto.PacketProtectionKeysWithHP keys) throws QuicCrypto.CryptoException {
         int encryptedPayloadSize = packetBuffer.remaining() + GCM_TAG_LENGTH;
         int pnLen = QuicPacketHeader.calculatePnLength(packetNumber, largestAcked);
 
         QuicPacketHeader header = new QuicPacketHeader(new QuicPacketHeader.PacketNumber(pnLen, packetNumber, (byte) 0x10),
-                QUIC_VERSION_1, destinationCid, sourceCid.array(), QuicPacketHeader.PacketType.INITIAL,
+                quicVersion, destinationCid, sourceCid.array(), QuicPacketHeader.PacketType.INITIAL,
                 new byte[0], encryptedPayloadSize + pnLen, (byte)0
         );
 
@@ -105,18 +100,17 @@ public class QuicPacketBuilder {
      * @param keys Encryption keys (RFC 9001 Section 5.4)
      * @throws QuicCrypto.CryptoException if encryption fails
      */
-    public static PoolBuffer buildHandshakePacket(BufferPool bufferPool, byte [] destinationCid, ByteBuffer sourceCid,
+    public static PoolBuffer buildHandshakePacket(QuicVersion quicVersion, BufferPool bufferPool, byte [] destinationCid, ByteBuffer sourceCid,
                                                   long packetNumber, long largestAcked, ByteBuffer payload, QuicCrypto.PacketProtectionKeysWithHP keys)
             throws QuicCrypto.CryptoException {
         int encryptedPayloadSize = payload.remaining() + GCM_TAG_LENGTH; // + GCM tag
         int pnLen = QuicPacketHeader.calculatePnLength(packetNumber, largestAcked);
 
         QuicPacketHeader header = new QuicPacketHeader(new QuicPacketHeader.PacketNumber(pnLen, packetNumber, (byte) 0x10),
-            QUIC_VERSION_1, destinationCid, sourceCid.array(),
+            quicVersion, destinationCid, sourceCid.array(),
             QuicPacketHeader.PacketType.HANDSHAKE, new byte[0], encryptedPayloadSize + pnLen, (byte)0 );
 
-        PoolBuffer byteBuffer = encryptAndProtectQuicPacket(bufferPool, payload, keys.key(), keys.iv(), header, keys.headerProtection());
-        return byteBuffer;
+        return encryptAndProtectQuicPacket(bufferPool, payload, keys.key(), keys.iv(), header, keys.headerProtection());
     }
 
     /**
@@ -131,7 +125,7 @@ public class QuicPacketBuilder {
      * @return Complete 1-RTT packet ready to send
      * @throws QuicCrypto.CryptoException if encryption fails
      */
-    public static PoolBuffer build1RttPacket(BufferPool bufferPool, byte [] destinationCid, long packetNumber, long largestAcked,
+    public static PoolBuffer build1RttPacket(QuicVersion quicVersion, BufferPool bufferPool, byte [] destinationCid, long packetNumber, long largestAcked,
                                              ByteBuffer plaintext, QuicCrypto.PacketProtectionKeys keys, Cipher hp_key, byte keyPhase) throws QuicCrypto.CryptoException {
         int pnLen = QuicPacketHeader.calculatePnLength(packetNumber, largestAcked);
 
@@ -140,7 +134,7 @@ public class QuicPacketBuilder {
         }
 
         QuicPacketHeader header = new QuicPacketHeader(new QuicPacketHeader.PacketNumber(pnLen, packetNumber, (byte) (0x40 | (keyPhase << 2))),
-                QUIC_VERSION_1, destinationCid, null,
+                quicVersion, destinationCid, null,
                 QuicPacketHeader.PacketType.ONE_RTT, null, -1, keyPhase);
 
         return encryptAndProtectQuicPacket(bufferPool, plaintext, keys.key(), keys.iv(), header, hp_key);
@@ -201,6 +195,37 @@ public class QuicPacketBuilder {
         for (int i = 0; i < pnLen; i++) {
             packet.put(pnOffset + i, (byte) (packet.get(pnOffset + i) ^ mask[1 + i]));
         }
+    }
+
+    public static PoolBuffer buildVersionNegotiationPacket(BufferPool bufferPool, byte[] destinationCid, byte[] sourceCid) {
+        PoolBuffer packet = bufferPool.requestWriteBuffer();
+        ByteBuffer buf = packet.buf();
+        int start = buf.position();
+
+        // Header Form (1) = 1, Unused (7) random
+        byte firstByte = (byte) (0x80 | (SECURE_RANDOM.nextInt(0x80) & 0x7F));
+        // Bit 1 MUST be set to 1 for fixed bit
+        firstByte |= 0x40;
+        buf.put(firstByte);
+
+        // Version (32) = 0
+        buf.putInt(0);
+
+        // Destination Connection ID Length (8)
+        buf.put((byte) destinationCid.length);
+        buf.put(destinationCid);
+
+        // Source Connection ID Length (8)
+        buf.put((byte) sourceCid.length);
+        buf.put(sourceCid);
+
+        // Supported Version (32) - we only support V1 and V2
+        buf.putInt(QuicVersion.QUIC_VERSION_1.val);
+        buf.putInt(QuicVersion.QUIC_VERSION_2.val);
+
+        buf.limit(buf.position());
+        buf.position(start);
+        return packet;
     }
 
     static PoolBuffer writeStatelessResetFrame(BufferPool bufferPool, long connectionId, int incomingPacketSize, byte[] statelessResetToken) {

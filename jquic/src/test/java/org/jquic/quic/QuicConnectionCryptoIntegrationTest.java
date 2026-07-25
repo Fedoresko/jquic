@@ -16,12 +16,12 @@
 package org.jquic.quic;
 
 import org.conscrypt.Conscrypt;
+import org.jctools.queues.SpscLinkedQueue;
 import org.jquic.quic.buffers.BorrowedPoolBuffer;
 import org.jquic.quic.buffers.BufferPool;
 import org.jquic.quic.buffers.PoolBuffer;
 import org.jquic.quic.buffers.RootPoolBuffer;
 import org.jquic.quic.streamapi.QuicApplicationProtocol;
-import org.jctools.queues.SpscLinkedQueue;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
@@ -39,7 +39,6 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -70,13 +69,20 @@ class QuicConnectionCryptoIntegrationTest {
     @BeforeAll
     static void beforeAll() {
         try {
-            when(pool.requestWriteBuffer()).thenAnswer((a) -> new RootPoolBuffer(ByteBuffer.allocate(2000).position(100), pool, true) );
+            when(pool.requestWriteBuffer()).thenAnswer((_) -> new RootPoolBuffer(ByteBuffer.allocate(2000).position(100), pool, true) );
             when(selectorMock.getBufferPool()).thenReturn(pool);
 
-            // Initialize QuicCrypto/KeystoreManager
-             java.lang.reflect.Method initCrypto = QuicCrypto.class.getDeclaredMethod("initKeystore");
-             initCrypto.setAccessible(true);
-             initCrypto.invoke(null);
+            // Initialize KeystoreManager manually to ensure it's not null
+            java.lang.reflect.Field kmField = QuicCrypto.class.getDeclaredField("keystoreManager");
+            kmField.setAccessible(true);
+            KeystoreManager existingKm = (KeystoreManager) kmField.get(null);
+            if (existingKm == null) {
+                KeystoreManager km = new KeystoreManager(QuicServerConfig.createDefault());
+                kmField.set(null, km);
+                System.out.println("[DEBUG_LOG] KeystoreManager initialized manually: " + km);
+            } else {
+                System.out.println("[DEBUG_LOG] KeystoreManager already initialized: " + existingKm);
+            }
 
              // Initialize QuicStreamEngineImpl in QuicEngine
              java.lang.reflect.Field engineField = QuicEngine.class.getDeclaredField("streamEngineInternal");
@@ -86,7 +92,7 @@ class QuicConnectionCryptoIntegrationTest {
                     new org.jquic.quic.streamapi.impl.QuicStreamEngineImpl(1);
                 QuicApplicationProtocol protocol = mock(QuicApplicationProtocol.class);
                 when(protocol.getProtocolName()).thenReturn("h3");
-                when(protocol.getConnectionHandler()).thenReturn(connectionId -> mock(org.jquic.quic.streamapi.QuicApplicationProtocolConnectionHandler.class));
+                when(protocol.getConnectionHandler()).thenReturn(_ -> mock(org.jquic.quic.streamapi.QuicApplicationProtocolConnectionHandler.class));
                 
                 org.jquic.quic.streamapi.CongestionControl cc = mock(org.jquic.quic.streamapi.CongestionControl.class);
                 when(cc.timeWindowMs()).thenReturn(100);
@@ -108,7 +114,7 @@ class QuicConnectionCryptoIntegrationTest {
         byte[] destinationCid = new byte[8];
         ByteBuffer.wrap(destinationCid).putLong(TEST_CONNECTION_ID);
 
-        QuicCrypto.PacketProtectionKeysWithHP[] keys = QuicCrypto.deriveInitialKeys(destinationCid);
+        QuicCrypto.PacketProtectionKeysWithHP[] keys = QuicCrypto.deriveInitialKeys(QuicVersion.QUIC_VERSION_1, destinationCid);
         QuicCrypto.PacketProtectionKeysWithHP clientKeys = keys[0];
 
         // Build a real TLS 1.3 ClientHello and wrap it in a CRYPTO frame
@@ -116,11 +122,11 @@ class QuicConnectionCryptoIntegrationTest {
         ByteBuffer cryptoFrame = ByteBuffer.allocate(500);
         cryptoFrame.put((byte) 0x06);                     // CRYPTO frame type
         QuicVarint.write(cryptoFrame, 0);           // offset (varint)
-        QuicVarint.write(cryptoFrame, (long) clientHello.remaining()); // length
+        QuicVarint.write(cryptoFrame, clientHello.remaining()); // length
         cryptoFrame.put(clientHello);
         cryptoFrame.flip();
 
-        PoolBuffer initialPacket = QuicPacketBuilder.buildInitialPacket(pool,
+        PoolBuffer initialPacket = QuicPacketBuilder.buildInitialPacket(QuicVersion.QUIC_VERSION_1, pool,
                 destinationCid,
             TEST_CID_BUF,
             0,
@@ -129,7 +135,7 @@ class QuicConnectionCryptoIntegrationTest {
             clientKeys
         );
 
-        QuicConnection connection = new QuicConnection(TEST_CONNECTION_ID, TEST_ADDRESS, new SpscLinkedQueue<>(), selectorMock);
+        QuicConnection connection = new QuicConnection(TEST_CONNECTION_ID, QuicVersion.QUIC_VERSION_1, TEST_ADDRESS, new SpscLinkedQueue<>(), selectorMock);
         connection.processInitialAndRespond(initialPacket);
         List<ByteBuffer> responses = getOutboundPackets(connection);
 
@@ -147,18 +153,18 @@ class QuicConnectionCryptoIntegrationTest {
         byte[] destinationCid = new byte[8];
         ByteBuffer.wrap(destinationCid).putLong(TEST_CONNECTION_ID);
 
-        QuicCrypto.PacketProtectionKeysWithHP[] keys = QuicCrypto.deriveInitialKeys(destinationCid);
+        QuicCrypto.PacketProtectionKeysWithHP[] keys = QuicCrypto.deriveInitialKeys(QuicVersion.QUIC_VERSION_1, destinationCid);
         QuicCrypto.PacketProtectionKeysWithHP clientKeys = keys[0];
 
         ByteBuffer clientHello = buildMinimalClientHello();
         ByteBuffer framebuffer = ByteBuffer.allocate(500);
         framebuffer.put((byte) 0x06);                          // CRYPTO frame type
         QuicVarint.write(framebuffer, 0x00);                      // offset
-        QuicVarint.write(framebuffer, (long) clientHello.remaining()); // length
+        QuicVarint.write(framebuffer, clientHello.remaining()); // length
         framebuffer.put(clientHello);
         framebuffer.flip();
 
-        PoolBuffer initialPacket = QuicPacketBuilder.buildInitialPacket(pool,
+        PoolBuffer initialPacket = QuicPacketBuilder.buildInitialPacket(QuicVersion.QUIC_VERSION_1, pool,
                 destinationCid,
             TEST_CID_BUF,
             0,
@@ -173,7 +179,7 @@ class QuicConnectionCryptoIntegrationTest {
         byte originalByte = tamperedBuf.get(lastBytePos);
         tamperedBuf.put(lastBytePos, (byte) (originalByte ^ 0xFF)); // Flip bits
 
-        QuicConnection connection = new QuicConnection(TEST_CONNECTION_ID, TEST_ADDRESS, new SpscLinkedQueue<>(), selectorMock);
+        QuicConnection connection = new QuicConnection(TEST_CONNECTION_ID, QuicVersion.QUIC_VERSION_1, TEST_ADDRESS, new SpscLinkedQueue<>(), selectorMock);
         // Ensure clientCid is NOT null so we don't fail later if we somehow continue
         try {
             java.lang.reflect.Field cidField = QuicConnection.class.getDeclaredField("clientCid");
@@ -207,7 +213,7 @@ class QuicConnectionCryptoIntegrationTest {
         for (int i = 0; i < 16; i++) keyBytes[i] = (byte) i;
         SecretKey real1RttKey = new SecretKeySpec(keyBytes, "AES");
 
-        QuicConnection connection = new QuicConnection(TEST_CONNECTION_ID, TEST_ADDRESS, new SpscLinkedQueue<>(), selectorMock);
+        QuicConnection connection = new QuicConnection(TEST_CONNECTION_ID, QuicVersion.QUIC_VERSION_1, TEST_ADDRESS, new SpscLinkedQueue<>(), selectorMock);
         // Manually set destination CID to avoid NPE during header measurement
         try {
             java.lang.reflect.Field cidField = QuicConnection.class.getDeclaredField("clientCid");
@@ -224,7 +230,7 @@ class QuicConnectionCryptoIntegrationTest {
         plaintext.put((byte) 0x01); // PING frame (ACK-eliciting)
         while (plaintext.hasRemaining()) plaintext.put((byte) 0x00);
         plaintext.flip();
-        PoolBuffer packet = QuicPacketBuilder.build1RttPacket(pool,
+        PoolBuffer packet = QuicPacketBuilder.build1RttPacket(QuicVersion.QUIC_VERSION_1, pool,
                 destinationCidBytes(TEST_CONNECTION_ID), 5, 0, plaintext,
             meta1Rtt.clientApplicationKeys, meta1Rtt.clientApplicationHeaderProtection, (byte) 0);
 
@@ -256,7 +262,7 @@ class QuicConnectionCryptoIntegrationTest {
         for (int i = 0; i < 16; i++) keyBytes[i] = (byte) i;
         SecretKey real1RttKey = new SecretKeySpec(keyBytes, "AES");
 
-        QuicConnection connection = new QuicConnection(TEST_CONNECTION_ID, TEST_ADDRESS, new SpscLinkedQueue<>(), selectorMock);
+        QuicConnection connection = new QuicConnection(TEST_CONNECTION_ID, QuicVersion.QUIC_VERSION_1, TEST_ADDRESS, new SpscLinkedQueue<>(), selectorMock);
         // Manually set destination CID to avoid NPE during header measurement
         try {
             java.lang.reflect.Field cidField = QuicConnection.class.getDeclaredField("clientCid");
@@ -274,7 +280,7 @@ class QuicConnectionCryptoIntegrationTest {
         while (plaintext.hasRemaining()) plaintext.put((byte) 0x00);
         plaintext.flip();
 
-        PoolBuffer packet = QuicPacketBuilder.build1RttPacket(pool,
+        PoolBuffer packet = QuicPacketBuilder.build1RttPacket(QuicVersion.QUIC_VERSION_1, pool,
                 destinationCidBytes(TEST_CONNECTION_ID),
                 5, 0, plaintext, meta1Rtt.clientApplicationKeys, meta1Rtt.clientApplicationHeaderProtection, (byte) 0);
 
@@ -296,14 +302,14 @@ class QuicConnectionCryptoIntegrationTest {
     @Test
     @DisplayName("RFC 9001/8446: Full Handshake Flow (ClientHello -> ServerHello...Finished -> ClientFinished)")
     void testFullHandshakeSequence_EndToEnd() throws Exception {
-        QuicConnection connection = new QuicConnection(TEST_CONNECTION_ID, TEST_ADDRESS, new SpscLinkedQueue<>(), selectorMock);
+        QuicConnection connection = new QuicConnection(TEST_CONNECTION_ID, QuicVersion.QUIC_VERSION_1, TEST_ADDRESS, new SpscLinkedQueue<>(), selectorMock);
         // Set clientCid to avoid NPE during header parsing of client-sent packets (which server parses)
         setClientCid(connection, TEST_CID);
         
         assertEquals(QuicConnection.State.INITIAL, connection.getState());
 
         // -- Phase 1: Initial packet (ClientHello) -----------------------------
-        QuicCrypto.PacketProtectionKeysWithHP[] initKeys = QuicCrypto.deriveInitialKeys(TEST_CID);
+        QuicCrypto.PacketProtectionKeysWithHP[] initKeys = QuicCrypto.deriveInitialKeys(QuicVersion.QUIC_VERSION_1, TEST_CID);
         ByteBuffer clientHello = buildMinimalClientHello();
         
         ByteBuffer cryptoFrame = ByteBuffer.allocate(clientHello.remaining() + 10);
@@ -313,7 +319,7 @@ class QuicConnectionCryptoIntegrationTest {
         cryptoFrame.put(clientHello);
         cryptoFrame.flip();
 
-        PoolBuffer initialPacket = QuicPacketBuilder.buildInitialPacket(pool,
+        PoolBuffer initialPacket = QuicPacketBuilder.buildInitialPacket(QuicVersion.QUIC_VERSION_1, pool,
                 TEST_CID, TEST_CID_BUF, 0, 0, cryptoFrame, initKeys[0]);
 
         connection.processInitialAndRespond(initialPacket);
@@ -346,7 +352,7 @@ class QuicConnectionCryptoIntegrationTest {
         finishedCryptoFrame.put(finishedMsg);
         finishedCryptoFrame.flip();
 
-        PoolBuffer handshakePacket = QuicPacketBuilder.buildHandshakePacket(pool,
+        PoolBuffer handshakePacket = QuicPacketBuilder.buildHandshakePacket(QuicVersion.QUIC_VERSION_1, pool,
                 TEST_CID, TEST_CID_BUF, 0, 0, finishedCryptoFrame, meta.clientHandshakeKeys);
 
         connection.processHandshakePacket(handshakePacket);
@@ -363,7 +369,7 @@ class QuicConnectionCryptoIntegrationTest {
         for (int i = 0; i < 3; i++) pingFrame.put((byte) 0x00);
         pingFrame.flip();
 
-        PoolBuffer rttPacket = QuicPacketBuilder.build1RttPacket(pool,
+        PoolBuffer rttPacket = QuicPacketBuilder.build1RttPacket(QuicVersion.QUIC_VERSION_1, pool,
                 TEST_CID, 1, 0, pingFrame, meta.clientApplicationKeys, meta.clientApplicationHeaderProtection, (byte) 0);
 
         connection.process1RttPacket(rttPacket, 0);
@@ -406,7 +412,7 @@ class QuicConnectionCryptoIntegrationTest {
         truncatedPacket.put(new byte[9]); // Only 9 bytes (< 16-byte GCM tag)
         truncatedPacket.flip();
 
-        QuicConnection connection = new QuicConnection(TEST_CONNECTION_ID, TEST_ADDRESS, new SpscLinkedQueue<>(), selectorMock);
+        QuicConnection connection = new QuicConnection(TEST_CONNECTION_ID, QuicVersion.QUIC_VERSION_1, TEST_ADDRESS, new SpscLinkedQueue<>(), selectorMock);
         PoolBuffer pb = new BorrowedPoolBuffer(mock(RootPoolBuffer.class), truncatedPacket);
         try {
             connection.processInitialAndRespond(pb);
@@ -531,7 +537,7 @@ class QuicConnectionCryptoIntegrationTest {
      * The HP key is derived from the 1-RTT client secret.
      */
     private ConnectionMetadata make1RttMetadata(SecretKey real1RttKey) throws Exception {
-        byte[] hpKey = QuicCrypto.deriveHeaderProtectionKey(real1RttKey);
+        byte[] hpKey = QuicCrypto.deriveHeaderProtectionKey(QuicVersion.QUIC_VERSION_1, real1RttKey);
         byte[] iv    = deriveIv(real1RttKey.getEncoded());
         ConnectionMetadata m = new ConnectionMetadata();
         m.negotiatedIdleTimeoutMs = 10_000;

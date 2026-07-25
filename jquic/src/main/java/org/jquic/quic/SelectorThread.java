@@ -366,7 +366,7 @@ public class SelectorThread implements Runnable {
             log.warn(logColor(), "Selector-{}: Processing Initial packet for new CID: {}", threadId, task.allocatedCid);
 
             QuicConnection connection = activeConnections.computeIfAbsent(task.allocatedCid,
-                    _ -> new QuicConnection(task.allocatedCid, task.sender, applicationQueue,this));
+                    _ -> new QuicConnection(task.allocatedCid, task.packetSummary.version(), task.sender, applicationQueue,this));
             connection.setCurrentTimestamp(now);
 
             assignConnectionToSelector(connection.getConnectionId());

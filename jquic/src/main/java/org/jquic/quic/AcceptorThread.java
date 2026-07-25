@@ -81,9 +81,26 @@ class AcceptorThread implements Runnable {
                 if (buffer.buf().remaining() > 0) {
                     QuicPacketHeader.PacketSummary packetSummary = QuicPacketHeader.parseSummary(buffer.buf());
                     if (packetSummary == null) {
-                        log.warn(ANSIConstants.RED_FG, "Could not parse paket summary");
+                        log.info(ANSIConstants.RED_FG, "Could not parse paket summary");
                         continue; // skip remaining
                     }
+
+                    if (packetSummary.version() == QuicVersion.UNKNOWN) {
+                        log.info(ANSIConstants.RED_FG, "[Acceptor] Unsupported QUIC version. Sending Version Negotiation.");
+                        // Send Version Negotiation: DCID = received SCID, SCID = received DCID
+
+                        if (buffer.buf().remaining() >= 1200) { // Minimum packet size requirement
+                            PoolBuffer vnPacket = QuicPacketBuilder.buildVersionNegotiationPacket(bufferPool, packetSummary.scid(), packetSummary.dcid());
+                            try {
+                                channel.send(vnPacket.buf(), sender);
+                            } catch (Exception e) {
+                                log.error(ANSIConstants.RED_FG, "Failed to send Version Negotiation packet", e);
+                            }
+                            vnPacket.release();
+                        }
+                        continue;
+                    }
+
                     byte[] dcid = packetSummary.dcid();
                     log.debug(ANSIConstants.RED_FG, "[Acceptor] Received {} packet, DCID: {}", packetSummary.type(), dcid);
 

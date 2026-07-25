@@ -2,8 +2,6 @@ package org.jquic;
 
 import com.sun.net.httpserver.*;
 import org.jquic.quic.KeystoreManager;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
@@ -39,14 +37,14 @@ import java.util.Objects;
  * <p>Built on top of one-nio's {@link HttpServer} for minimal overhead.
  */
 public class BootstrapHttpServer {
-    private static final int PORT = 4433;
+    private static final int PORT = 443;
     private final HttpsServer server;
 
     public BootstrapHttpServer(KeystoreManager keystoreManager) throws Exception {
 
         SSLContext sslContext = buildSslContext(keystoreManager);
 
-        server = HttpsServer.create(new InetSocketAddress(java.net.InetAddress.getByName("127.0.0.1"), PORT), 0);
+        server = HttpsServer.create(new InetSocketAddress(PORT), 0);
         server.setHttpsConfigurator(new HttpsConfigurator(sslContext) {
             @Override
             public void configure(HttpsParameters params) {

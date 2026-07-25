@@ -18,8 +18,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libelf1 \
     ethtool \
     strace \
+    tcpdump \
     && mkdir -p /opt/async-profiler \
     && curl -L https://github.com/async-profiler/async-profiler/releases/download/v4.4/async-profiler-4.4-linux-x64.tar.gz | tar -xzf - --strip-components=1 -C /opt/async-profiler
+
+USER root
 
 # Add async-profiler binary launcher to path
 ENV PATH="/opt/async-profiler/bin:${PATH}"
@@ -36,6 +39,7 @@ WORKDIR /app
 # Copy your local Java application into the container image layer
 COPY ./build/libs/quic-application-1.0-SNAPSHOT-all.jar /app/jquic.jar
 COPY ./server.p12 /app/server.p12
+COPY ./bmloadw /app/bmloadw
 
 RUN cd /app & jar -xf jquic.jar loader quic_router.bpf.o
 
@@ -48,6 +52,7 @@ EXPOSE 8080 433 4433 21 20 30000-30010
 
 # Create a startup script to run both vsftpd and your Java app concurrently
 COPY --chmod=755 ./src/main/docker/start.sh /app/start.sh
+COPY --chmod=755 ./src/main/docker/run_endpoint.sh /app/run_endpoint.sh
 
 # Set the execution entry point
-ENTRYPOINT ["/app/start.sh"]
+ENTRYPOINT ["/app/run_endpoint.sh"]
