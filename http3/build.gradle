@@ -36,7 +36,7 @@ dependencies {
     // Slf4j API and Logback implementation
     implementation 'org.slf4j:slf4j-api:2.0.9'
     implementation 'tech.kwik:qpack:2.1'
-    api 'org.jquic:jquic:latest.release'
+    api project(':jquic')
 
     // Testing dependencies
     // JUnit 6 BOM handles all version management for JUnit libraries automatically

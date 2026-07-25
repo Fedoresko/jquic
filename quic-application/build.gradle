@@ -34,7 +34,7 @@ tasks.register('runShadowJar', JavaExec) {
 
 dependencies {
     implementation 'ch.qos.logback:logback-classic:1.5.38'
-    implementation('org.jquic:http3:latest.release')
+    implementation project(':http3')
 
     testImplementation platform('org.junit:junit-bom:5.10.0')
     testImplementation 'org.junit.jupiter:junit-jupiter'
