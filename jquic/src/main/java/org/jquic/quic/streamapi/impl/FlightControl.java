@@ -177,14 +177,14 @@ class FlightControl {
         if (!state.canSendBytes(dataSize)) {
             logger.warn("Stream {} blocked by MAX_STREAM_DATA: sent={}, data={}, limit={}",
                     streamId, state.getSentBytes(), dataSize, state.getMaxStreamData());
-            streamManager.sendStreamDataBlockedFrame(streamId, state.getMaxStreamData()+dataSize);
+            streamManager.sendStreamDataBlockedFrame(streamId, state.getMaxStreamData() + dataSize);
             return false;
         }
         if (!canSendMoreConnectionData(dataSize)) {
             logger.info("Connection blocked by MAX_DATA: in-flight={}, data={}, limit={}",
                     totalInFlightBytes, dataSize, currentMaxData.get());
             // Send DATA_BLOCKED frame to inform peer
-            streamManager.sendDataBlockedFrame(currentMaxData.get()+dataSize, streamId);
+            streamManager.sendDataBlockedFrame(currentMaxData.get() + dataSize, streamId);
             return false;
         }
         return true;

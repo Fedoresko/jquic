@@ -81,7 +81,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
     private final AtomicReference<State> state = new AtomicReference<>(INITIAL);
     public ConnectionMetadata connectionMetadata = new ConnectionMetadata();
     private int timeoutHeapIndex = -1;
-    ConnectionStreamManager connectionStreamManager;
+    private ConnectionStreamManager connectionStreamManager;
     private long currentTimestamp;
     private final byte[] statelessResetToken;
     private final QuicVersion quicVersion;
@@ -134,6 +134,10 @@ public class QuicConnection implements TimeoutHeap.Entry {
 
     public void setCurrentTimestamp(long timestamp) {
         this.currentTimestamp = timestamp;
+    }
+
+    public void setConnectionStreamManager(ConnectionStreamManager connectionStreamManager) {
+        this.connectionStreamManager = connectionStreamManager;
     }
 
     /**
@@ -258,7 +262,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
                 QuicStreamEngineImpl engine =
                         QuicEngine.getStreamEngineInternal();
                 if (engine != null) {
-                    connectionStreamManager = engine.createConnection(connectionId, this, negotiatedProtocol, outputQueue);
+                    setConnectionStreamManager(engine.createConnection(connectionId, this, negotiatedProtocol, outputQueue));
                     QuicApplicationProtocol protocol = engine.getProtocol(negotiatedProtocol);
                     if (protocol != null) {
                         applicationSpace.setTimeWindowMs(protocol.getCongestionControl().timeWindowMs());

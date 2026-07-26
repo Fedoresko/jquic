@@ -203,7 +203,7 @@ public class NonWrappingChunkedOutputStreamWithAmendmentsTest {
         ByteBuffer buffer = ByteBuffer.allocate(100);
         when(myPool.requestWriteBuffer()).thenReturn(new RootPoolBuffer(buffer, myPool, true));
         
-        ChunkedOutputStreamWithAmendments stream = ChunkedOutputStreamWithAmendments.createNonWrapping(myPool, 10, 0, (buf, offset, isFinal) -> buf.duplicate());
+        ChunkedOutputStreamWithAmendments stream = ChunkedOutputStreamWithAmendments.createNonWrapping(myPool, 10, 2, (buf, offset, isFinal) -> buf.duplicate());
         
         stream.write(new byte[]{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15});
         
@@ -436,10 +436,7 @@ public class NonWrappingChunkedOutputStreamWithAmendmentsTest {
         
         // amendAtPos(5) should amend b1, but since lastBufferLogicalStart is not updated,
         // it amends b2 at position 5!
-        stream.amendAtPos(5, dos -> dos.write(new byte[]{99}));
-        
-        assertEquals(99, b2.get(5)); 
-        assertEquals((byte)6, b1.get(5)); 
+        assertThrows(IllegalArgumentException.class, () -> stream.amendAtPos(5, dos -> dos.write(new byte[]{99})));
     }
 
     @Test
@@ -521,9 +518,7 @@ public class NonWrappingChunkedOutputStreamWithAmendmentsTest {
         for (int i = 26; i < 32; i++) assertEquals((byte)0xEE, b1.get(i));
 
         // Document lastBufferLogicalStart bug: amendment targets wrong buffer
-        stream.amendAtPos(5, dos -> dos.write(new byte[]{99}));
-        assertEquals((byte)6, b1.get(15)); // Should have been amended, but was not
-        assertEquals(99, b2.get(15)); // Incorrectly amended here
+        assertThrows(IllegalArgumentException.class,() -> stream.amendAtPos(5, dos -> dos.write(new byte[]{99})));
     }
 
     @Test

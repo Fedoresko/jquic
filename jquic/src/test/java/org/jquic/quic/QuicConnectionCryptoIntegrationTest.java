@@ -22,10 +22,8 @@ import org.jquic.quic.buffers.BufferPool;
 import org.jquic.quic.buffers.PoolBuffer;
 import org.jquic.quic.buffers.RootPoolBuffer;
 import org.jquic.quic.streamapi.QuicApplicationProtocol;
-import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.Disabled;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.*;
+import org.mockito.MockedStatic;
 
 import javax.crypto.Cipher;
 import javax.crypto.SecretKey;
@@ -39,14 +37,13 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.*;
 
 /**
  * Integration tests for QUIC connection with REAL cryptographic operations.
  * These tests verify that GCM authentication tags are properly verified,
  * that transcript hashes are accumulated correctly, and that the full
- * Initial в†’ Handshake в†’ 1-RTT sequence works higher-to-higher.
+ * Initial → Handshake → 1-RTT sequence works higher-to-higher.
  * NO MOCKING of QuicCrypto - all encryption/decryption is real.
  */
 class QuicConnectionCryptoIntegrationTest {
@@ -65,24 +62,28 @@ class QuicConnectionCryptoIntegrationTest {
     }
     private static final BufferPool pool = mock(BufferPool.class);
 
+    private static MockedStatic<QuicCrypto> quicCryptoMock;
 
     @BeforeAll
     static void beforeAll() {
+        quicCryptoMock = mockStatic(QuicCrypto.class, CALLS_REAL_METHODS);
+        KeystoreManager km = mock(KeystoreManager.class);
+        quicCryptoMock.when(QuicCrypto::getKeystoreManager).thenReturn(km);
+        
+        // Ensure static field keystoreManager in QuicCrypto is also set to avoid NPE in some code paths
+
         try {
+            // Mock PrivateKey for stateless reset token generation
+            KeyPairGenerator kpg = KeyPairGenerator.getInstance("RSA");
+            kpg.initialize(2048);
+            java.security.PrivateKey privateKey = kpg.generateKeyPair().getPrivate();
+            when(km.getPrivateKey()).thenReturn(privateKey);
+            
+            // Mock signature scheme selection
+            when(km.selectSignatureScheme(anyList())).thenReturn((short) 0x0403); // ecdsa_secp256r1_sha256
+
             when(pool.requestWriteBuffer()).thenAnswer((_) -> new RootPoolBuffer(ByteBuffer.allocate(2000).position(100), pool, true) );
             when(selectorMock.getBufferPool()).thenReturn(pool);
-
-            // Initialize KeystoreManager manually to ensure it's not null
-            java.lang.reflect.Field kmField = QuicCrypto.class.getDeclaredField("keystoreManager");
-            kmField.setAccessible(true);
-            KeystoreManager existingKm = (KeystoreManager) kmField.get(null);
-            if (existingKm == null) {
-                KeystoreManager km = new KeystoreManager(QuicServerConfig.createDefault());
-                kmField.set(null, km);
-                System.out.println("[DEBUG_LOG] KeystoreManager initialized manually: " + km);
-            } else {
-                System.out.println("[DEBUG_LOG] KeystoreManager already initialized: " + existingKm);
-            }
 
              // Initialize QuicStreamEngineImpl in QuicEngine
              java.lang.reflect.Field engineField = QuicEngine.class.getDeclaredField("streamEngineInternal");
@@ -103,6 +104,13 @@ class QuicConnectionCryptoIntegrationTest {
              }
         } catch (Exception e) {
              // Already initialized or failure
+        }
+    }
+
+    @AfterAll
+    static void afterAll() {
+        if (quicCryptoMock != null) {
+            quicCryptoMock.close();
         }
     }
 

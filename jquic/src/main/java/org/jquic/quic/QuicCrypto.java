@@ -491,7 +491,7 @@ public class QuicCrypto {
             if (parsed.supportedSignatures.isEmpty()) {
                 throw new CryptoException("No signature_algorithms found are in ClientHello!");
             }
-            metadata.selectedSignatureScheme = keystoreManager.selectSignatureScheme(parsed.supportedSignatures);
+            metadata.selectedSignatureScheme = getKeystoreManager().selectSignatureScheme(parsed.supportedSignatures);
 
             long serverIdleTimeout = 30_000;
             metadata.negotiatedIdleTimeoutMs = parsed.maxIdleTimeoutMs > 0

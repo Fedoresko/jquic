@@ -151,7 +151,7 @@ class QuicConnectionTest {
         // Mock ClientHello processing
         connection.connectionMetadata = mockMetadata;
         connection.clientCid = ByteBuffer.allocate(8).putLong(TEST_CID).array();
-
+        connection.setConnectionStreamManager(mock(ConnectionStreamManager.class));
 
     }
 
@@ -286,7 +286,7 @@ class QuicConnectionTest {
         // Capture delivered stream data
         AtomicReference<ProtocolFrame> receivedData = new AtomicReference<>();
 
-        connection.connectionStreamManager = createStreamFrameListener(receivedData::set);
+        connection.setConnectionStreamManager( createStreamFrameListener(receivedData::set) );
 
         // Create 1-RTT packet with STREAM frame
         ByteBuffer packet = createMock1RttPacketWithStreamData(4L, "Hello QUIC".getBytes());
@@ -352,7 +352,7 @@ class QuicConnectionTest {
         // Track if payload listener is called
         AtomicInteger callCount = new AtomicInteger(0);
 
-        connection.connectionStreamManager = createStreamFrameListener(frame -> callCount.incrementAndGet());
+        connection.setConnectionStreamManager( createStreamFrameListener(frame -> callCount.incrementAndGet()) );
 
         // Try to send stream data
         ByteBuffer packet = createMock1RttPacketWithStreamData(0L, "test".getBytes());
@@ -770,7 +770,7 @@ class QuicConnectionTest {
         // Send 1-RTT packets 0, 1, 2
         PacketNumberSpace appSpace = connection.getApplicationSpace();
         for (int i = 0; i < 3; i++) {
-            PoolBuffer mockPayload = new RootPoolBuffer(ByteBuffer.wrap(new byte[]{0x00}), pool, false); // PADDING frame
+            PoolBuffer mockPayload = new RootPoolBuffer(ByteBuffer.wrap(new byte[]{0x00}), pool, false).borrow(); // PADDING frame
             appSpace.onPacketSent(0, i, mockPayload, true);
         }
 
@@ -798,7 +798,7 @@ class QuicConnectionTest {
         // Simulate sending 1-RTT packets 0-4
         PacketNumberSpace appSpace = connection.getApplicationSpace();
         for (int i = 0; i < 5; i++) {
-            PoolBuffer mockPayload = new RootPoolBuffer(ByteBuffer.wrap(new byte[]{0x00}), pool, false); // PADDING frame
+            PoolBuffer mockPayload = new RootPoolBuffer(ByteBuffer.wrap(new byte[]{0x00}), pool, false).borrow(); // PADDING frame
             appSpace.onPacketSent(0, i, mockPayload, true);
             appSpace.allocatePacketNumber();
         }
@@ -807,7 +807,7 @@ class QuicConnectionTest {
         // This creates a gap that should trigger retransmission of packet 0
         ByteBuffer ackPacket = createMock1RttPacketWithSelectiveAck(4, new long[]{2, 3, 4}, appSpace.allocatePacketNumber());
 
-        connection.process1RttPacket(new RootPoolBuffer(ackPacket, pool, false), 0);
+        connection.process1RttPacket(new RootPoolBuffer(ackPacket, pool, false).borrow(), 0);
         List<ByteBuffer> responses = getOutboundPackets(connection);
 
         // Should return retransmissions for lost packets
@@ -867,7 +867,7 @@ class QuicConnectionTest {
 
         // Send packets 0-4
         for (int i = 0; i < 5; i++) {
-            PoolBuffer mockPayload = new RootPoolBuffer(ByteBuffer.wrap(new byte[]{0x00}), pool, false);
+            PoolBuffer mockPayload = new RootPoolBuffer(ByteBuffer.wrap(new byte[]{0x00}), pool, false).borrow();
             appSpace.onPacketSent(0, i, mockPayload, true);
             appSpace.allocatePacketNumber();
         }
@@ -881,7 +881,7 @@ class QuicConnectionTest {
 
         // Trigger retransmission by ACKing packets 2-4 (packet 0 will be lost)
         ByteBuffer ackPacket = createMock1RttPacketWithSelectiveAck(4, new long[]{2, 3, 4}, nextPnBeforeRetransmit);
-        connection.process1RttPacket(new RootPoolBuffer(ackPacket, pool, false), 0);
+        connection.process1RttPacket(new RootPoolBuffer(ackPacket, pool, false).borrow(), 0);
         List<ByteBuffer> responses = getOutboundPackets(connection);
 
         // Verify retransmissions were created
@@ -912,7 +912,7 @@ class QuicConnectionTest {
 
         // Send packets 0-5
         for (int i = 0; i < 6; i++) {
-            PoolBuffer mockPayload = new RootPoolBuffer(ByteBuffer.wrap(new byte[]{0x00}), pool, false);
+            PoolBuffer mockPayload = new RootPoolBuffer(ByteBuffer.wrap(new byte[]{0x00}), pool, false).borrow();
             appSpace.onPacketSent(0, i, mockPayload, true);
             appSpace.allocatePacketNumber();
         }
@@ -923,7 +923,7 @@ class QuicConnectionTest {
 
         // ACK only packet 5, causing packets 0, 1 to be declared lost (5 - 3 = 2)
         ByteBuffer ackPacket = createMock1RttPacketWithSelectiveAck(5, new long[]{5}, nextPnBefore);
-        connection.process1RttPacket(new RootPoolBuffer(ackPacket, pool, false), 0);
+        connection.process1RttPacket(new RootPoolBuffer(ackPacket, pool, false).borrow(), 0);
         List<ByteBuffer> responses = getOutboundPackets(connection);
 
         // Should have at least 2 retransmissions (packets 0 and 1)
@@ -1193,7 +1193,7 @@ class QuicConnectionTest {
         mock.when(() -> QuicCrypto.signData(any(byte[].class), anyShort())).thenReturn(new byte[16]);
 
         mock.when(() -> QuicCrypto.generateHandshakeSecrets(any(), any())).thenAnswer(inv -> {
-            ConnectionMetadata metadata = inv.getArgument(0);
+            ConnectionMetadata metadata = inv.getArgument(1);
             metadata.clientHandshakeKeys = mockKeys;
             metadata.serverHandshakeKeys = mockKeys;
             metadata.clientHandshakeTrafficSecret = new byte[32];
@@ -1205,7 +1205,7 @@ class QuicConnectionTest {
                 .thenReturn(mockMetadata);
 
         mock.when(() -> QuicCrypto.createApplicationKeys(any(), any(ConnectionMetadata.class))).thenAnswer(inv -> {
-             ConnectionMetadata metadata = inv.getArgument(0);
+             ConnectionMetadata metadata = inv.getArgument(1);
              metadata.clientApplicationHeaderProtection = null;
              metadata.serverApplicationHeaderProtection = null;
              metadata.clientApplicationTrafficSecret = new byte[32];

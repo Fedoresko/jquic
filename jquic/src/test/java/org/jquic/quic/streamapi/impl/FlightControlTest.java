@@ -155,7 +155,7 @@ class FlightControlTest {
         boolean result = flightControl.canSend(state, 6000);
         
         assertFalse(result);
-        verify(streamManager).sendStreamDataBlockedFrame(eq(streamId), eq((long)INITIAL_MAX_STREAM_DATA));
+        verify(streamManager).sendStreamDataBlockedFrame(eq(streamId), eq((long)INITIAL_MAX_STREAM_DATA + 6000));
     }
 
     @Test
@@ -168,11 +168,12 @@ class FlightControlTest {
         
         flightControl.bytesAcked(streamId, 200L);
         // totalInFlightBytes = 300
+        // send Bytes sill 500
         
         // Now we should be able to send 4500 more (300 + 4700 = 5000, which is limit)
-        assertTrue(flightControl.canSend(state, 4700));
+        assertTrue(flightControl.canSend(state, 4500));
         // But 4701 should fail
-        assertFalse(flightControl.canSend(state, 4701));
+        assertFalse(flightControl.canSend(state, 4501));
     }
 
     @Test
