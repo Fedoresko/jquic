@@ -13,7 +13,7 @@ def getVersionFromGit() {
         return gitTag.replaceFirst('^v', '')
     } catch (Exception e) {
         // Fallback default version if Git is missing or has no tags
-        return '1.0.0-SNAPSHOT'
+        return '1.0.0'
     }
 }
 
