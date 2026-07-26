@@ -24,7 +24,7 @@ jobs:
       uses: gradle/actions/setup-gradle@v4
 
     - name: Publish to Maven Central
-      run: gradle :jquic:publish --info
+      run: gradle :jquic:nmcpPublishAllPublicationsToCentralPortal --info
       env:
         OSSRH_USERNAME: ${{ secrets.OSSRH_USERNAME }}
         OSSRH_PASSWORD: ${{ secrets.OSSRH_PASSWORD }}

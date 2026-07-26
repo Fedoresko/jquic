@@ -2,6 +2,7 @@ plugins {
     id 'java-library'
     id 'maven-publish'
     id 'signing'
+    id 'com.gradleup.nmcp' version '1.0.2'
 }
 
 def getVersionFromGit() {
@@ -92,19 +93,26 @@ publishing {
             }
         }
     }
-    repositories {
-        maven {
-            name = 'OSSRH'
-            // 2. Updated to use the staging API as per Sonatype documentation
+//    repositories {
+//        maven {
+//            name = 'OSSRH'
+//            // 2. Updated to use the staging API as per Sonatype documentation
 //            def releasesRepoUrl = "https://ossrh-staging-api.central.sonatype.com/service/local/staging/deploy/maven2/"
 //            def snapshotsRepoUrl = "https://s01.oss.sonatype.org/content/repositories/snapshots/"
 //            url = version.endsWith('SNAPSHOT') ? snapshotsRepoUrl : releasesRepoUrl
-            url = "https://sonatype.com"
-            credentials {
-                username = project.findProperty("ossrhUsername") ?: System.getenv("OSSRH_USERNAME")
-                password = project.findProperty("ossrhPassword") ?: System.getenv("OSSRH_PASSWORD")
-            }
-        }
+//            credentials {
+//                username = project.findProperty("ossrhUsername") ?: System.getenv("OSSRH_USERNAME")
+//                password = project.findProperty("ossrhPassword") ?: System.getenv("OSSRH_PASSWORD")
+//            }
+//        }
+//    }
+}
+
+nmcp {
+    publishAllPublicationsToCentralPortal {
+        username = providers.environmentVariable("OSSRH_USERNAME").getOrNull()
+        password = providers.environmentVariable("OSSRH_PASSWORD").getOrNull()
+        publishingType = "AUTOMATIC"
     }
 }
 
