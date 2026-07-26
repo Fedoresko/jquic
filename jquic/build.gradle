@@ -12,6 +12,7 @@ def getVersionFromGit() {
 
         return gitTag.replaceFirst('^v', '')
     } catch (Exception e) {
+        e.printStackTrace()
         // Fallback default version if Git is missing or has no tags
         return '1.0.0'
     }
