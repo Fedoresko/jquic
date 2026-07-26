@@ -78,9 +78,9 @@ publishing {
                 }
                 developers {
                     developer {
-                        id = 'jquic'
-                        name = 'jquic contributors'
-                        email = 'info@jquic.org'
+                        id = 'Fedoresko'
+                        name = 'Fedor Malyshev'
+                        email = 'fmmalyshev@gmail.com'
                     }
                 }
                 scm {
@@ -93,7 +93,9 @@ publishing {
     }
     repositories {
         maven {
-            def releasesRepoUrl = "https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/"
+            name = 'OSSRH'
+            // 2. Updated to use the staging API as per Sonatype documentation
+            def releasesRepoUrl = "https://ossrh-staging-api.central.sonatype.com/service/local/staging/deploy/maven2/"
             def snapshotsRepoUrl = "https://s01.oss.sonatype.org/content/repositories/snapshots/"
             url = version.endsWith('SNAPSHOT') ? snapshotsRepoUrl : releasesRepoUrl
             credentials {
@@ -110,6 +112,8 @@ signing {
     if (signingKey && signingPassword) {
         useInMemoryPgpKeys(signingKey, signingPassword)
         sign publishing.publications.mavenJava
+    } else {
+        tasks.withType(Sign).configureEach { enabled = false }
     }
 }
 
