@@ -38,14 +38,11 @@ WORKDIR /app
 
 # Copy your local Java application into the container image layer
 COPY ./build/libs/quic-application-1.0-SNAPSHOT-all.jar /app/jquic.jar
-COPY ./server.p12 /app/server.p12
-COPY ./bmloadw /app/bmloadw
 
 RUN cd /app & jar -xf jquic.jar loader quic_router.bpf.o
 
 # Give fedoresko ownership of the app directory for FTP uploads
 RUN chown -R fedoresko:fedoresko /app
-RUN chown -R fedoresko:fedoresko /app/server.p12
 
 # Explicitly document the container's open network ports
 EXPOSE 8080 433 4433 21 20 30000-30010
