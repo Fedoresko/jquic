@@ -13,6 +13,9 @@ jobs:
     - uses: actions/checkout@v4
       with:
         fetch-depth: 0
+
+    - name: Trust Workspace Directory
+      run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
     
     - name: Set up JDK 25
       uses: actions/setup-java@v4
