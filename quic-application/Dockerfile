@@ -52,4 +52,4 @@ COPY --chmod=755 ./src/main/docker/start.sh /app/start.sh
 COPY --chmod=755 ./src/main/docker/run_endpoint.sh /app/run_endpoint.sh
 
 # Set the execution entry point
-ENTRYPOINT ["/app/run_endpoint.sh"]
+ENTRYPOINT ["/app/start.sh"]

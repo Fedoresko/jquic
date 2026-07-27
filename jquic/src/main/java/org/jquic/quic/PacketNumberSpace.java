@@ -42,6 +42,7 @@ public class PacketNumberSpace {
 
     // Received packet tracking
     private long largestReceivedPacketNumber = -1;
+    private long largestReceivedPacketTimestamp = -1;
     private final SortedIntervals receivedPackets = new SortedIntervals(255);
 
     // Sent packet tracking - TreeMap keeps packet numbers sorted so the packet-threshold
@@ -134,11 +135,12 @@ public class PacketNumberSpace {
     /**
      * Records that a packet was received.
      */
-    public synchronized void onPacketReceived(long packetNumber, int ecnFlags) {
+    public synchronized void onPacketReceived(long timestampMs, long packetNumber, int ecnFlags) {
         receivedPackets.add((int) packetNumber);
 
         if (packetNumber > largestReceivedPacketNumber) {
             largestReceivedPacketNumber = packetNumber;
+            largestReceivedPacketTimestamp = timestampMs;
         }
 
         boolean isCe   = (ecnFlags & (1)) != 0;
@@ -390,6 +392,14 @@ public class PacketNumberSpace {
 
     public long getLargestReceivedPacketNumber() {
         return largestReceivedPacketNumber;
+    }
+
+    public long getAckDelay(long currentTimestampMs) {
+        if (largestReceivedPacketTimestamp == -1) {
+            return 0;
+        }
+        long delayUs = (currentTimestampMs - largestReceivedPacketTimestamp) * 1000;
+        return delayUs >> 3; // default ack_delay_exponent = 3
     }
 
     public long getLargestAckedPacketNumber() {

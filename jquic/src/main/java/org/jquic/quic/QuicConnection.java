@@ -50,8 +50,6 @@ import static org.jquic.quic.streamapi.impl.StreamFrameWriter.*;
 public class QuicConnection implements TimeoutHeap.Entry {
     private static final Logger logger = LoggerFactory.getLogger(QuicConnection.class);
     private static final LogTool log = new LogTool(logger);
-    public static final int ERR_PROTOCOL_VIOLATION = 10;
-    public static final int ERR_TLS_HANDSHAKE_FAILURE = 0x0100 + 40;
 
     /** Maximum number of early 1-RTT packets buffered before ESTABLISHED. */
     private static final int MAX_EARLY_1RTT_QUEUE = 32;
@@ -310,7 +308,9 @@ public class QuicConnection implements TimeoutHeap.Entry {
                 this.timeoutTimestamp = currentTimestamp + 3 * space.getPTO();
             }
 
-            connectionStreamManager.onConnectionClose();
+            if (connectionStreamManager != null) {
+                connectionStreamManager.onConnectionClose();
+            }
 
             QuicStreamEngineImpl engine =
                     QuicEngine.getStreamEngineInternal();
@@ -391,7 +391,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
             return null;
         }
 
-        initialSpace.onPacketReceived(header.packetNumber, 0);
+        initialSpace.onPacketReceived(currentTimestamp, header.packetNumber, 0);
 
         int remaining = packet.buf().remaining();
         try {
@@ -488,7 +488,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
         }
 
         // Track received packet in Handshake space
-        handshakeSpace.onPacketReceived(header.packetNumber, 0);
+        handshakeSpace.onPacketReceived(currentTimestamp, header.packetNumber, 0);
 
         boolean needAck = false;
 
@@ -528,7 +528,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
                 parseConnectionCloseFrame(frames.buf(), frameType);
             } else {
                 logger.warn("Got unsupported handshake frame type: 0x{}, closing connection", String.format("%02x", frameType));
-                sendConnectionCloseAndUpdateState(ERR_TLS_HANDSHAKE_FAILURE, "Unsupported handshake frame type", false);
+                sendConnectionCloseAndUpdateState(QuicTransportError.TLS_ERROR_HANDSHAKE_FAILURE.code(), "Unsupported handshake frame type", false);
                 break;
             }
         }
@@ -665,7 +665,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
         }
 
         // Track received packet in Application space
-        applicationSpace.onPacketReceived(header.packetNumber, ecnFlags);
+        applicationSpace.onPacketReceived(currentTimestamp, header.packetNumber, ecnFlags);
 
         boolean needsAck = false;
 
@@ -926,7 +926,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
                         rebuildCryptoFrame(offset, length, frames, this::extractTlsMeta);
                     } catch (IllegalStateException | IllegalArgumentException e) {
                         setState(State.CLOSING);
-                        sendConnectionCloseAndUpdateState(ERR_PROTOCOL_VIOLATION, "malformed crypto frame", false);
+                        sendConnectionCloseAndUpdateState(QuicTransportError.PROTOCOL_VIOLATION.code(), "malformed crypto frame", false);
                         logger.warn("Got inconsistent frame: {}", e.getMessage());
                     }
                 }
@@ -1016,12 +1016,12 @@ public class QuicConnection implements TimeoutHeap.Entry {
                 this.negotiatedProtocol = derivedMetadata.clientMetadata.alpn;
                 QuicApplicationProtocol protocol = QuicEngine.getStreamEngine().getProtocol(negotiatedProtocol);
                 if (protocol != null) {
-                    connectionMetadata.serverInitialStreamLimits.maxData = protocol.getMaxData();
-                    connectionMetadata.serverInitialStreamLimits.maxBidi = protocol.getMaxBidirectionalStreamsPerConnection();
-                    connectionMetadata.serverInitialStreamLimits.maxUni = protocol.getMaxUnidirectionalStreamsPerConnection();
-                    connectionMetadata.serverInitialStreamLimits.maxStreamDataUni = protocol.getMaxStreamData();
-                    connectionMetadata.serverInitialStreamLimits.maxStreamDataBidiLocal = protocol.getMaxStreamData();
-                    connectionMetadata.serverInitialStreamLimits.maxStreamDataBidiRemote = protocol.getMaxStreamData();
+                    connectionMetadata.serverInitialLimits.maxData = protocol.getMaxData();
+                    connectionMetadata.serverInitialLimits.maxBidi = protocol.getMaxBidirectionalStreamsPerConnection();
+                    connectionMetadata.serverInitialLimits.maxUni = protocol.getMaxUnidirectionalStreamsPerConnection();
+                    connectionMetadata.serverInitialLimits.maxStreamDataUni = protocol.getMaxStreamData();
+                    connectionMetadata.serverInitialLimits.maxStreamDataBidiLocal = protocol.getMaxStreamData();
+                    connectionMetadata.serverInitialLimits.maxStreamDataBidiRemote = protocol.getMaxStreamData();
                 }
                 logger.info("ALPN negotiated: {} for CID: {}", derivedMetadata.clientMetadata.alpn, connectionId);
             } else {
@@ -1043,7 +1043,9 @@ public class QuicConnection implements TimeoutHeap.Entry {
             // RFC 9000 Section 10.2.3: Send CONNECTION_CLOSE with CRYPTO_ERROR
             // Error code = 0x0100 + TLS alert value (using handshake_failure = 40)
             logger.debug("Failed to process ClientHello for CID: {}, sending CONNECTION_CLOSE", connectionId, e);
-            sendConnectionCloseAndUpdateState(ERR_PROTOCOL_VIOLATION, "ClientHello validation failed", false);
+            sendConnectionCloseAndUpdateState(e.getError() == null ? QuicTransportError.PROTOCOL_VIOLATION.code()
+                : e.getError().code(),
+            "ClientHello validation failed", false);
         }
     }
 
@@ -1242,7 +1244,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
         TranscryptHashSupport transcryptUpdater = new TranscryptHashSupport(out, this::updateTranscript);
         // -- 1. EncryptedExtensions --------------------------------------------
         transcryptUpdater.startHashMessage("EncryptedExtensions");
-        QuicCrypto.putEncryptedExtensions(connectionMetadata, connectionId, out);
+        QuicCrypto.putEncryptedExtensions(connectionMetadata, connectionId, statelessResetToken, out);
 
         // --- 2. Certificate ---------------------------------------------------
         transcryptUpdater.startHashMessage("Certificate");
@@ -1294,22 +1296,22 @@ public class QuicConnection implements TimeoutHeap.Entry {
 
     private void sendInitialAck() {
         PoolBuffer buffer = getBufferPool().requestWriteBuffer();
-        QuicFrameBuilder.writeAckFrame(initialSpace, buffer.buf());
+        QuicFrameBuilder.writeAckFrame(initialSpace, currentTimestamp, buffer.buf());
         logger.debug("Sending ACK Initial packet");
         sendPacket(buffer, PacketNumberSpace.PacketPhase.INITIAL);
     }
     private void sendHandshakeAck() {
         PoolBuffer buffer = getBufferPool().requestWriteBuffer();
-        QuicFrameBuilder.writeAckFrame(handshakeSpace, buffer.buf());
+        QuicFrameBuilder.writeAckFrame(handshakeSpace, currentTimestamp, buffer.buf());
         logger.debug("Sending Handshake ACK");
         sendPacket(buffer, PacketNumberSpace.PacketPhase.HANDSHAKE);
     }
     private void send1RttAck(int ecnFlags) {
         PoolBuffer buffer = getBufferPool().requestWriteBuffer();
         if  (ecnFlags == 0) {
-            QuicFrameBuilder.writeAckFrame(applicationSpace, buffer.buf());
+            QuicFrameBuilder.writeAckFrame(applicationSpace, currentTimestamp, buffer.buf());
         } else {
-            QuicFrameBuilder.writeAckEcnFrame(applicationSpace, buffer.buf());
+            QuicFrameBuilder.writeAckEcnFrame(applicationSpace, currentTimestamp, buffer.buf());
         }
         logger.debug("Sending 1-RTT ACK");
         sendPacket(buffer, PacketNumberSpace.PacketPhase.APPLICATION);

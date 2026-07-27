@@ -25,6 +25,7 @@ import org.slf4j.LoggerFactory;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.DatagramChannel;
+import java.util.HexFormat;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -77,6 +78,7 @@ class AcceptorThread implements Runnable {
                 SocketAddress sender = channel.receive(buffer.buf());
                 buffer.buf().limit(buffer.buf().position());
                 buffer.buf().position(start);
+                int datagramSize = buffer.buf().remaining();
 
                 if (buffer.buf().remaining() > 0) {
                     QuicPacketHeader.PacketSummary packetSummary = QuicPacketHeader.parseSummary(buffer.buf());
@@ -85,11 +87,14 @@ class AcceptorThread implements Runnable {
                         continue; // skip remaining
                     }
 
-                    if (packetSummary.version() == QuicVersion.UNKNOWN) {
+                    if (packetSummary.type() != QuicPacketHeader.PacketType.ONE_RTT && packetSummary.version() == QuicVersion.UNKNOWN) {
                         log.info(ANSIConstants.RED_FG, "[Acceptor] Unsupported QUIC version. Sending Version Negotiation.");
+                        byte[] payload = new byte[buffer.buf().remaining()];
+                        buffer.buf().duplicate().get(payload);
+                        System.out.println(HexFormat.of().formatHex(payload));
                         // Send Version Negotiation: DCID = received SCID, SCID = received DCID
 
-                        if (buffer.buf().remaining() >= 1200) { // Minimum packet size requirement
+                        if (datagramSize >= 1200) { // Minimum packet size requirement
                             PoolBuffer vnPacket = QuicPacketBuilder.buildVersionNegotiationPacket(bufferPool, packetSummary.scid(), packetSummary.dcid());
                             try {
                                 channel.send(vnPacket.buf(), sender);
@@ -137,8 +142,21 @@ class AcceptorThread implements Runnable {
                                         new HandshakeTask(buffer.borrow(), sender, newCid, packetSummary)
                                 );
                             } else if (packetSummary.type() != QuicPacketHeader.PacketType.INITIAL) {
+                                int pStart = buffer.buf().position();
                                 skipPacket(buffer.buf());
-                                log.warn(ANSIConstants.RED_FG, "[Acceptor] Non-Initial packed with unknown DCID: {} type {} - no mapping found, dropping packet", dcid, packetSummary.type());
+                                
+                                log.warn(ANSIConstants.RED_FG, "[Acceptor] Non-Initial packed with unknown DCID: {} type {} - no mapping found, sending STATELESS_RESET", dcid, packetSummary.type());
+                                int incomingPacketSize = buffer.buf().position() - start;
+                                if (incomingPacketSize > 25) { //ignore to small packets
+                                    byte[] statelessResetToken = QuicCrypto.generateStatelessResetToken(dcid);
+                                    PoolBuffer resetPacket = QuicPacketBuilder.writeStatelessResetFrame(bufferPool, 0, incomingPacketSize, statelessResetToken);
+                                    try {
+                                        channel.send(resetPacket.buf(), sender);
+                                    } catch (Exception e) {
+                                        log.error(ANSIConstants.RED_FG, "Failed to send Stateless Reset packet", e);
+                                    }
+                                    resetPacket.release();
+                                }
                             } else {
                                 buffer.buf().position(buffer.buf().limit());
                                 log.warn(ANSIConstants.RED_FG, "[Acceptor] Initial packed with unknown DCID: {} too short {}  dropping packet", dcid, buffer.buf().remaining());
@@ -150,7 +168,7 @@ class AcceptorThread implements Runnable {
                 buffer.release();
             }
         } catch (Exception e) {
-            log.error(ANSIConstants.RED_FG, "Error in acceptor thread", e);
+            logger.error("Error in acceptor thread", e);
         }
     }
 

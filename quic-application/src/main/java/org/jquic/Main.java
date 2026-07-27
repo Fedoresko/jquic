@@ -18,7 +18,9 @@ package org.jquic;
 import org.jquic.http3.Http3Request;
 import org.jquic.http3.Http3Response;
 import org.jquic.http3.Http3Server;
+import org.jquic.quic.KeystoreManager;
 import org.jquic.quic.QuicEngine;
+import org.jquic.quic.QuicServerConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -86,15 +88,15 @@ public class Main {
         http3Server.start();
 
         // 3. Start the HTTPS/1.1 bootstrap server on TCP 4433
-//        KeystoreManager keystoreManager = new KeystoreManager(QuicServerConfig.createDefault());
-//        BootstrapHttpServer bootstrapServer = new BootstrapHttpServer(keystoreManager);
-//        bootstrapServer.start();
+        KeystoreManager keystoreManager = new KeystoreManager(QuicServerConfig.createDefault());
+        BootstrapHttpServer bootstrapServer = new BootstrapHttpServer(keystoreManager);
+        bootstrapServer.start();
 
         // 4. Register graceful shutdown hook
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             logger.info("Shutdown signal received, stopping services...");
             try {
-//                bootstrapServer.stop();
+                bootstrapServer.stop();
                 http3Server.stop();
                 QuicEngine.stop();
                 logger.info("Services stopped cleanly.");

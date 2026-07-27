@@ -49,13 +49,13 @@ class PacketNumberSpaceTest {
     void testOnPacketReceived_TracksLargest() {
         PacketNumberSpace space = new PacketNumberSpace(PacketNumberSpace.PacketPhase.INITIAL);
 
-        space.onPacketReceived(5, 0);
+        space.onPacketReceived(System.currentTimeMillis(), 5, 0);
         assertEquals(5, space.getLargestReceivedPacketNumber());
 
-        space.onPacketReceived(3, 0);
+        space.onPacketReceived(System.currentTimeMillis(), 3, 0);
         assertEquals(5, space.getLargestReceivedPacketNumber());
 
-        space.onPacketReceived(10, 0);
+        space.onPacketReceived(System.currentTimeMillis(), 10, 0);
         assertEquals(10, space.getLargestReceivedPacketNumber());
     }
 
@@ -174,7 +174,7 @@ class PacketNumberSpaceTest {
 
         // Receive contiguous packets 0-4
         for (long i = 0; i <= 4; i++) {
-            space.onPacketReceived(i, 0);
+            space.onPacketReceived(System.currentTimeMillis(), i, 0);
         }
 
         SortedIntervals ranges = space.getAckRanges();
@@ -191,13 +191,13 @@ class PacketNumberSpaceTest {
         PacketNumberSpace space = new PacketNumberSpace(PacketNumberSpace.PacketPhase.INITIAL);
 
         // Receive packets with gaps: 0-2, 5-7, 10
-        space.onPacketReceived(0, 0);
-        space.onPacketReceived(1, 0);
-        space.onPacketReceived(2, 0);
-        space.onPacketReceived(5, 0);
-        space.onPacketReceived(6, 0);
-        space.onPacketReceived(7, 0);
-        space.onPacketReceived(10, 0);
+        space.onPacketReceived(System.currentTimeMillis(), 0, 0);
+        space.onPacketReceived(System.currentTimeMillis(), 1, 0);
+        space.onPacketReceived(System.currentTimeMillis(), 2, 0);
+        space.onPacketReceived(System.currentTimeMillis(), 5, 0);
+        space.onPacketReceived(System.currentTimeMillis(), 6, 0);
+        space.onPacketReceived(System.currentTimeMillis(), 7, 0);
+        space.onPacketReceived(System.currentTimeMillis(), 10, 0);
 
         SortedIntervals ranges = space.getAckRanges();
 
@@ -224,11 +224,11 @@ class PacketNumberSpaceTest {
         PacketNumberSpace space = new PacketNumberSpace(PacketNumberSpace.PacketPhase.INITIAL);
 
         // Receive packets out of order
-        space.onPacketReceived(5, 0);
-        space.onPacketReceived(2, 0);
-        space.onPacketReceived(8, 0);
-        space.onPacketReceived(3, 0);
-        space.onPacketReceived(4, 0);
+        space.onPacketReceived(System.currentTimeMillis(), 5, 0);
+        space.onPacketReceived(System.currentTimeMillis(), 2, 0);
+        space.onPacketReceived(System.currentTimeMillis(), 8, 0);
+        space.onPacketReceived(System.currentTimeMillis(), 3, 0);
+        space.onPacketReceived(System.currentTimeMillis(), 4, 0);
 
         SortedIntervals ranges = space.getAckRanges();
 
@@ -296,6 +296,49 @@ class PacketNumberSpaceTest {
         // RTT should still be initial value since packet wasn't ack-eliciting
         assertEquals(333, space.getSmoothedRtt());
         assertTrue(lostPackets.isEmpty(), "No packets should be lost");
+    }
+
+    @Test
+    void testGetAckDelay() {
+        PacketNumberSpace space = new PacketNumberSpace(PacketNumberSpace.PacketPhase.APPLICATION);
+
+        // No packets received yet
+        assertEquals(0, space.getAckDelay(1000));
+
+        // Receive packet at T=1000
+        space.onPacketReceived(1000, 5, 0);
+
+        // Delay at T=1008 should be (1008-1000)*1000 / 8 = 1000
+        assertEquals(1000, space.getAckDelay(1008));
+
+        // Receive larger packet at T=2000
+        space.onPacketReceived(2000, 10, 0);
+
+        // Delay at T=2008 should be (2008-2000)*1000 / 8 = 1000
+        assertEquals(1000, space.getAckDelay(2008));
+
+        // Receive smaller packet at T=3000 (should not update largest timestamp)
+        space.onPacketReceived(3000, 7, 0);
+
+        // Delay at T=3008 should still be relative to T=2000: (3008-2000)*1000 / 8 = 1008 * 125 = 126000
+        assertEquals(126000, space.getAckDelay(3008));
+    }
+
+    @Test
+    void testWriteAckFrameWithDelay() {
+        PacketNumberSpace space = new PacketNumberSpace(PacketNumberSpace.PacketPhase.APPLICATION);
+        long timestamp = 1000;
+        space.onPacketReceived(timestamp, 5, 0);
+
+        ByteBuffer buffer = ByteBuffer.allocate(64);
+        QuicFrameBuilder.writeAckFrame(space, timestamp + 8, buffer);
+
+        // Type
+        assertEquals(0x02, buffer.get());
+        // Largest Acked
+        assertEquals(5, QuicVarint.read(buffer));
+        // Ack Delay: (8 * 1000) >> 3 = 1000
+        assertEquals(1000, QuicVarint.read(buffer));
     }
 
     @Test

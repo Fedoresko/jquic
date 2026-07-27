@@ -31,12 +31,12 @@ public class QuicFrameBuilder {
      * Format: type(0x02) | largest_ack(varint) | ack_delay(varint) | ack_range_count(varint) |
      * first_ack_range(varint) | [gap(varint) | ack_range(varint)]*
      */
-    public static void writeAckFrameWithRanges(long largestAcknowledged, SortedIntervals ranges, ByteBuffer out) {
+    public static void writeAckFrameWithRanges(long largestAcknowledged, long ackDelay, SortedIntervals ranges, ByteBuffer out) {
         int start = out.position();
 
         out.put((byte) 0x02); // ACK frame type
         QuicVarint.write(out, largestAcknowledged);
-        QuicVarint.write(out, 0); // ACK Delay (simplified)
+        QuicVarint.write(out, ackDelay);
 
         writeAckRanges(ranges, out);
 
@@ -105,11 +105,12 @@ public class QuicFrameBuilder {
         out.position(start);
     }
 
-    public static void writeAckFrame(PacketNumberSpace space, ByteBuffer out) {
+    public static void writeAckFrame(PacketNumberSpace space, long currentTimestampMs, ByteBuffer out) {
         SortedIntervals ackRanges = space.getAckRanges();
 
         long largestAcknowledged = space.getLargestReceivedPacketNumber();
-        writeAckFrameWithRanges(largestAcknowledged, ackRanges, out);
+        long ackDelay = space.getAckDelay(currentTimestampMs);
+        writeAckFrameWithRanges(largestAcknowledged, ackDelay, ackRanges, out);
     }
 
 //    /**
@@ -294,14 +295,15 @@ public class QuicFrameBuilder {
      * first_ack_range(varint) | [gap(varint) | ack_range(varint)]* |
      * ect0_count(varint) | ect1_count(varint) | ecn_ce_count(varint)
      */
-    public static void writeAckEcnFrame(PacketNumberSpace space, ByteBuffer out) {
+    public static void writeAckEcnFrame(PacketNumberSpace space, long currentTimestampMs, ByteBuffer out) {
         int start = out.position();
         SortedIntervals ranges = space.getAckRanges();
         long largestAcknowledged = space.getLargestReceivedPacketNumber();
+        long ackDelay = space.getAckDelay(currentTimestampMs);
 
         out.put((byte) 0x03); // ACK + ECN frame type
         QuicVarint.write(out, largestAcknowledged);
-        QuicVarint.write(out, 0); // ACK Delay (simplified)
+        QuicVarint.write(out, ackDelay);
 
         writeAckRanges(ranges, out);
 

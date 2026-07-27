@@ -200,6 +200,7 @@ public class QuicCrypto {
             if (buf.remaining() < extensionsLen) throw new CryptoException(String.format("ClientHello: truncated extensions remainig: %d extensionsLen %d", buf.remaining(), extensionsLen));
 
             boolean hasTls13Version = false;
+            boolean hasTransportParameters = false;
             String alpn = null;
             long maxIdleTimeout = 0;
             long maxUdpPayloadSize = 1300;
@@ -293,6 +294,8 @@ public class QuicCrypto {
                             long paramLen = QuicVarint.read(buf);
                             long startPos = buf.position();
 
+                            hasTransportParameters  = true;
+
                             if (paramId == 0x01) { // max_idle_timeout
                                 maxIdleTimeout = QuicVarint.read(buf);
                             } else if (paramId == 0x03) {
@@ -338,6 +341,11 @@ public class QuicCrypto {
             if (alpn == null) {
                 logger.warn("ClientHello: no ALPN extension present");
             }
+
+            if (!hasTransportParameters) {
+                throw new CryptoException("ClientHello: no transport parameters", QuicTransportError.TLS_ERROR_MISSING_EXTENSION);
+            }
+
 
             logger.debug("Initials negotiated max_data {}, max stream data bidi local {}, max stream data bidi remote {}, max stream data uni {}, max streams bidi {}, max streams uni {}", initialMaxData, initialMaxStreamDataBidiLocal, initialMaxStreamDataBidiRemote, initialMaxStreamDataUni, initialMaxStreamsBidi, initialMaxStreamsUni);
 
@@ -908,7 +916,7 @@ public class QuicCrypto {
      *
      * @param metadata the live {@link ConnectionMetadata} for this connection
      */
-    public static void putEncryptedExtensions(ConnectionMetadata metadata, long cid, ChunkedOutputStreamWithAmendments output) throws IOException {
+    public static void putEncryptedExtensions(ConnectionMetadata metadata, long cid, byte[] statelessResetToken, ChunkedOutputStreamWithAmendments output) throws IOException {
         // Zero-copy: single pre-allocated buffer, all lengths back-filled in place.
         // Layout:
         //   [0]      HandshakeType (1)          = 0x08
@@ -960,51 +968,6 @@ public class QuicCrypto {
             output.write(metadata.originalDCid);                      // param value
         }
 
-        // initial_source_connection_id (param id 0x0f)
-        QuicVarint.write(output, 0x0f);
-        QuicVarint.write(output, 8);
-        output.writeLong(cid);
-
-        // disable_active_migration (param id 0x0c, RFC 9000)
-        QuicVarint.write(output, 0x0c);
-        QuicVarint.write(output, 0x00);
-
-        // initial_max_data  (param id 0x04)
-        QuicVarint.write(output, 0x04);
-        QuicVarint.write(output, QuicVarint.sizeOf(metadata.serverInitialStreamLimits.maxData));
-        QuicVarint.write(output,metadata.serverInitialStreamLimits.maxData);
-
-        //initial_max_stream_data_bidi_local: 0x05
-        QuicVarint.write(output, 0x05);
-        QuicVarint.write(output, QuicVarint.sizeOf(metadata.serverInitialStreamLimits.maxStreamDataBidiLocal));
-        QuicVarint.write(output,metadata.serverInitialStreamLimits.maxStreamDataBidiLocal);
-
-        //initial_max_stream_data_bidi_remote: 0x06
-        QuicVarint.write(output, 0x06);
-        QuicVarint.write(output, QuicVarint.sizeOf(metadata.serverInitialStreamLimits.maxStreamDataBidiRemote));
-        QuicVarint.write(output,metadata.serverInitialStreamLimits.maxStreamDataBidiRemote);
-
-        //initial_max_stream_data_uni: 0x07
-        QuicVarint.write(output, 0x07);
-        QuicVarint.write(output, QuicVarint.sizeOf(metadata.serverInitialStreamLimits.maxStreamDataUni));
-        QuicVarint.write(output, metadata.serverInitialStreamLimits.maxStreamDataUni);
-
-        // initial_max_streams_bidi (param id 0x08)
-        QuicVarint.write(output, 0x08);
-        QuicVarint.write(output, QuicVarint.sizeOf(metadata.serverInitialStreamLimits.maxBidi));
-        QuicVarint.write(output,metadata.serverInitialStreamLimits.maxBidi);
-
-        // initial_max_streams_uni  (param id 0x09)
-        QuicVarint.write(output, 0x09);
-        QuicVarint.write(output, QuicVarint.sizeOf(metadata.serverInitialStreamLimits.maxUni));
-        QuicVarint.write(output,metadata.serverInitialStreamLimits.maxUni);
-
-        // max_udp_payload_size
-        QuicVarint.write(output, 0x03);
-        QuicVarint.write(output, QuicVarint.sizeOf(1400));
-        QuicVarint.write(output, 1400);
-
-
         // max_idle_timeout (param id 0x01)
         long idleTimeoutMs = metadata.negotiatedIdleTimeoutMs > 0
                 ? metadata.negotiatedIdleTimeoutMs
@@ -1012,6 +975,61 @@ public class QuicCrypto {
         QuicVarint.write(output, 0x01);             // param id: max_idle_timeout
         QuicVarint.write(output, QuicVarint.sizeOf(idleTimeoutMs));
         QuicVarint.write(output, idleTimeoutMs);    // param value
+
+        // stateless_reset_token
+        QuicVarint.write(output, 0x02);
+        QuicVarint.write(output, statelessResetToken.length);
+        output.write(statelessResetToken);
+
+        // max_udp_payload_size
+        QuicVarint.write(output, 0x03);
+        QuicVarint.write(output, QuicVarint.sizeOf(1400));
+        QuicVarint.write(output, 1400);
+
+        // initial_max_data  (param id 0x04)
+        QuicVarint.write(output, 0x04);
+        QuicVarint.write(output, QuicVarint.sizeOf(metadata.serverInitialLimits.maxData));
+        QuicVarint.write(output, metadata.serverInitialLimits.maxData);
+
+        //initial_max_stream_data_bidi_local: 0x05
+        QuicVarint.write(output, 0x05);
+        QuicVarint.write(output, QuicVarint.sizeOf(metadata.serverInitialLimits.maxStreamDataBidiLocal));
+        QuicVarint.write(output, metadata.serverInitialLimits.maxStreamDataBidiLocal);
+
+        //initial_max_stream_data_bidi_remote: 0x06
+        QuicVarint.write(output, 0x06);
+        QuicVarint.write(output, QuicVarint.sizeOf(metadata.serverInitialLimits.maxStreamDataBidiRemote));
+        QuicVarint.write(output,metadata.serverInitialLimits.maxStreamDataBidiRemote);
+
+        //initial_max_stream_data_uni: 0x07
+        QuicVarint.write(output, 0x07);
+        QuicVarint.write(output, QuicVarint.sizeOf(metadata.serverInitialLimits.maxStreamDataUni));
+        QuicVarint.write(output, metadata.serverInitialLimits.maxStreamDataUni);
+
+        // initial_max_streams_bidi (param id 0x08)
+        QuicVarint.write(output, 0x08);
+        QuicVarint.write(output, QuicVarint.sizeOf(metadata.serverInitialLimits.maxBidi));
+        QuicVarint.write(output, metadata.serverInitialLimits.maxBidi);
+
+        // initial_max_streams_uni  (param id 0x09)
+        QuicVarint.write(output, 0x09);
+        QuicVarint.write(output, QuicVarint.sizeOf(metadata.serverInitialLimits.maxUni));
+        QuicVarint.write(output, metadata.serverInitialLimits.maxUni);
+
+        // disable_active_migration (param id 0x0c, RFC 9000)
+        QuicVarint.write(output, 0x0c);
+        QuicVarint.write(output, 0x00);
+
+        // active_connection_id_limit
+        QuicVarint.write(output, 0x0e);
+        QuicVarint.write(output, QuicVarint.sizeOf(metadata.serverInitialLimits.maxConnections));
+        QuicVarint.write(output, metadata.serverInitialLimits.maxConnections);
+
+        // initial_source_connection_id (param id 0x0f)
+        QuicVarint.write(output, 0x0f);
+        QuicVarint.write(output, 8);
+        output.writeLong(cid);
+
 
         int tpEnd = output.getPos();
         int tpLen = tpEnd - tpStart;
@@ -1448,24 +1466,36 @@ public class QuicCrypto {
      */
     public static class CryptoException extends Exception {
         private final Short demandedGroupId;
+        private final QuicTransportError error;
 
         public Short getDemandedGroupId() {
             return demandedGroupId;
         }
 
+        public QuicTransportError getError() { return  error; }
+
+        public CryptoException(String message, QuicTransportError error) {
+            super(message);
+            this.error = error;
+            demandedGroupId = null;
+        }
+
         public CryptoException(String message) {
             super(message);
             demandedGroupId = null;
+            this.error = null;
         }
 
         public CryptoException(String message, short demandedGroupId) {
             super(message);
             this.demandedGroupId = demandedGroupId;
+            this.error = null;
         }
 
         public CryptoException(String message, Throwable cause) {
             super(message, cause);
             demandedGroupId = null;
+            this.error = null;
         }
     }
 

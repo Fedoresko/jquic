@@ -73,7 +73,7 @@ public class StreamManager implements ConnectionStreamManager {
         this.connection = connection;
         this.streamWorker = streamWorker;
         this.congestionControl = protocol.getCongestionControl();
-        flightControl = new FlightControl(connection.connectionMetadata.serverInitialStreamLimits,
+        flightControl = new FlightControl(connection.connectionMetadata.serverInitialLimits,
                 connection.connectionMetadata.clientMetadata.initialStreamLimits, this);
         this.outputQueue = outputQueue;
 

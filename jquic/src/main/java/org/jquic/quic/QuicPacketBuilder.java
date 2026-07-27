@@ -244,8 +244,13 @@ public class QuicPacketBuilder {
         byte firstByte = (byte) (0x40 | (SECURE_RANDOM.nextInt() & 0x3F));
         frameBuffer.put(firstByte);
 
+        // Randomize packet length a bit
+        int minLen = Math.min(32, incomingPacketSize - 1);
+        int maxLen = Math.min(64, incomingPacketSize - 1);
+        int len = SECURE_RANDOM.nextInt(maxLen - minLen) + minLen;
+
         // Fill with random unpredictable bits (excluding last 16 bytes for token)
-        int randomBytesCount = resetSize - 1 - STATELESS_RESET_TOKEN_LENGTH;
+        int randomBytesCount = len - STATELESS_RESET_TOKEN_LENGTH;
         byte[] randomBytes = new byte[randomBytesCount];
         SECURE_RANDOM.nextBytes(randomBytes);
         frameBuffer.put(randomBytes);
@@ -254,9 +259,6 @@ public class QuicPacketBuilder {
         // In a real implementation, this should be a pseudorandom function of the CID
         // For now, we use random bytes (stateless - doesn't require storing state)
         frameBuffer.put(statelessResetToken);
-
-        //Add required padding
-        frameBuffer.put(ZERO_BLOCK, 0, resetSize - frameBuffer.position());
 
         frameBuffer.limit(frameBuffer.position());
         frameBuffer.position(start);

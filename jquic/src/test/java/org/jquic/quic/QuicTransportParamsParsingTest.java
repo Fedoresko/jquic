@@ -61,6 +61,65 @@ class QuicTransportParamsParsingTest {
         assertEquals(5, parsedHello.initialStreamLimits.maxUni);
     }
 
+    @Test
+    void testParseClientHelloMissingTransportParametersThrowsException() throws Exception {
+        ByteBuffer hello = buildClientHelloWithoutParams();
+
+        QuicCrypto.CryptoException ex = org.junit.jupiter.api.Assertions.assertThrows(
+                QuicCrypto.CryptoException.class,
+                () -> QuicCrypto.parseClientHello(hello)
+        );
+
+        assertEquals("ClientHello: no transport parameters", ex.getMessage());
+        assertEquals(QuicTransportError.TLS_ERROR_MISSING_EXTENSION, ex.getError());
+    }
+
+    private ByteBuffer buildClientHelloWithoutParams() throws Exception {
+        KeyPairGenerator kpg = KeyPairGenerator.getInstance("XDH");
+        kpg.initialize(java.security.spec.NamedParameterSpec.X25519);
+        KeyPair kp = kpg.generateKeyPair();
+        byte[] pubEncoded = kp.getPublic().getEncoded();
+        byte[] x25519PubKey = Arrays.copyOfRange(pubEncoded, pubEncoded.length - 32, pubEncoded.length);
+
+        ByteBuffer extensions = ByteBuffer.allocate(512);
+        // supported_versions (0x002b)
+        extensions.putShort((short) 0x002b);
+        extensions.putShort((short) 3);
+        extensions.put((byte) 2);
+        extensions.putShort((short) 0x0304);
+
+        // key_share (0x0033)
+        extensions.putShort((short) 0x0033);
+        extensions.putShort((short) 38);
+        extensions.putShort((short) 36);
+        extensions.putShort((short) 0x001d);
+        extensions.putShort((short) 32);
+        extensions.put(x25519PubKey);
+
+        extensions.flip();
+        int extLen = extensions.remaining();
+
+        int bodyLen = 2 + 32 + 1 + 2 + 2 + 1 + 1 + 2 + extLen;
+        ByteBuffer hello = ByteBuffer.allocate(4 + bodyLen);
+        hello.put((byte) 0x01);
+        hello.put((byte) ((bodyLen >> 16) & 0xFF));
+        hello.put((byte) ((bodyLen >> 8) & 0xFF));
+        hello.put((byte) (bodyLen & 0xFF));
+
+        hello.putShort((short) 0x0303);
+        hello.put(new byte[32]);
+        hello.put((byte) 0);
+        hello.putShort((short) 2);
+        hello.putShort((short) 0x1301);
+        hello.put((byte) 1);
+        hello.put((byte) 0x00);
+        hello.putShort((short) extLen);
+        hello.put(extensions);
+
+        hello.flip();
+        return hello;
+    }
+
     private Object getFieldValue(Object obj, String fieldName) throws Exception {
         java.lang.reflect.Field field = obj.getClass().getField(fieldName);
         return field.get(obj);

@@ -82,7 +82,7 @@ public class ConnectionMetadata {
     public long lastPhaseSwitchPacketNumber = -1;
 
     public ClientMetadataNegotiated clientMetadata;
-    public InitialStreamLimits serverInitialStreamLimits = new InitialStreamLimits();
+    public InitialStreamLimits serverInitialLimits = new InitialStreamLimits();
     /**
      * Server's ephemeral public key bytes (32 bytes).
      * Set during stage 1; included in the ServerHello key_share extension.
@@ -167,6 +167,7 @@ public class ConnectionMetadata {
         public Integer maxStreamDataBidiLocal = 1048576; // Maximum data per bidirectional stream (opened by us) we are ready to accept from it initially
         public Integer maxStreamDataBidiRemote = 1048576; // Maximum data per bidirectional stream (opened by peer) we are ready to accept from it initially
         public Integer maxData = 1048576; // Total maximum data per connection we are ready to accept from the start
+        public long maxConnections = 100; // Total number of simultaneous connections from the client
     }
 
     /**
