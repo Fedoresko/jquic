@@ -454,7 +454,9 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
     }
 
     @Override
-    public void onConnectionClose() {}
+    public void onConnectionClose() {
+        futures.clear();
+    }
 
     /**
      * Parses an HTTP/3 request that uses QPACK-encoded headers (RFC 9204).

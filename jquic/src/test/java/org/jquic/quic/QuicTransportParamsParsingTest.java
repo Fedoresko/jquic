@@ -15,7 +15,6 @@
  */
 package org.jquic.quic;
 
-import org.conscrypt.Conscrypt;
 import org.junit.jupiter.api.Test;
 
 import java.nio.ByteBuffer;
@@ -28,9 +27,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 class QuicTransportParamsParsingTest {
-    static {
-        Security.addProvider(Conscrypt.newProvider());
-    }
 
     @Test
     void testParseTransportParameters() throws Exception {

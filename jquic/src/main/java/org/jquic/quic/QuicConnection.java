@@ -17,30 +17,30 @@ package org.jquic.quic;
 
 import org.jctools.queues.MessagePassingQueue;
 import org.jquic.LogTool;
-import org.jquic.quic.buffers.*;
+import org.jquic.quic.buffers.BufferPool;
+import org.jquic.quic.buffers.ChunkedOutputStreamWithAmendments;
+import org.jquic.quic.buffers.PoolBuffer;
+import org.jquic.quic.buffers.TranscryptHashSupport;
+import org.jquic.quic.crypto.NativeCrypto;
 import org.jquic.quic.streamapi.ConnectionStreamManager;
 import org.jquic.quic.streamapi.QuicApplicationProtocol;
 import org.jquic.quic.streamapi.frames.*;
-import org.jquic.quic.streamapi.impl.OutboxRecord;
+import org.jquic.quic.streamapi.impl.EventRecord;
+import org.jquic.quic.streamapi.impl.EventType;
 import org.jquic.quic.streamapi.impl.QuicStreamEngineImpl;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.crypto.SecretKey;
 import java.io.IOException;
-import java.lang.reflect.Field;
-import java.lang.reflect.Modifier;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
-import java.security.GeneralSecurityException;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 import static org.jquic.quic.QuicConnection.State.*;
 import static org.jquic.quic.QuicCrypto.GCM_TAG_LENGTH;
-import static org.jquic.quic.QuicCrypto.rotateApplicationKeys;
 import static org.jquic.quic.QuicFrameBuilder.*;
 import static org.jquic.quic.streamapi.impl.StreamFrameWriter.*;
 
@@ -110,13 +110,13 @@ public class QuicConnection implements TimeoutHeap.Entry {
      * SPSC: single producer (this connection, always on the selector thread),
      * single consumer (the selector thread).
      */
-    private final Deque<PoolBuffer> outboundQueue = new ArrayDeque<>();
-    private final MessagePassingQueue<OutboxRecord> outputQueue;
+    private final Deque<EventRecord> outboundQueue = new ArrayDeque<>();
+    private final MessagePassingQueue<EventRecord> outputQueue;
     private CryptoFrameRebuilder cryptoFrameRebuilder;
     byte[] clientCid;
     private final SelectorThread selector;
 
-    public QuicConnection(long connectionId, QuicVersion version, SocketAddress remoteAddress, MessagePassingQueue<OutboxRecord> outputQueue, SelectorThread selector) {
+    public QuicConnection(long connectionId, QuicVersion version, SocketAddress remoteAddress, MessagePassingQueue<EventRecord> outputQueue, SelectorThread selector) {
         this.connectionId = connectionId;
         this.connectionIdBytes = ByteBuffer.allocate(8).putLong(connectionId);
         this.remoteAddress = remoteAddress;
@@ -153,7 +153,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
             connectionStreamManager.onDataSend(frame.buf().remaining());
         }
 
-        sendApplicationPacket(frame);
+        sendApplicationPacket(frame, false);
         return true;
     }
 
@@ -165,7 +165,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
      *
      * @return the next ready-to-send encrypted packet, or {@code null} if the queue is empty
      */
-    PoolBuffer pollOutbound() {
+    EventRecord pollOutbound() {
         return outboundQueue.pollFirst();
     }
 
@@ -319,6 +319,37 @@ public class QuicConnection implements TimeoutHeap.Entry {
                 logger.info("Unregistered connection {} from stream engine", connectionId);
             }
         }
+
+        if (state == CLOSED) {
+            try {
+                if (connectionMetadata.clientApplicationCrypto != null) {
+                    connectionMetadata.clientApplicationCrypto.close();
+                    connectionMetadata.clientApplicationCrypto = null;
+                }
+                if (connectionMetadata.clientHandshakeCrypto != null) {
+                    connectionMetadata.clientHandshakeCrypto.close();
+                    connectionMetadata.clientHandshakeCrypto = null;
+                }
+                if (connectionMetadata.clientInitialCrypto != null) {
+                    connectionMetadata.clientInitialCrypto.close();
+                    connectionMetadata.clientInitialCrypto = null;
+                }
+                if (connectionMetadata.serverApplicationCrypto != null) {
+                    connectionMetadata.serverApplicationCrypto.close();
+                    connectionMetadata.serverApplicationCrypto = null;
+                }
+                if (connectionMetadata.serverHandshakeCrypto != null) {
+                    connectionMetadata.serverHandshakeCrypto.close();
+                    connectionMetadata.serverHandshakeCrypto = null;
+                }
+                if (connectionMetadata.serverInitialCrypto != null) {
+                    connectionMetadata.serverInitialCrypto.close();
+                    connectionMetadata.serverInitialCrypto = null;
+                }
+            } catch (Exception ex) {
+                logger.warn("Error while trying to close connection", ex);
+            }
+        }
     }
 
     ConnectionMetadata getTlsMetadata() {
@@ -348,33 +379,14 @@ public class QuicConnection implements TimeoutHeap.Entry {
         // RFC 9001 Section 5.2: Initial keys are derived deterministically from the DCID.
         // They carry no per-connection secret, so there is no need to store them as fields.
         int packetLen = packet.buf().remaining();
-        ByteBuffer tt = packet.buf().duplicate();
-        tt.get(); //flags
-        tt.getInt();  //version
+        QuicPacketHeader.PacketSummary packetSummary = QuicPacketHeader.parseSummary(packet.buf());
 
-        // Read DCID
-        int dcidLen = tt.get() & 0xFF;
-        byte[] destinationCid = new byte[dcidLen];
-        tt.get(destinationCid);
-
-        boolean isNewConnection = false;
-        if (connectionMetadata.clientInitialKeys == null) {
-            connectionMetadata.originalDCid = destinationCid;
-            isNewConnection = true;
-            try {
-                QuicCrypto.PacketProtectionKeysWithHP[] keys = QuicCrypto.deriveInitialKeys(quicVersion,
-                        destinationCid);
-                connectionMetadata.clientInitialKeys = keys[0];
-                connectionMetadata.serverInitialKeys = keys[1];
-            } catch (QuicCrypto.CryptoException e) {
-                // RFC 9000: Silently discard packets that fail key derivation
-                logger.warn("Failed to derive Initial keys for CID: {}, discarding packet", connectionId);
-                return null;
-            }
-        }
+        Boolean isNewConnection = connectionMetadata.initializeKeys(quicVersion, packetSummary.dcid());
+        
+        if (isNewConnection == null) return null;
 
         // Parse masked header (packet number still protected)
-        QuicPacketHeader header = QuicPacketHeader.parse(packet.buf(), connectionMetadata.clientInitialKeys.headerProtection(), initialSpace.getLargestReceivedPacketNumber());
+        QuicPacketHeader header = QuicPacketHeader.parse(packet.buf(), connectionMetadata.clientInitialCrypto, initialSpace.getLargestReceivedPacketNumber());
         if (header == null) {
             // RFC 9000: Silently discard malformed packets
             logger.warn("Failed to parse Initial packet header for CID: {}, discarding", connectionId);
@@ -395,7 +407,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
 
         int remaining = packet.buf().remaining();
         try {
-            return decryptAeadInPlace(packet, header, (int) header.payloadLength - header.pnLength, connectionMetadata.clientInitialKeys);
+            return decryptAeadInPlace(packet, header, (int) header.payloadLength - header.pnLength, connectionMetadata.clientInitialCrypto);
         } catch (Exception e) {
             // RFC 9000: Silently discard packets that fail decryption or tag verification
             logger.warn("Initial packet decryption/authentication failed for CID: {}, size: {} pn {} payloadLen {} issue stateless reset",
@@ -412,35 +424,24 @@ public class QuicConnection implements TimeoutHeap.Entry {
         }
     }
 
-    private PoolBuffer decryptAeadInPlace(PoolBuffer packet, QuicPacketHeader header, int length, QuicCrypto.PacketProtectionKeysWithHP keys) throws GeneralSecurityException {
-        return decryptAeadInPlace(packet, header, length, keys.key(), keys.iv());
-    }
-
-    private PoolBuffer decryptAeadInPlace(PoolBuffer packet, QuicPacketHeader header, int length, QuicCrypto.PacketProtectionKeys keys) throws GeneralSecurityException {
-        return decryptAeadInPlace(packet, header, length, keys.key(), keys.iv());
-    }
-
-    private PoolBuffer decryptAeadInPlace(PoolBuffer packet, QuicPacketHeader header, int length, SecretKey key, byte [] iv) throws GeneralSecurityException {
+    private PoolBuffer decryptAeadInPlace(PoolBuffer packet, QuicPacketHeader header, int length, NativeCrypto crypto) {
         PoolBuffer plaintext;
         int startLimit = packet.buf().limit();
-        int startPos = packet.buf().position();
-        packet.buf().limit(packet.buf().position() + length);
+        int packetEnd = packet.buf().position() + length;
+        packet.buf().limit(packetEnd);
 
         plaintext = packet.borrow();
         // RFC 9001 Section 5.3: decryptAead verifies the GCM tag
         try {
-            QuicCrypto.decryptAead(packet.buf(), key, iv,
-                    header.packetNumber, plaintext.buf(), header.rawData);
-//            logger.debug("Decrypted Initial packet, packet number: {}, GCM tag verified", header.packetNumber);
+            crypto.decryptAeadInPlace(plaintext.buf(), header.packetNumber, header.rawData);
         } catch (Exception e) {
             plaintext.release();
-            throw e;
+            throw new RuntimeException(e);
         } finally {
             packet.buf().limit(startLimit);
         }
 
-        plaintext.buf().limit(plaintext.buf().position());
-        plaintext.buf().position(startPos);
+        packet.buf().position(packetEnd);
         return plaintext;
     }
 
@@ -469,7 +470,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
 
         // Parse and decrypt packet - use the HP key pre-derived in TlsMetadata
         // (RFC 9001 Section 5.4: Handshake level hp_key derived via "quic hp")
-        QuicPacketHeader header = QuicPacketHeader.parse(packet.buf(), connectionMetadata.clientHandshakeKeys.headerProtection(), handshakeSpace.getLargestReceivedPacketNumber());
+        QuicPacketHeader header = QuicPacketHeader.parse(packet.buf(), connectionMetadata.clientHandshakeCrypto, handshakeSpace.getLargestReceivedPacketNumber());
         if (header == null) {
             // RFC 9000: Silently discard malformed packets
             logger.warn("Failed to parse Handshake packet header for CID: {}, discarding", connectionId);
@@ -479,7 +480,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
 
         PoolBuffer frames;
         try {
-            frames = decryptAeadInPlace(packet, header, (int) header.payloadLength - header.pnLength, connectionMetadata.clientHandshakeKeys);
+            frames = decryptAeadInPlace(packet, header, (int) header.payloadLength - header.pnLength, connectionMetadata.clientHandshakeCrypto);
         } catch (Exception e) {
             packet.buf().position(packet.buf().limit());
             logger.warn("Handshake packet decryption/authentication failed for CID: {}, discarding",
@@ -561,12 +562,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
 
                 logger.info("Client Finished verified successfully for CID: {}", connectionId);
 
-                // Now the transcript contains all server Handshake messages.
-                // Append the client Finished and derive 1-RTT keys (RFC 8446 В§7.1).
-                // The correct order is: ClientHello в†’ ServerHello в†’ Certificate в†’
-                // CertificateVerify в†’ server Finished в†’ client Finished.
-
-                QuicCrypto.createApplicationKeys(quicVersion, connectionMetadata);
+                connectionMetadata.createApplicationKeys(quicVersion);
                 logger.debug("1-RTT application keys derived (transcript complete)");
 
                 connectionMetadata.updateTranscript(clientFinishedBytes);
@@ -612,7 +608,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
             return;
         }
 
-        if (connectionMetadata == null || connectionMetadata.clientApplicationKeys.key() == null) {
+        if (connectionMetadata == null || connectionMetadata.clientApplicationCrypto == null) {
             // RFC 9000: Silently discard packets when 1-RTT keys are not available
             logger.warn("No 1-RTT keys available for CID: {}, discarding packet", connectionId);
             packet.buf().position(packet.buf().limit());
@@ -621,23 +617,19 @@ public class QuicConnection implements TimeoutHeap.Entry {
 
         int remaining = packet.buf().remaining();
 
-
         // Parse short header - use the HP key pre-derived in TlsMetadata
         // (RFC 9001 Section 5.4: 1-RTT level hp_key derived via "quic hp")
-        QuicPacketHeader header = QuicPacketHeader.parse(packet.buf(), connectionMetadata.clientApplicationHeaderProtection, applicationSpace.getLargestReceivedPacketNumber());
+        QuicPacketHeader header = QuicPacketHeader.parse(packet.buf(), connectionMetadata.clientApplicationCrypto, applicationSpace.getLargestReceivedPacketNumber());
         logger.debug("Processing 1-RTT packet: CID={}, packetNumber={}, ", header.destinationCid, header.packetNumber);
 
         // Rotate secrets based on the Key Phase flag.
         byte phase = (byte) (header.flags >> 2 & 0x01);
         boolean differentKeyPhase = phase != connectionMetadata.currentPhase;
-        if (differentKeyPhase) {
-            logger.warn("Different key phase!!!! {}", connectionId);
-        }
         if (differentKeyPhase && header.packetNumber > connectionMetadata.lastPhaseSwitchPacketNumber) {
             try {
-                rotateApplicationKeys(quicVersion, connectionMetadata);
+                connectionMetadata.rotateApplicationKeys(quicVersion);
                 connectionMetadata.lastPhaseSwitchPacketNumber = header.packetNumber;
-            } catch (QuicCrypto.CryptoException e) {
+            } catch (Exception e) {
                 logger.error("Could not rotate secrets", e);
                 packet.buf().position(packet.buf().limit());
                 return;
@@ -652,9 +644,9 @@ public class QuicConnection implements TimeoutHeap.Entry {
 
         try {
             if (differentKeyPhase && header.packetNumber < connectionMetadata.lastPhaseSwitchPacketNumber) {
-                plaintext = decryptAeadInPlace(packet, header, packet.buf().remaining(), connectionMetadata.prevClientApplicationKeys);
+                plaintext = decryptAeadInPlace(packet, header, packet.buf().remaining(), connectionMetadata.prevClientApplicationCrypto);
             } else {
-                plaintext = decryptAeadInPlace(packet, header, packet.buf().remaining(), connectionMetadata.clientApplicationKeys);
+                plaintext = decryptAeadInPlace(packet, header, packet.buf().remaining(), connectionMetadata.clientApplicationCrypto);
             }
         } catch (Exception e) {
             logger.warn("1-RTT packet decryption/authentication failed for CID: {}, size: {} pn {} payloadLen {} issue stateless reset",
@@ -958,7 +950,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
 
                 sendInitialResponse();
 
-                QuicCrypto.generateHandshakeSecrets(quicVersion, connectionMetadata);
+                connectionMetadata.generateHandshakeSecrets(quicVersion);
 
                 // Generate Handshake response with server Certificate/Finished.
                 // This updates the transcript with: Certificate, CertificateVerify, server Finished.
@@ -1009,11 +1001,11 @@ public class QuicConnection implements TimeoutHeap.Entry {
 
     private void extractTlsMeta(ByteBuffer frame) {
         try {
-            ConnectionMetadata derivedMetadata = QuicCrypto.processClientHello(connectionMetadata, frame);
+            QuicCrypto.processClientHello(connectionMetadata, frame);
 
             // Extract ALPN from TLS metadata
-            if (derivedMetadata.clientMetadata.alpn != null) {
-                this.negotiatedProtocol = derivedMetadata.clientMetadata.alpn;
+            if (connectionMetadata.clientMetadata.alpn != null) {
+                this.negotiatedProtocol = connectionMetadata.clientMetadata.alpn;
                 QuicApplicationProtocol protocol = QuicEngine.getStreamEngine().getProtocol(negotiatedProtocol);
                 if (protocol != null) {
                     connectionMetadata.serverInitialLimits.maxData = protocol.getMaxData();
@@ -1023,14 +1015,12 @@ public class QuicConnection implements TimeoutHeap.Entry {
                     connectionMetadata.serverInitialLimits.maxStreamDataBidiLocal = protocol.getMaxStreamData();
                     connectionMetadata.serverInitialLimits.maxStreamDataBidiRemote = protocol.getMaxStreamData();
                 }
-                logger.info("ALPN negotiated: {} for CID: {}", derivedMetadata.clientMetadata.alpn, connectionId);
+                logger.info("ALPN negotiated: {} for CID: {}", connectionMetadata.clientMetadata.alpn, connectionId);
             } else {
                 logger.warn("No ALPN negotiated for CID: {}", connectionId);
             }
 
-            copyNewFields(connectionMetadata, derivedMetadata);
-
-            logger.debug("TLS keys derived, cipher: {}", derivedMetadata.clientMetadata.selectedCipherSuite);
+            logger.debug("TLS keys derived, cipher: {}", connectionMetadata.clientMetadata.selectedCipherSuite);
         }  catch (QuicCrypto.CryptoException e) {
             if (e.getDemandedGroupId() != null) {
                 logger.warn("ClientHello does not contain Key for supported KPG algorithms. Requesting another one {}", e.getDemandedGroupId());
@@ -1046,21 +1036,6 @@ public class QuicConnection implements TimeoutHeap.Entry {
             sendConnectionCloseAndUpdateState(e.getError() == null ? QuicTransportError.PROTOCOL_VIOLATION.code()
                 : e.getError().code(),
             "ClientHello validation failed", false);
-        }
-    }
-
-    private static void copyNewFields(ConnectionMetadata connectionMetadata, ConnectionMetadata derivedMetadata) {
-        for (Field field : ConnectionMetadata.class.getDeclaredFields()) {
-            if (field.canAccess(derivedMetadata) && !Modifier.isFinal(field.getModifiers())) {
-                try {
-                    Object val = field.get(derivedMetadata);
-                    if (val != null) {
-                        field.set(connectionMetadata, val);
-                    }
-                } catch (IllegalAccessException e) {
-                    throw new RuntimeException(e);
-                }
-            }
         }
     }
 
@@ -1089,9 +1064,9 @@ public class QuicConnection implements TimeoutHeap.Entry {
 
             logger.debug("Sending CONNECTION_CLOSE packet");
             if (ext) {
-                outputQueue.offer(new OutboxRecord(connectionId, System.nanoTime(), byteBuffer));
+                outputQueue.offer(new EventRecord(EventType.APPLICATION_DATA, connectionId, System.nanoTime(), byteBuffer));
             } else {
-                sendPacket(byteBuffer, phase);
+                sendPacket(byteBuffer, phase, false);
             }
             logger.warn("Sent CONNECTION_CLOSE for CID: {}, transitioning to CLOSING", connectionId);
         } catch (Exception encryptEx) {
@@ -1107,10 +1082,10 @@ public class QuicConnection implements TimeoutHeap.Entry {
         QuicCrypto.applyHelloRetryRequestToTranscript(connectionMetadata, hrrFrame.buf());
 
         logger.debug("Sending HelloRetryRequest Initial packet");
-        sendInitialPacket(hrrFrame);
+        sendInitialPacket(hrrFrame, false);
     }
 
-    private void sendPacket(PoolBuffer payload, PacketNumberSpace.PacketPhase phase) {
+    private void sendPacket(PoolBuffer payload, PacketNumberSpace.PacketPhase phase, boolean retrasmit) {
         PacketNumberSpace space = switch (phase) {
             case INITIAL -> initialSpace;
             case HANDSHAKE -> handshakeSpace;
@@ -1130,7 +1105,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
                         packetNumber,
                         space.getLargestAckedPacketNumber(),
                         payload.buf().duplicate(),            // Plaintext payload
-                        connectionMetadata.serverInitialKeys
+                        connectionMetadata.serverInitialCrypto
                     );
                 case HANDSHAKE -> QuicPacketBuilder.buildHandshakePacket(
                         quicVersion,
@@ -1140,7 +1115,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
                         packetNumber,
                         space.getLargestAckedPacketNumber(),
                         payload.buf().duplicate(),            // Plaintext payload
-                        connectionMetadata.serverHandshakeKeys
+                        connectionMetadata.serverHandshakeCrypto
                     );
                 case APPLICATION ->  QuicPacketBuilder.build1RttPacket(
                         quicVersion,
@@ -1149,8 +1124,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
                         packetNumber,
                         space.getLargestAckedPacketNumber(),
                         payload.buf().duplicate(),          // Plaintext payload
-                        connectionMetadata.serverApplicationKeys,
-                        connectionMetadata.serverApplicationHeaderProtection,
+                        connectionMetadata.serverApplicationCrypto,
                         connectionMetadata.currentPhase
                 );
             };
@@ -1164,28 +1138,28 @@ public class QuicConnection implements TimeoutHeap.Entry {
         // Track sent packet: store UNENCRYPTED payload for retransmission
         space.onPacketSent(currentTimestamp, packetNumber, payload, true);
 
-        outboundQueue.add(completePacket);
+        outboundQueue.add(new EventRecord(retrasmit ? EventType.RETRANSMISSION : EventType.DATA, connectionId, 0, completePacket));
     }
 
-    private void sendInitialPacket(PoolBuffer payload) {
+    private void sendInitialPacket(PoolBuffer payload, boolean retrasmit) {
         if (state.get() == INITIAL)
-            sendPacket(payload, PacketNumberSpace.PacketPhase.INITIAL);
+            sendPacket(payload, PacketNumberSpace.PacketPhase.INITIAL, retrasmit);
         else {
             logger.error("!!!Send initial packet in {} state", state.get());
             payload.release();
         }
     }
-    private void sendHandshakePacket(PoolBuffer payload) {
+    private void sendHandshakePacket(PoolBuffer payload, boolean retrasmit) {
         if (state.get() == HANDSHAKE)
-            sendPacket(payload, PacketNumberSpace.PacketPhase.HANDSHAKE);
+            sendPacket(payload, PacketNumberSpace.PacketPhase.HANDSHAKE, retrasmit);
         else {
             logger.error("!!!Send handshake packet in {} state", state.get());
             payload.release();
         }
     }
-    private void sendApplicationPacket(PoolBuffer payload) {
+    private void sendApplicationPacket(PoolBuffer payload, boolean retrasmit) {
         if (state.get() == ESTABLISHED)
-            sendPacket(payload, PacketNumberSpace.PacketPhase.APPLICATION);
+            sendPacket(payload, PacketNumberSpace.PacketPhase.APPLICATION, retrasmit);
         else {
             logger.error("!!!Send application packet in {} state", state.get());
             payload.release();
@@ -1216,7 +1190,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
 
         PoolBuffer chunk;
         while ((chunk = outs.pollReadyChunk()) != null) {
-            sendInitialPacket(chunk);
+            sendInitialPacket(chunk, false);
             logger.debug("Sending ServerHello Initial packet");
         }
         outs.close();
@@ -1226,7 +1200,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
      * Creates Handshake packet with EncryptedExtensions, Certificate, CertificateVerify, Finished.
      *
      * <p>TLS 1.3 server flight order (RFC 8446 В§4.4):
-     * EncryptedExtensions в†’ Certificate в†’ CertificateVerify в†’ Finished
+     * EncryptedExtensions -> Certificate -> CertificateVerify -> Finished
      * <p>
      * Each message is fed into the running transcript hash immediately after it is built,
      * so that CertificateVerify signs over EE+Cert and Finished covers the full flight.
@@ -1264,7 +1238,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
 
         PoolBuffer chunk;
         while ((chunk = out.pollReadyChunk()) != null) {
-            sendHandshakePacket(chunk);
+            sendHandshakePacket(chunk, false);
         }
         out.close();
     }
@@ -1291,20 +1265,20 @@ public class QuicConnection implements TimeoutHeap.Entry {
         frame.buf().position(start);
 
         logger.debug("Sending HANDSHAKE_DONE frame in 1-RTT packet");
-        sendApplicationPacket(frame);
+        sendApplicationPacket(frame, false);
     }
 
     private void sendInitialAck() {
         PoolBuffer buffer = getBufferPool().requestWriteBuffer();
         QuicFrameBuilder.writeAckFrame(initialSpace, currentTimestamp, buffer.buf());
         logger.debug("Sending ACK Initial packet");
-        sendPacket(buffer, PacketNumberSpace.PacketPhase.INITIAL);
+        sendPacket(buffer, PacketNumberSpace.PacketPhase.INITIAL, false);
     }
     private void sendHandshakeAck() {
         PoolBuffer buffer = getBufferPool().requestWriteBuffer();
         QuicFrameBuilder.writeAckFrame(handshakeSpace, currentTimestamp, buffer.buf());
         logger.debug("Sending Handshake ACK");
-        sendPacket(buffer, PacketNumberSpace.PacketPhase.HANDSHAKE);
+        sendPacket(buffer, PacketNumberSpace.PacketPhase.HANDSHAKE, false);
     }
     private void send1RttAck(int ecnFlags) {
         PoolBuffer buffer = getBufferPool().requestWriteBuffer();
@@ -1314,7 +1288,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
             QuicFrameBuilder.writeAckEcnFrame(applicationSpace, currentTimestamp, buffer.buf());
         }
         logger.debug("Sending 1-RTT ACK");
-        sendPacket(buffer, PacketNumberSpace.PacketPhase.APPLICATION);
+        sendPacket(buffer, PacketNumberSpace.PacketPhase.APPLICATION, false);
     }
 
     /**
@@ -1330,17 +1304,6 @@ public class QuicConnection implements TimeoutHeap.Entry {
 
         if (rangeCount > 256) { //skip
             logger.error("Range count too high {}", rangeCount);
-            for (int i = 0; i < rangeCount; i++) {
-                if (!buffer.hasRemaining()) break;
-                QuicVarint.read(buffer);
-                QuicVarint.read(buffer);
-            }
-            if (frameType == 0x03) {
-                QuicVarint.read(buffer); // 1. ECT(0) Packets
-                QuicVarint.read(buffer); // 2. ECT(1) Packets
-                QuicVarint.read(buffer); // 3. Congestion Experienced Packets
-            }
-            return;
         }
 
         // Build ACK ranges
@@ -1356,15 +1319,17 @@ public class QuicConnection implements TimeoutHeap.Entry {
             long gap = QuicVarint.read(buffer) & 0x7FFF;
             long rangeLength = QuicVarint.read(buffer) & 0x7FFF;
 
-            long rangeSmallest = currentSmallest - gap - 2;
-            long rangeLargest = rangeSmallest + rangeLength;
-            if (rangeSmallest < 0 || rangeSmallest >= rangeLargest || rangeLargest > 65535) {
-                continue;
+            if (i < 256) {
+                long rangeSmallest = currentSmallest - gap - 2;
+                long rangeLargest = rangeSmallest + rangeLength;
+                if (rangeSmallest < 0 || rangeSmallest >= rangeLargest || rangeLargest > 65535) {
+                    continue;
+                }
+
+                ackRanges.add(new PacketNumberSpace.AckRange(rangeSmallest, rangeLargest));
+
+                currentSmallest = rangeSmallest;
             }
-
-            ackRanges.add(new PacketNumberSpace.AckRange(rangeSmallest, rangeLargest));
-
-            currentSmallest = rangeSmallest;
         }
 
         long ceCounter = 0;
@@ -1374,9 +1339,17 @@ public class QuicConnection implements TimeoutHeap.Entry {
             ceCounter = QuicVarint.read(buffer); // 3. Congestion Experienced Packets
         }
 
+        boolean needRetansmit = (space.getLargestAckedPacketNumber() < largestAcked);
+
         space.onAckReceived(currentTimestamp, largestAcked, ackRanges, ackDelay, connectionStreamManager, ceCounter);
 
-        retransmitLostPackets(space);
+        if (needRetansmit) retransmitLostPackets(space);
+    }
+
+    public void retransmitLostPackets() {
+        if (connectionMetadata.serverInitialCrypto != null) retransmitLostPackets(initialSpace);
+        if (connectionMetadata.serverHandshakeCrypto != null) retransmitLostPackets(handshakeSpace);
+        if (connectionMetadata.serverApplicationCrypto != null) retransmitLostPackets(applicationSpace);
     }
 
     private void retransmitLostPackets(PacketNumberSpace space) {
@@ -1394,7 +1367,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
                 logger.info("Retransmitting lost packet {} as new packet (phase: {})",
                         originalPn, sentPacket.packetPhase);
 
-                sendPacket(sentPacket.unencryptedPayload, sentPacket.packetPhase);
+                sendPacket(sentPacket.unencryptedPayload, sentPacket.packetPhase, true);
             }
         }
     }
@@ -1407,8 +1380,6 @@ public class QuicConnection implements TimeoutHeap.Entry {
      * @param frameType 0x1c for QUIC-level close, 0x1d for application-level close
      */
     private void parseConnectionCloseFrame(ByteBuffer buffer, byte frameType) {
-        int packetSize = buffer.remaining();
-
         long errorCode = QuicVarint.read(buffer);
 
         // QUIC-level close (0x1c) includes frame type that triggered the error
@@ -1424,10 +1395,6 @@ public class QuicConnection implements TimeoutHeap.Entry {
             byte[] reasonBytes = new byte[(int) reasonLength];
             buffer.get(reasonBytes);
             reason = new String(reasonBytes, StandardCharsets.UTF_8);
-        }
-
-        if (connectionMetadata.clientHandshakeKeys == null) {
-            sendStatelessReset(packetSize);
         }
 
         // RFC 9000: Transition to CLOSING if not already closing
@@ -1454,7 +1421,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
     private void sendStatelessReset(int incomingPacketSize) {
         try {
             PoolBuffer frame = QuicPacketBuilder.writeStatelessResetFrame(getBufferPool(), connectionId, incomingPacketSize, statelessResetToken);
-            sendInitialPacket(frame);
+            sendInitialPacket(frame, false);
             logger.info("Sent Stateless Reset ({} bytes)", frame.buf().remaining());
         } catch (Exception e) {
             logger.error("Failed to send Stateless Reset", e);

@@ -27,6 +27,7 @@ import java.net.SocketOption;
 import java.net.StandardSocketOptions;
 import java.nio.channels.DatagramChannel;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Set;
 
 public class QuicEngine {
@@ -40,7 +41,7 @@ public class QuicEngine {
     private static QuicStreamEngineImpl streamEngineInternal;
 
     private static final Logger logger = LoggerFactory.getLogger(QuicEngine.class);
-    private static ArrayList<Thread> selectorThreads;
+    private static ArrayList<SelectorThread> selectorThreads;
     private static Thread acceptorThread;
 
     /**
@@ -109,28 +110,32 @@ public class QuicEngine {
 
         selectorThreads = new ArrayList<>();
         // 2. Initialize Worker Selector Threads
-        SelectorThread[] selectors = new SelectorThread[SELECTOR_COUNT];
-        for (int selectorThreadId = 0; selectorThreadId < selectors.length; selectorThreadId++) {
+//        SelectorThread[] selectors = new SelectorThread[SELECTOR_COUNT];
+        for (int selectorThreadId = 0; selectorThreadId < SELECTOR_COUNT; selectorThreadId++) {
             DatagramChannel selectorChannel = createSocketWithReusePort();
 
             // Register selector socket in the eBPF map
             BpfRouting.registerSelector(selectorThreadId+1, selectorChannel);
 
-            selectors[selectorThreadId] = new SelectorThread(selectorThreadId, selectorChannel,
-                    cidToSelectorMap);
-
-            Thread thread = new Thread(selectors[selectorThreadId], "Selector-Thread-" + selectorThreadId);
+            SelectorThread thread = new SelectorThread(selectorThreadId, selectorChannel,
+                    cidToSelectorMap, "Selector-Thread-" + selectorThreadId);
             thread.start();
             selectorThreads.add(thread);
         }
 
         // Wire up acceptor with selector references for packet forwarding
-        acceptor.setSelectors(selectors);
+        acceptor.setSelectors(selectorThreads.toArray(new SelectorThread[0]));
 
         acceptorThread = new Thread(acceptor, "Acceptor-Thread");
         acceptorThread.start();
 
+        new StatThread().start();
+
         logger.warn("QUIC Multiplex Server actively listening on port {}", PORT);
+    }
+
+    public static List<SelectorThread> getSelectorThreads() {
+        return selectorThreads;
     }
 
     public static void stop() throws Exception {

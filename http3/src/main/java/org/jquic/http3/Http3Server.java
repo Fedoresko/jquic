@@ -28,7 +28,6 @@ public class Http3Server {
     private static final Logger logger = LoggerFactory.getLogger(Http3Server.class);
 
     private final Http3Protocol protocol;
-    private final Http3RequestHandler requestHandler;
     private boolean started = false;
 
 
@@ -57,7 +56,6 @@ public class Http3Server {
      * @param requestHandler Handler for incoming HTTP/3 requests
      */
     public Http3Server(Http3RequestHandler requestHandler) {
-        this.requestHandler = requestHandler;
         this.protocol = new Http3Protocol(requestHandler);
     }
 

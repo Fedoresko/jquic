@@ -17,6 +17,6 @@ package org.jquic.quic.streamapi.impl;
 
 import org.jquic.quic.buffers.PoolBuffer;
 
-public record OutboxRecord(long connectionId, long timeToSendNs, PoolBuffer data) {
+public record EventRecord(EventType eventType, long connectionId, long timeToSendNs, PoolBuffer data) {
 }
 

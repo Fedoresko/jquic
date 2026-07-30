@@ -24,8 +24,8 @@ public class BufferPool {
     public static final int WRITE_BUFFER_SIZE = 4096;
     public static final int INITIAL_SIZE = 100;
 
-    private final MpmcUnboundedXaddArrayQueue<RootPoolBuffer> readBufferPool = new MpmcUnboundedXaddArrayQueue<>(READ_BUFFER_SIZE * 10, 100);
-    private final MpmcUnboundedXaddArrayQueue<RootPoolBuffer> writeBufferPool = new MpmcUnboundedXaddArrayQueue<>(WRITE_BUFFER_SIZE * 10, 100);
+    private final MpmcUnboundedXaddArrayQueue<RootPoolBuffer> readBufferPool = new MpmcUnboundedXaddArrayQueue<>( 10, 100);
+    private final MpmcUnboundedXaddArrayQueue<RootPoolBuffer> writeBufferPool = new MpmcUnboundedXaddArrayQueue<>( 10, 100);
 
     public BufferPool() {
         for (int i = 0; i < INITIAL_SIZE; i++) {
@@ -58,10 +58,20 @@ public class BufferPool {
 
     void returnReadBuffer(RootPoolBuffer buffer) {
         readBufferPool.offer(buffer);
+        if (readBufferPool.size() >= 150) {
+            for (int i = 0; i < 50; i++) {
+                readBufferPool.poll(); // Free excessive data
+            }
+        }
     }
 
     void returnWriteBuffer(RootPoolBuffer buffer) {
         writeBufferPool.offer(buffer);
+        if (writeBufferPool.size() >= 150) {
+            for (int i = 0; i < 50; i++) {
+                writeBufferPool.poll(); // Free excessive data
+            }
+        }
     }
 }
 
