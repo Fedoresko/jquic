@@ -39,7 +39,8 @@ class FlightControl {
 
     final int maxStreamDataCap;
     private final long maxDataCap; // Hard limit per connection
-    private final AtomicLong currentMaxData; // Current MAX_DATA value advertised to peer
+    private final AtomicLong currentClientMaxData; // Current MAX_DATA value advertised to peer
+    private final AtomicLong currentServerMaxData; // Current MAX_DATA value advertised to peer
     // Stream limits
     private final int maxBidirectionalStreams;
     private final int maxUnidirectionalStreams;
@@ -61,6 +62,9 @@ class FlightControl {
     private final InitialStreamLimits serverInitialLimits;
     private final InitialStreamLimits clientInitialLimits;
 
+    AtomicLong lastDataBlockedAt  = new AtomicLong(0);
+
+
     /**
      * Accepts protocol negotiated flight limits
      * @param streamManager - needed to send responses \ close connections according to flight-control QUIC specs
@@ -70,7 +74,8 @@ class FlightControl {
         clientInitialLimits = clientLimits;
         this.maxStreamDataCap = serverLimits.maxStreamDataUni;
         this.maxDataCap = serverLimits.maxData;
-        this.currentMaxData = new AtomicLong(clientInitialLimits.maxData); // Initial value
+        this.currentClientMaxData = new AtomicLong(clientInitialLimits.maxData); // Initial value
+        this.currentServerMaxData = new AtomicLong(serverInitialLimits.maxData);
         this.maxBidirectionalStreams = serverLimits.maxBidi; // Our capacity same as the initial value
         this.maxUnidirectionalStreams = serverLimits.maxUni;
         this.streamManager = streamManager;
@@ -105,7 +110,7 @@ class FlightControl {
         totalBufferedBytes.addAndGet(-freedBytes);
         StreamState streamState = streams.get(streamId);
         streamState.setBufferedBytes(streamState.getBufferedBytes() - freedBytes);
-        updateMaxDataIfNeeded(streamId);
+        updateMaxDataIfNeeded();
         upadteStreamMaxDataIfNeeded(streamId, streamState);
     }
 
@@ -154,9 +159,9 @@ class FlightControl {
             streamManager.sendConnectionClose(FLOW_CONTROL_ERROR, "MAX_STREAM_DATA limit reached");
             return true;
         }
-        if (totalMaxOffsetsSum + delta > currentMaxData.get()) {
+        if (totalMaxOffsetsSum + delta > currentServerMaxData.get()) {
             logger.debug("Connection: would exceed maxData ({} + {} > {})",
-                    totalMaxOffsetsSum, delta, currentMaxData);
+                    totalMaxOffsetsSum, delta, currentServerMaxData);
 
             streamManager.sendConnectionClose(FLOW_CONTROL_ERROR, "MAX_DATA limit reached");
             return true;
@@ -175,35 +180,42 @@ class FlightControl {
 
         long streamId = state.getStreamId();
         if (!state.canSendBytes(dataSize)) {
-            logger.warn("Stream {} blocked by MAX_STREAM_DATA: sent={}, data={}, limit={}",
-                    streamId, state.getSentBytes(), dataSize, state.getMaxStreamData());
-            streamManager.sendStreamDataBlockedFrame(streamId, state.getMaxStreamData() + dataSize);
+            if (state.lastDataBlockedAt.get() < state.getMaxStreamData() + dataSize) {
+                logger.debug("Stream {} blocked by MAX_STREAM_DATA: sent={}, data={}, limit={}",
+                        streamId, state.getSentBytes(), dataSize, state.getMaxStreamData());
+                streamManager.sendStreamDataBlockedFrame(streamId, state.getMaxStreamData() + dataSize);
+                state.lastDataBlockedAt.set(state.getMaxStreamData() + dataSize);
+            }
             return false;
         }
         if (!canSendMoreConnectionData(dataSize)) {
-            logger.info("Connection blocked by MAX_DATA: in-flight={}, data={}, limit={}",
-                    totalInFlightBytes, dataSize, currentMaxData.get());
-            // Send DATA_BLOCKED frame to inform peer
-            streamManager.sendDataBlockedFrame(currentMaxData.get() + dataSize, streamId);
+            if (lastDataBlockedAt.get() < currentClientMaxData.get() + dataSize) {
+                logger.debug("Connection blocked by MAX_DATA: in-flight={}, data={}, limit={}",
+                        totalInFlightBytes, dataSize, currentClientMaxData.get());
+                // Send DATA_BLOCKED frame to inform peer
+                streamManager.sendDataBlockedFrame(currentClientMaxData.get() + dataSize, streamId);
+                lastDataBlockedAt.set(state.getMaxStreamData() + dataSize);
+            }
             return false;
         }
         return true;
     }
 
     public boolean canSendMoreConnectionData(int dataSize) {
-        return totalInFlightBytes.get() + dataSize <= currentMaxData.get();
+        return totalInFlightBytes.get() + dataSize <= currentClientMaxData.get();
     }
 
     // Update current max data counts, send max_data \ max_stream_data frames when needed.
-    private void updateMaxDataIfNeeded(long streamId) {
+    private void updateMaxDataIfNeeded() {
         // New MAX_DATA = hardCapacity - bufferedBytes + totalReceived
+
         long newMaxData = maxDataCap - totalBufferedBytes.get() + totalMaxOffsetsSum;
 
         // Send MAX_DATA if the increase is significant
-        if (currentMaxData.get() - totalMaxOffsetsSum < (maxDataCap - totalBufferedBytes.get()) / 2) {
-            logger.debug("Current maxData {} totalReceivedBytes {} maxDataCap {} totalBufferedBytes {}", currentMaxData, totalMaxOffsetsSum, maxDataCap, totalBufferedBytes);
-            streamManager.sendMaxDataFrame(newMaxData, streamId);
-            currentMaxData.set(newMaxData);
+        if (currentServerMaxData.get() - totalMaxOffsetsSum < (maxDataCap - totalBufferedBytes.get()) / 2) {
+            logger.debug("Current maxData {} totalReceivedBytes {} maxDataCap {} totalBufferedBytes {}", currentClientMaxData, totalMaxOffsetsSum, maxDataCap, totalBufferedBytes);
+            streamManager.sendMaxDataFrame(newMaxData);
+            currentServerMaxData.set(newMaxData);
         }
     }
 
@@ -337,7 +349,7 @@ class FlightControl {
         }
         long delta = state.updateMaxOffset(finalSize);
         totalMaxOffsetsSum += delta;
-        if (totalMaxOffsetsSum > currentMaxData.get()) {
+        if (totalMaxOffsetsSum > currentServerMaxData.get()) {
             streamManager.sendConnectionClose(FLOW_CONTROL_ERROR, "Stream reset final size exceeds max data cap");
             return null;
         }
@@ -410,8 +422,8 @@ class FlightControl {
      */
     public void onMaxData(long maximumData) {
         logger.warn("Received MAX_DATA for connection, new MAX {}", maximumData);
-        if (maximumData > this.currentMaxData.get()) {
-            this.currentMaxData.set(maximumData);
+        if (maximumData > this.currentClientMaxData.get()) {
+            this.currentClientMaxData.set(maximumData);
             logger.warn("Updated connection MAX_DATA to {}", maximumData);
         }
     }

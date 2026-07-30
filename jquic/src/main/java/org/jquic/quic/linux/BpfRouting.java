@@ -53,7 +53,7 @@ public class BpfRouting {
         MethodHandle attach = null;
         MethodHandle affinity = null;
         try {
-            NativeUtil.loadLib("libjavabpf.so");
+            NativeUtil.loadLib("libjavabpf");
             SymbolLookup lookup = SymbolLookup.loaderLookup();
             Linker linker = Linker.nativeLinker();
 

@@ -194,10 +194,6 @@ public class ChunkingOutputStream extends OutputStream {
         return wrappedChunks.poll();
     }
 
-    public PoolBuffer peekReadyChunk() {
-        return wrappedChunks.peek();
-    }
-
     private boolean isClosed() {
         return isClosed;
     }

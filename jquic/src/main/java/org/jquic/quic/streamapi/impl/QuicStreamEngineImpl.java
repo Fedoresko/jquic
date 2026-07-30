@@ -20,12 +20,10 @@ import org.jquic.quic.streamapi.ConnectionStreamManager;
 import org.jquic.quic.streamapi.QuicApplicationProtocol;
 import org.jquic.quic.streamapi.QuicStreamEngine;
 import org.jctools.queues.MessagePassingQueue;
-import org.jctools.queues.MpmcArrayQueue;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.nio.ByteBuffer;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -77,7 +75,7 @@ public class QuicStreamEngineImpl implements QuicStreamEngine {
      * @param connection   QuicConnection instance
      * @param protocolName Application protocol name
      */
-    public ConnectionStreamManager createConnection(long connectionId, QuicConnection connection, String protocolName, MessagePassingQueue<OutboxRecord> outputQueue) {
+    public ConnectionStreamManager createConnection(long connectionId, QuicConnection connection, String protocolName, MessagePassingQueue<EventRecord> outputQueue) {
         QuicApplicationProtocol protocol = protocols.get(protocolName);
         if (protocol == null) {
             logger.error("Protocol {} not registered", protocolName);

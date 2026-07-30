@@ -351,5 +351,36 @@ class TimeoutHeapTest {
         assertEquals(0, timeoutHeap.size(), "Poll should remove element");
         assertTrue(timeoutHeap.isEmpty(), "Heap should be empty after poll");
     }
+
+    @Test
+    @DisplayName("Test that references are dropped after poll and remove")
+    void testReferencesAreDropped() throws Exception {
+        TimeoutHeap<QuicConnection> heap = new TimeoutHeap<>(QuicConnection.class);
+        QuicConnection conn1 = new QuicConnection(1001L, QuicVersion.QUIC_VERSION_1, new InetSocketAddress("127.0.0.1", 5001), new SpscLinkedQueue<>(), selectorMock);
+        QuicConnection conn2 = new QuicConnection(1002L, QuicVersion.QUIC_VERSION_1, new InetSocketAddress("127.0.0.1", 5002), new SpscLinkedQueue<>(), selectorMock);
+
+        conn1.setIdleTimeout(1000);
+        conn2.setIdleTimeout(2000);
+
+        heap.insertOrUpdate(conn1);
+        heap.insertOrUpdate(conn2);
+
+        // Poll one
+        heap.poll();
+
+        // Check internal array via reflection
+        java.lang.reflect.Field heapField = TimeoutHeap.class.getDeclaredField("heap");
+        heapField.setAccessible(true);
+        QuicConnection[] internalHeap = (QuicConnection[]) heapField.get(heap);
+
+        // After poll, size is 1. index 1 should be null.
+        // Actually, in poll(): swap(0, --size); siftDown(0);
+        // size becomes 1. heap[0] will be conn2 (after siftDown). heap[1] will be conn1 (the polled one).
+        assertNull(internalHeap[1], "Internal heap array should not keep reference to polled entry at index 1");
+
+        // Now remove the remaining one
+        heap.remove(conn2);
+        assertNull(internalHeap[0], "Internal heap array should not keep reference to removed entry at index 0");
+    }
 }
 

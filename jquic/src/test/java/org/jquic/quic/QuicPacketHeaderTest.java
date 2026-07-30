@@ -2,9 +2,13 @@ package org.jquic.quic;
 
 import org.jquic.quic.buffers.BufferPool;
 import org.jquic.quic.buffers.PoolBuffer;
+import org.jquic.quic.crypto.NativeCrypto;
 import org.junit.jupiter.api.Test;
 import javax.crypto.Cipher;
 import javax.crypto.spec.SecretKeySpec;
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.nio.ByteBuffer;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -234,8 +238,9 @@ public class QuicPacketHeaderTest {
             buf.put(pnPos + i, (byte) (originalByte ^ mask[1 + i]));
         }
 
+        ByteBuffer hpSeg = ByteBuffer.allocateDirect(hpKey.length).put(hpKey).flip();
         // Now parse it
-        QuicPacketHeader header = QuicPacketHeader.parse(buf, hpCipher, largestPn);
+        QuicPacketHeader header = QuicPacketHeader.parse(buf, new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(null, null, hpSeg)), largestPn);
 
         assertNotNull(header);
         assertEquals(pn, header.packetNumber);

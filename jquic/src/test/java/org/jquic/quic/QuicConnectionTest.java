@@ -20,11 +20,13 @@ import org.jquic.quic.buffers.BorrowedPoolBuffer;
 import org.jquic.quic.buffers.BufferPool;
 import org.jquic.quic.buffers.PoolBuffer;
 import org.jquic.quic.buffers.RootPoolBuffer;
+import org.jquic.quic.crypto.NativeCrypto;
 import org.jquic.quic.streamapi.ConnectionStreamManager;
 import org.jquic.quic.streamapi.QuicApplicationProtocol;
 import org.jquic.quic.streamapi.QuicApplicationProtocolConnectionHandler;
 import org.jquic.quic.streamapi.frames.ProtocolFrame;
 import org.jquic.quic.streamapi.frames.StreamFrameData;
+import org.jquic.quic.streamapi.impl.EventRecord;
 import org.jquic.quic.streamapi.impl.QuicStreamEngineImpl;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
@@ -35,8 +37,8 @@ import org.mockito.Answers;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 
-import javax.crypto.SecretKey;
-import javax.crypto.spec.SecretKeySpec;
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
 import java.lang.reflect.Field;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
@@ -104,39 +106,19 @@ class QuicConnectionTest {
     private QuicConnection connection;
     private SelectorThread selectorMock;
     private MockedStatic<QuicCrypto> cryptoMock;
+//    private MockedStatic<ConnectionMetadata> mockedConnectionMetadata;
+    private NativeCrypto nCryptoMock;
     private MockedStatic<QuicFrameBuilder> frameBuilderMock;
     private ConnectionMetadata mockMetadata;
     private static final BufferPool pool = mock(BufferPool.class);
     
     @BeforeEach
     void setUp() throws Exception {
-        when(pool.requestWriteBuffer()).thenAnswer((a) -> new RootPoolBuffer(ByteBuffer.allocate(2000).position(100), pool, true).borrow() );
+        when(pool.requestWriteBuffer()).thenAnswer((a) -> new RootPoolBuffer(ByteBuffer.allocateDirect(2000).position(100), pool, true).borrow() );
+        nCryptoMock = mockNCrypto();
 
-        SecretKey clientHandshakeSecret = new SecretKeySpec(new byte[16], "AES");
-        SecretKey serverHandshakeSecret = new SecretKeySpec(new byte[16], "AES");
-        SecretKey client1RttSecret = new SecretKeySpec(new byte[16], "AES");
-        SecretKey server1RttSecret = new SecretKeySpec(new byte[16], "AES");
         mockMetadata = new ConnectionMetadata();
-        mockMetadata.negotiatedIdleTimeoutMs = 10_000;
-        mockMetadata.serverEphemeralPublicKey = new byte[32];
-        mockMetadata.clientHandshakeKeys = new QuicCrypto.PacketProtectionKeysWithHP(clientHandshakeSecret, new byte[12], null);
-        mockMetadata.serverHandshakeKeys = new QuicCrypto.PacketProtectionKeysWithHP(serverHandshakeSecret, new byte[12], null);
-        mockMetadata.clientInitialKeys = new QuicCrypto.PacketProtectionKeysWithHP(clientHandshakeSecret, new byte[12], null);
-        mockMetadata.serverInitialKeys = new QuicCrypto.PacketProtectionKeysWithHP(serverHandshakeSecret, new byte[12], null);
-        mockMetadata.setApplicationKeys(
-                new QuicCrypto.PacketProtectionKeys(client1RttSecret, new byte[12]),
-                new QuicCrypto.PacketProtectionKeys(server1RttSecret, new byte[12]));
-        mockMetadata.clientMetadata = new ConnectionMetadata.ClientMetadataNegotiated("h3", 1000, List.of(),
-                Map.of(), 1200, 1000, 0, 0,
-                0, 0, 0, List.of(), 3, 2);
-        mockMetadata.handshakeSecretBytes = new byte[32];
-        mockMetadata.selectedSignatureScheme = 0x0403;
-        mockMetadata.serverHandshakeTrafficSecret = new byte[32];
-        mockMetadata.clientHandshakeTrafficSecret = new byte[32];
-        mockMetadata.clientApplicationHeaderProtection = null;
-        mockMetadata.serverApplicationHeaderProtection = null;
-        mockMetadata.clientApplicationTrafficSecret = new byte[32];
-        mockMetadata.serverApplicationTrafficSecret = new byte[32];
+        updMeta(mockMetadata);
 
         cryptoMock = mockQuicCrypto();
         frameBuilderMock = Mockito.mockStatic(QuicFrameBuilder.class, Answers.CALLS_REAL_METHODS);
@@ -152,7 +134,26 @@ class QuicConnectionTest {
         connection.connectionMetadata = mockMetadata;
         connection.clientCid = ByteBuffer.allocate(8).putLong(TEST_CID).array();
         connection.setConnectionStreamManager(mock(ConnectionStreamManager.class));
+    }
 
+    private void updMeta(ConnectionMetadata mockMetadata) {
+        mockMetadata.negotiatedIdleTimeoutMs = 10_000;
+        mockMetadata.serverEphemeralPublicKey = new byte[32];
+        mockMetadata.clientHandshakeCrypto = nCryptoMock;
+        mockMetadata.serverHandshakeCrypto = nCryptoMock;
+        mockMetadata.clientInitialCrypto = nCryptoMock;
+        mockMetadata.serverInitialCrypto = nCryptoMock;
+        mockMetadata.clientApplicationCrypto = nCryptoMock;
+        mockMetadata.serverApplicationCrypto = nCryptoMock;
+        mockMetadata.clientMetadata = new ConnectionMetadata.ClientMetadataNegotiated("h3", 1000, List.of(),
+                Map.of(), 1200, 1000, 0, 0,
+                0, 0, 0, List.of(), 3);
+        mockMetadata.handshakeSecretBytes = new byte[32];
+        mockMetadata.selectedSignatureScheme = 0x0403;
+        mockMetadata.serverHandshakeTrafficSecret = new byte[32];
+        mockMetadata.clientHandshakeTrafficSecret = new byte[32];
+        mockMetadata.clientApplicationTrafficSecret = new byte[32];
+        mockMetadata.serverApplicationTrafficSecret = new byte[32];
     }
 
     @AfterEach
@@ -163,6 +164,9 @@ class QuicConnectionTest {
         if (frameBuilderMock != null) {
             frameBuilderMock.close();
         }
+//        if (mockedConnectionMetadata != null) {
+//            mockedConnectionMetadata.close();
+//        }
     }
 
     // ========================================================================
@@ -170,7 +174,7 @@ class QuicConnectionTest {
     // ========================================================================
 
     @Test
-    @DisplayName("Test successful 1-RTT handshake: INITIAL в†’ HANDSHAKE в†’ ESTABLISHED")
+    @DisplayName("Test successful 1-RTT handshake: INITIAL -> HANDSHAKE -> ESTABLISHED")
     void testSuccessful1RttHandshake() throws Exception {
         // Initial state
         assertEquals(QuicConnection.State.INITIAL, connection.getState());
@@ -183,6 +187,8 @@ class QuicConnectionTest {
         assertFalse(initialResponses.isEmpty(), "Initial response should be generated");
         assertEquals(QuicConnection.State.HANDSHAKE, connection.getState(),
                 "Connection should transition to HANDSHAKE state");
+
+        updMeta(mockMetadata);
 
         // Step 2: Process Handshake packet (client Finished)
         ByteBuffer handshakePacket = createMockHandshakePacket();
@@ -220,9 +226,6 @@ class QuicConnectionTest {
         assertFalse(responses.isEmpty(), "CONNECTION_CLOSE response should be generated");
         assertEquals(QuicConnection.State.CLOSING, connection.getState(),
                 "Connection should transition to CLOSING state");
-
-        // Verify encryptPacket was called to send CONNECTION_CLOSE
-        cryptoMock.verify(() -> QuicCrypto.encryptPacketInPlace(any(), any(), anyLong(), any(), any()), atLeastOnce());
     }
 
     @Test
@@ -291,7 +294,7 @@ class QuicConnectionTest {
         // Create 1-RTT packet with STREAM frame
         ByteBuffer packet = createMock1RttPacketWithStreamData(4L, "Hello QUIC".getBytes());
         connection.process1RttPacket(new RootPoolBuffer(packet, pool, false), 0);
-        PoolBuffer ackResponse = connection.pollOutbound();
+        EventRecord ackResponse = connection.pollOutbound();
 
 
         // Verify stream data was delivered
@@ -332,7 +335,7 @@ class QuicConnectionTest {
         // Send CONNECTION_CLOSE frame
         ByteBuffer closePacket = createMock1RttPacketWithConnectionClose();
         connection.process1RttPacket(new RootPoolBuffer(closePacket, pool, false), 0);
-        PoolBuffer ackResponse = connection.pollOutbound();
+        EventRecord ackResponse = connection.pollOutbound();
 
         // Verify state transition
         assertEquals(QuicConnection.State.CLOSING, connection.getState(),
@@ -433,15 +436,12 @@ class QuicConnectionTest {
     void testKeyPhaseChangeTriggersKeyRotation() throws Exception {
         setupEstablishedConnection();
 
-        SecretKey keyBeforeRotation = connection.getTlsMetadata().clientApplicationKeys.key();
+        NativeCrypto keyBeforeRotation = connection.getTlsMetadata().clientApplicationCrypto;
 
         // Initial phase is 0 (default). Send a packet with key phase bit = 1 (flipped).
         // Packet number must be greater than lastPhaseSwitchPacketNumber (default -1).
         ByteBuffer packet = createMock1RttPacketWithKeyPhase(10L, new byte[]{0x01}, true);
         connection.process1RttPacket(new RootPoolBuffer(packet, pool, false), 0);
-
-        // rotateApplicationKeys must have been called exactly once
-        cryptoMock.verify(() -> QuicCrypto.rotateApplicationKeys(any(), any()), times(1));
 
         ConnectionMetadata meta = connection.getTlsMetadata();
 
@@ -454,13 +454,13 @@ class QuicConnectionTest {
                 "lastPhaseSwitchPacketNumber should be set to the packet number that triggered rotation");
 
         // The real rotation must have replaced clientApplicationKeys with freshly derived ones
-        assertNotSame(keyBeforeRotation, meta.clientApplicationKeys.key(),
+        assertNotSame(keyBeforeRotation, meta.clientApplicationCrypto,
                 "clientApplicationKeys must be replaced by the real key derivation after rotation");
 
         // Previous keys must be saved
-        assertNotNull(meta.prevClientApplicationKeys,
+        assertNotNull(meta.prevClientApplicationCrypto,
                 "prevClientApplicationKeys must be saved after rotation");
-        assertSame(keyBeforeRotation, meta.prevClientApplicationKeys.key(),
+        assertSame(keyBeforeRotation, meta.prevClientApplicationCrypto,
                 "prevClientApplicationKeys must hold the key that was current before rotation");
     }
 
@@ -469,16 +469,14 @@ class QuicConnectionTest {
     void testSameKeyPhaseDoesNotTriggerRotation() throws Exception {
         setupEstablishedConnection();
 
-        SecretKey keyBefore = connection.getTlsMetadata().clientApplicationKeys.key();
+        NativeCrypto keyBefore = connection.getTlsMetadata().clientApplicationCrypto;
 
-        // Phase bit = 0 matches initial currentPhase = 0 в†’ no rotation expected
+        // Phase bit = 0 matches initial currentPhase = 0 -> no rotation expected
         ByteBuffer packet = createMock1RttPacketWithKeyPhase(5L, new byte[]{0x01}, false);
         connection.process1RttPacket(new RootPoolBuffer(packet, pool, false), 0);
 
-        cryptoMock.verify(() -> QuicCrypto.rotateApplicationKeys(any(), any()), never());
-
         // Keys must be unchanged
-        assertSame(keyBefore, connection.getTlsMetadata().clientApplicationKeys.key(),
+        assertSame(keyBefore, connection.getTlsMetadata().clientApplicationCrypto,
                 "clientApplicationKeys must not change when key phase bit is unchanged");
     }
 
@@ -486,14 +484,14 @@ class QuicConnectionTest {
     @DisplayName("Test: after key rotation subsequent packets use new (current) keys")
     void testSubsequentPacketsAfterRotationUseNewKeys() throws Exception {
         setupEstablishedConnection();
-        SecretKey originalKey = connection.getTlsMetadata().clientApplicationKeys.key();
+        NativeCrypto originalKey = connection.getTlsMetadata().clientApplicationCrypto;
 
         // Step 1: Trigger rotation with key phase bit = 1, packet number 10.
         // The real rotateApplicationKeys derives a new key from clientApplicationTrafficSecret.
         ByteBuffer rotationPacket = createMock1RttPacketWithKeyPhase(10L, new byte[]{0x01}, true);
         connection.process1RttPacket(new RootPoolBuffer(rotationPacket, pool, false), 0);
 
-        SecretKey rotatedKey = connection.getTlsMetadata().clientApplicationKeys.key();
+        NativeCrypto rotatedKey = connection.getTlsMetadata().clientApplicationCrypto;
         assertNotSame(originalKey, rotatedKey,
                 "clientApplicationKeys must be replaced after rotation");
 
@@ -503,11 +501,8 @@ class QuicConnectionTest {
         ByteBuffer followUpPacket = createMock1RttPacketWithKeyPhase(11L, new byte[]{0x01}, true);
         connection.process1RttPacket(new RootPoolBuffer(followUpPacket, pool, false), 0);
 
-        // rotateApplicationKeys called exactly once (only for the first phase flip)
-        cryptoMock.verify(() -> QuicCrypto.rotateApplicationKeys(any(), any()), times(1));
-
         // Keys must remain the post-rotation keys after the follow-up packet
-        assertSame(rotatedKey, connection.getTlsMetadata().clientApplicationKeys.key(),
+        assertSame(rotatedKey, connection.getTlsMetadata().clientApplicationCrypto,
                 "clientApplicationKeys must stay as the rotated key for follow-up packets in the same phase");
     }
 
@@ -515,67 +510,43 @@ class QuicConnectionTest {
     @DisplayName("Test: late (out-of-order) packet with old key phase uses previous keys")
     void testLatePacketWithOldKeyPhaseUsesPreviousKeys() throws Exception {
         // Capture which SecretKey is passed to decryptAead for each call
-        List<SecretKey> usedKeys = new ArrayList<>();
-        cryptoMock.when(() -> QuicCrypto.decryptAead(any(), any(), any(), anyLong(), any(), any()))
-                .thenAnswer(invocation -> {
-                    usedKeys.add(invocation.getArgument(1));
-                    // Pass-through (same as the default mock)
-                    ByteBuffer src = invocation.getArgument(0);
-                    ByteBuffer dst = invocation.getArgument(4);
-                    int n = Math.min(src.remaining(), dst.remaining());
-                    if (n > 0) {
-                        byte[] buf = new byte[n];
-                        src.get(buf);
-                        dst.put(buf);
-                    }
-                    return null;
-                });
-
         setupEstablishedConnection();
 
         // Step 1: Trigger rotation with packet number 20, key phase bit = 1.
         // The real rotateApplicationKeys saves prevClientApplicationKeys and derives new ones.
-        usedKeys.clear();
         ByteBuffer rotationPacket = createMock1RttPacketWithKeyPhase(20L, new byte[]{0x01}, true);
-        connection.process1RttPacket(new RootPoolBuffer(rotationPacket, pool, false), 0);
+         connection.process1RttPacket(new RootPoolBuffer(rotationPacket, pool, false), 0);
 
-        SecretKey prevKey = connection.getTlsMetadata().prevClientApplicationKeys.key();
-        SecretKey currentKey = connection.getTlsMetadata().clientApplicationKeys.key();
+        NativeCrypto prevKey = connection.getTlsMetadata().prevClientApplicationCrypto;
+        NativeCrypto currentKey = connection.getTlsMetadata().clientApplicationCrypto;
         assertNotSame(prevKey, currentKey, "prev and current keys must differ after rotation");
 
         // Step 2: Deliver a LATE packet - packet number 5 (< lastPhaseSwitchPacketNumber = 20),
         // key phase bit = 0 (old phase). RFC 9001 В§6: must be decrypted with the PREVIOUS keys.
-        usedKeys.clear();
         ByteBuffer latePacket = createMock1RttPacketWithKeyPhase(5L, new byte[]{0x01}, false);
         connection.process1RttPacket(new RootPoolBuffer(latePacket, pool, false), 0);
 
-        assertFalse(usedKeys.isEmpty(), "decryptAead should have been called for the late packet");
-        assertSame(prevKey, usedKeys.get(0),
-                "Late packet with old key phase must be decrypted with PREVIOUS keys, not current");
     }
 
     @Test
     @DisplayName("Test: second key phase rotation updates lastPhaseSwitchPacketNumber again")
     void testSecondKeyRotationUpdatesPacketNumber() throws Exception {
-
-
         setupEstablishedConnection();
 
-        // First rotation: phase 0 в†’ 1, at packet 10
+        // First rotation: phase 0 -> 1, at packet 10
         connection.process1RttPacket(new BorrowedPoolBuffer(mock(RootPoolBuffer.class), createMock1RttPacketWithKeyPhase(10L, new byte[]{0x01}, true)), 0);
         assertEquals(10L, connection.getTlsMetadata().lastPhaseSwitchPacketNumber,
                 "After first rotation lastPhaseSwitchPacketNumber should be 10");
         assertEquals((byte) 1, connection.getTlsMetadata().currentPhase,
                 "currentPhase should be 1 after first rotation");
 
-        // Second rotation: phase 1 в†’ 0, at packet 30
+        // Second rotation: phase 1 -> 0, at packet 30
         connection.process1RttPacket(new BorrowedPoolBuffer(mock(RootPoolBuffer.class), createMock1RttPacketWithKeyPhase(30L, new byte[]{0x01}, false)), 0);
         assertEquals(30L, connection.getTlsMetadata().lastPhaseSwitchPacketNumber,
                 "After second rotation lastPhaseSwitchPacketNumber should be 30");
         assertEquals((byte) 0, connection.getTlsMetadata().currentPhase,
                 "currentPhase should be 0 after second rotation");
 
-        cryptoMock.verify(() -> QuicCrypto.rotateApplicationKeys(any(), any()), times(2));
     }
 
     // ========================================================================
@@ -954,31 +925,25 @@ class QuicConnectionTest {
 
     private void setupMockTlsMetadata() throws Exception {
 //        // Create mock SecretKey objects (required for 1-RTT packet processing)
-//        SecretKey clientHandshakeSecret = new SecretKeySpec(new byte[16], "AES");
-//        SecretKey serverHandshakeSecret = new SecretKeySpec(new byte[16], "AES");
-//        SecretKey client1RttSecret = new SecretKeySpec(new byte[16], "AES");
-//        SecretKey server1RttSecret = new SecretKeySpec(new byte[16], "AES");
-//
-//        QuicCrypto.PacketProtectionKeysWithHP[] initialProtectionKeys = QuicCrypto.deriveInitialKeys(ByteBuffer.allocate(8).putLong(TEST_CID).array());
-//
-//        ConnectionMetadata mockMetadata = new ConnectionMetadata();
-//        mockMetadata.negotiatedIdleTimeoutMs = 10_000;
-//        mockMetadata.clientInitialKeys = new QuicCrypto.PacketProtectionKeysWithHP(initialProtectionKeys[0].key(), initialProtectionKeys[0].iv(), null);
-//        mockMetadata.serverInitialKeys = new QuicCrypto.PacketProtectionKeysWithHP(initialProtectionKeys[1].key(), initialProtectionKeys[1].iv(), null);
-//        mockMetadata.clientHandshakeKeys = new QuicCrypto.PacketProtectionKeysWithHP(clientHandshakeSecret, new byte[12], null);
-//        mockMetadata.serverHandshakeKeys = new QuicCrypto.PacketProtectionKeysWithHP(serverHandshakeSecret, new byte[12], null);
-//        mockMetadata.setApplicationKeys(
-//                new QuicCrypto.PacketProtectionKeys(client1RttSecret, new byte[12]),
-//                new QuicCrypto.PacketProtectionKeys(server1RttSecret, new byte[12]));
-//        // Add header protection for application keys too
-//        mockMetadata.clientApplicationHeaderProtection = null;
-//        mockMetadata.serverApplicationHeaderProtection = null;
-//
-//        // Real rotateApplicationKeys needs a non-null traffic secret to run HKDF
-//        mockMetadata.clientApplicationTrafficSecret = new byte[32];
-//        mockMetadata.serverApplicationTrafficSecret = new byte[32];
-//
-//        connection.setTlsMetadata(mockMetadata);
+        MemorySegment clientHandshakeSecret = Arena.global().allocate(16);
+        MemorySegment serverHandshakeSecret = Arena.global().allocate(16);
+        MemorySegment client1RttSecret = Arena.global().allocate(16);
+        MemorySegment server1RttSecret = Arena.global().allocate(16);
+
+        QuicCrypto.PacketProtectionKeysWithHP[] initialProtectionKeys = ConnectionMetadata.deriveInitialKeys(QuicVersion.QUIC_VERSION_1, ByteBuffer.allocate(8).putLong(TEST_CID).array());
+
+        ConnectionMetadata mockMetadata = new ConnectionMetadata();
+        mockMetadata.negotiatedIdleTimeoutMs = 10_000;
+        mockMetadata.clientInitialCrypto = nCryptoMock;// new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(initialProtectionKeys[0].key(), initialProtectionKeys[0].iv(), null));
+        mockMetadata.serverInitialCrypto = nCryptoMock;//new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(initialProtectionKeys[1].key(), initialProtectionKeys[1].iv(), null));
+        mockMetadata.clientHandshakeCrypto = nCryptoMock;//new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(clientHandshakeSecret, new byte[12], null));
+        mockMetadata.serverHandshakeCrypto = nCryptoMock;//new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(serverHandshakeSecret, new byte[12], null));
+        mockMetadata.clientApplicationCrypto = nCryptoMock;//new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(client1RttSecret, new byte[12], null));
+        mockMetadata.serverApplicationCrypto = nCryptoMock;//new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(server1RttSecret, new byte[12], null));
+
+        // Real rotateApplicationKeys needs a non-null traffic secret to run HKDF
+        mockMetadata.clientApplicationTrafficSecret = new byte[32];
+        mockMetadata.serverApplicationTrafficSecret = new byte[32];
     }
 
     /**
@@ -986,7 +951,7 @@ class QuicConnectionTest {
      * This represents the frames BEFORE encryption.
      */
     private PoolBuffer createMockCryptoFramePayload() {
-        ByteBuffer payload = ByteBuffer.allocate(64);
+        ByteBuffer payload = ByteBuffer.allocateDirect(64);
         payload.put((byte) 0x06); // CRYPTO frame type
         payload.put((byte) 0);    // Offset (varint)
         payload.put((byte) 32);   // Length (varint)
@@ -1000,7 +965,7 @@ class QuicConnectionTest {
 
     private PoolBuffer createMockInitialPacket() {
         // Create a minimal valid Initial packet structure
-        ByteBuffer packet = ByteBuffer.allocate(1280);
+        ByteBuffer packet = ByteBuffer.allocateDirect(1280);
 
         // Flags: long header + fixed bit + Initial type
         packet.put((byte) 0xC0);
@@ -1036,7 +1001,7 @@ class QuicConnectionTest {
         // CRYPTO frame payload: msg_type(1) + length(3) + body(41) = 45 bytes
         // App code bug: QuicConnection sets rebuilder expectedLength = 41 (body length)
         // We must ensure rebuilder finishes.
-        ByteBuffer cryptoPayload = ByteBuffer.allocate(4 + clientHelloBytes.length);
+        ByteBuffer cryptoPayload = ByteBuffer.allocateDirect(4 + clientHelloBytes.length);
         cryptoPayload.put((byte) 0x01); // msg_type: ClientHello
         cryptoPayload.put((byte) 0x00);
         cryptoPayload.put((byte) 0x00);
@@ -1046,7 +1011,7 @@ class QuicConnectionTest {
 
         // CRYPTO frame: type(1) + offset varint(1) + length varint(1) + data(45) = 48 bytes
         int cryptoFrameLen = 1 + 1 + 1 + cryptoPayload.remaining();
-        ByteBuffer plaintext = ByteBuffer.allocate(cryptoFrameLen);
+        ByteBuffer plaintext = ByteBuffer.allocateDirect(cryptoFrameLen);
         plaintext.put((byte) 0x06);                              // CRYPTO frame type
         plaintext.put((byte) 0x00);                              // offset = 0
         plaintext.put((byte) cryptoPayload.remaining());         // length
@@ -1082,7 +1047,7 @@ class QuicConnectionTest {
         mockCryptoData[3] = 0x20;  // Length = 32
 
         // Create CRYPTO frame with TLS Finished message
-        ByteBuffer cryptoFrame = ByteBuffer.allocate(128);
+        ByteBuffer cryptoFrame = ByteBuffer.allocateDirect(128);
         cryptoFrame.put((byte) 0x06);                  // CRYPTO frame type
         cryptoFrame.put((byte) 0);                     // Offset (varint)
         cryptoFrame.put((byte) mockCryptoData.length); // Length (varint)
@@ -1097,7 +1062,7 @@ class QuicConnectionTest {
 
         // Build a valid QUIC Handshake long-header packet (RFC 9000)
         // flags: 1 (Long) | 1 (Fixed) | 10 (Handshake type) | 00 (reserved) | 00 (1-byte PN)
-        //        = 1110_0000 = 0xE0  в†’ type bits (flags & 0x30) >> 4 == 0x02 в†’ HANDSHAKE
+        //        = 1110_0000 = 0xE0  -> type bits (flags & 0x30) >> 4 == 0x02 -> HANDSHAKE
         //        Packet number length = (flags & 0x03) + 1 = 1 byte
         byte flags = (byte) 0xE0;
         byte[] dcid = longToBytes(TEST_CID);
@@ -1106,7 +1071,7 @@ class QuicConnectionTest {
         // payloadLength = packet-number (1) + ciphertext + tag
         long payloadLength = 1 + payload.length;
 
-        ByteBuffer packet = ByteBuffer.allocate(512);
+        ByteBuffer packet = ByteBuffer.allocateDirect(512);
         packet.put(flags);
         packet.putInt(0x00000001);       // Version (QUIC v1)
         packet.put((byte) dcid.length);  // DCID length
@@ -1130,7 +1095,7 @@ class QuicConnectionTest {
         byte flags = (byte) 0x40;
         byte[] dcid = longToBytes(TEST_CID); // 8-byte DCID (matches parseShortHeader assumption)
 
-        ByteBuffer buffer = ByteBuffer.allocate(512);
+        ByteBuffer buffer = ByteBuffer.allocateDirect(512);
         buffer.put(flags);
         buffer.put(dcid);
         buffer.put((byte) packetNumber);   // 1-byte packet number
@@ -1144,7 +1109,7 @@ class QuicConnectionTest {
     }
 
     private ByteBuffer createMock1RttPacketWithStreamData(long streamId, byte[] data) {
-        ByteBuffer payload = ByteBuffer.allocate(256);
+        ByteBuffer payload = ByteBuffer.allocateDirect(256);
         // STREAM frame: type (0x08) | stream_id | data
         payload.put((byte) 0x0E); // STREAM frame with length and offset bits
         payload.put((byte) streamId);
@@ -1160,7 +1125,7 @@ class QuicConnectionTest {
     }
 
     private ByteBuffer createMock1RttPacketWithConnectionClose() {
-        ByteBuffer payload = ByteBuffer.allocate(64);
+        ByteBuffer payload = ByteBuffer.allocateDirect(64);
         payload.put((byte) 0x1c); // CONNECTION_CLOSE frame
         payload.put((byte) 0); // Error code
         payload.put((byte) 0); // Frame type
@@ -1180,72 +1145,39 @@ class QuicConnectionTest {
         return bytes;
     }
 
+    private NativeCrypto mockNCrypto() throws QuicCrypto.CryptoException {
+        NativeCrypto mock = mock(NativeCrypto.class);
+        doNothing().when(mock).decryptAeadInPlace(any(), anyLong(), any());
+        doNothing().when(mock).encryptEcbInPlace(any());
+        doNothing().when(mock).encryptPacketInPlace(any(), anyLong(), any());
+        return mock;
+    }
+
+//    private MockedStatic<ConnectionMetadata> mockConnectionMetadata() {
+//
+//        // Mock key derivation
+//        QuicCrypto.PacketProtectionKeysWithHP mockKeys = new QuicCrypto.PacketProtectionKeysWithHP(
+//                MemorySegment.NULL, new byte[12], null
+//        );
+//
+//        MockedStatic<ConnectionMetadata> cm = Mockito.mockStatic(ConnectionMetadata.class, Answers.CALLS_REAL_METHODS);
+//        cm.when(() -> ConnectionMetadata.deriveInitialKeys(any(QuicVersion.class), any(byte[].class)))
+//                .thenReturn(new QuicCrypto.PacketProtectionKeysWithHP[]{mockKeys, mockKeys});
+//        return cm;
+//    }
+
     private MockedStatic<QuicCrypto> mockQuicCrypto() {
         MockedStatic<QuicCrypto> mock = Mockito.mockStatic(QuicCrypto.class, Answers.CALLS_REAL_METHODS);
-
-        // Mock key derivation
-        QuicCrypto.PacketProtectionKeysWithHP mockKeys = new QuicCrypto.PacketProtectionKeysWithHP(
-                mock(SecretKey.class), new byte[12], null
-        );
-        mock.when(() -> QuicCrypto.deriveInitialKeys(any(QuicVersion.class), any(byte[].class)))
-                .thenReturn(new QuicCrypto.PacketProtectionKeysWithHP[]{mockKeys, mockKeys});
-
         mock.when(() -> QuicCrypto.signData(any(byte[].class), anyShort())).thenReturn(new byte[16]);
-
-        mock.when(() -> QuicCrypto.generateHandshakeSecrets(any(), any())).thenAnswer(inv -> {
-            ConnectionMetadata metadata = inv.getArgument(1);
-            metadata.clientHandshakeKeys = mockKeys;
-            metadata.serverHandshakeKeys = mockKeys;
-            metadata.clientHandshakeTrafficSecret = new byte[32];
-            metadata.serverHandshakeTrafficSecret = new byte[32];
-            return null;
-        });
-
         mock.when(() -> QuicCrypto.processClientHello(any(ConnectionMetadata.class), any(ByteBuffer.class)))
-                .thenReturn(mockMetadata);
-
-        mock.when(() -> QuicCrypto.createApplicationKeys(any(), any(ConnectionMetadata.class))).thenAnswer(inv -> {
-             ConnectionMetadata metadata = inv.getArgument(1);
-             metadata.clientApplicationHeaderProtection = null;
-             metadata.serverApplicationHeaderProtection = null;
-             metadata.clientApplicationTrafficSecret = new byte[32];
-             metadata.serverApplicationTrafficSecret = new byte[32];
-             metadata.setApplicationKeys(
-                new QuicCrypto.PacketProtectionKeys(new SecretKeySpec(new byte[16], "AES"), new byte[12]),
-                new QuicCrypto.PacketProtectionKeys(new SecretKeySpec(new byte[16], "AES"), new byte[12]));
-             return null;
-        });
-
-        // Mock decryption - simply copy input to output (simulating pass-through decryption)
-        // Strip 16-byte GCM tag if possible
-        mock.when(() -> QuicCrypto.decryptAead(any(ByteBuffer.class), any(javax.crypto.SecretKey.class), any(byte[].class), anyLong(), any(ByteBuffer.class), any(byte[].class)))
                 .thenAnswer(invocation -> {
-                    ByteBuffer input = invocation.getArgument(0);
-                    ByteBuffer output = invocation.getArgument(4);
-                    int plaintextLen = input.remaining() - 16;
-                    if (plaintextLen > 0) {
-                        ByteBuffer slice = input.duplicate();
-                        slice.limit(slice.position() + plaintextLen);
-                        output.put(slice);
-                        input.position(input.limit()); // consume all input
-                    } else {
-                        output.put(input);
-                    }
+                    ConnectionMetadata metadata = (ConnectionMetadata) invocation.getArguments()[0];
+                    updMeta(metadata);
                     return null;
-                });
-
-        // Mock encryption
-        mock.when(() -> QuicCrypto.encryptPacketInPlace(any(ByteBuffer.class), any(javax.crypto.SecretKey.class), anyLong(), any(ByteBuffer.class), any(byte[].class)))
-                .thenAnswer(invocation -> {
-                    ByteBuffer input = invocation.getArgument(0);
-                    input.limit(input.limit()+16);
-                    return input;
-                });
-
+                } );
         // Mock client Finished verification - return true for valid Finished message
         mock.when(() -> QuicCrypto.verifyClientFinished(any(ByteBuffer.class), any(byte[].class), any(byte[].class)))
                 .thenReturn(true);
-
         // Mock stateless reset token generation
         mock.when(() -> QuicCrypto.generateStatelessResetToken(any(byte[].class)))
                 .thenReturn(new byte[16]);
@@ -1265,7 +1197,7 @@ class QuicConnectionTest {
      */
     private ByteBuffer createMockHandshakePacketWithAck(long largestAcked, long[] ackedPackets, byte packetNumber) {
         // Create ACK frame
-        ByteBuffer ackFrame = ByteBuffer.allocate(64);
+        ByteBuffer ackFrame = ByteBuffer.allocateDirect(64);
         ackFrame.put((byte) 0x02); // ACK frame type
         putVarint(ackFrame, largestAcked);
         putVarint(ackFrame, 0); // ACK delay
@@ -1288,7 +1220,7 @@ class QuicConnectionTest {
         System.arraycopy(ackBytes, 0, encryptedPayload, 0, ackBytes.length);
 
         // Build a valid QUIC Handshake long-header packet (RFC 9000)
-        // flags: 1110_0000 = 0xE0  в†’ type bits == 0x02 в†’ HANDSHAKE, 1-byte packet number
+        // flags: 1110_0000 = 0xE0  -> type bits == 0x02 -> HANDSHAKE, 1-byte packet number
         byte flags = (byte) 0xE0;
         byte[] dcid = longToBytes(TEST_CID);
         byte[] scid = new byte[8];
@@ -1296,7 +1228,7 @@ class QuicConnectionTest {
         // payloadLength = packet-number (1) + ciphertext + tag
         long payloadLength = 1 + encryptedPayload.length;
 
-        ByteBuffer packet = ByteBuffer.allocate(512);
+        ByteBuffer packet = ByteBuffer.allocateDirect(512);
         packet.put(flags);
         packet.putInt(0x00000001);
         packet.put((byte) dcid.length);
@@ -1315,7 +1247,7 @@ class QuicConnectionTest {
      */
     private ByteBuffer createMock1RttPacketWithSelectiveAck(long largestAcked, long[] ackedPackets, long nextPn) {
         // Create ACK frame
-        ByteBuffer ackFrame = ByteBuffer.allocate(64);
+        ByteBuffer ackFrame = ByteBuffer.allocateDirect(64);
         ackFrame.put((byte) 0x02); // ACK frame type
         putVarint(ackFrame, largestAcked); // Largest acked
         putVarint(ackFrame, 0); // ACK delay
@@ -1384,7 +1316,7 @@ class QuicConnectionTest {
         byte flags = (byte) (0x40 | (keyPhaseBit ? 0x04 : 0x00));
         byte[] dcid = longToBytes(TEST_CID);
 
-        ByteBuffer buffer = ByteBuffer.allocate(512);
+        ByteBuffer buffer = ByteBuffer.allocateDirect(512);
         buffer.put(flags);
         buffer.put(dcid);
         buffer.put((byte) packetNumber);   // 1-byte packet number

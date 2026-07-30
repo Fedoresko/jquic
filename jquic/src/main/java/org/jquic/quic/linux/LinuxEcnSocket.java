@@ -33,7 +33,7 @@ public class LinuxEcnSocket implements AutoCloseable {
         MethodHandle mh2 = null;
         MethodHandle mh3 = null;
         try {
-            NativeUtil.loadLib("libquic_ecn.so");
+            NativeUtil.loadLib("libquic_ecn");
             SymbolLookup lookup = SymbolLookup.loaderLookup();
             MemorySegment symbol = lookup.find("quic_receive_ecn").orElseThrow();
             

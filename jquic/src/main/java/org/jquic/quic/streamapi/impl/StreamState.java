@@ -62,6 +62,7 @@ public class StreamState {
     private long maxOffset;           // Total bytes received (cumulative)
     private long inFlightBytes;       // Bytes sent but not yet acknowledged
     private long bufferedBytes;       // Bytes in receive buffer
+    AtomicLong lastDataBlockedAt  = new AtomicLong(0);
 
     public StreamState(long streamId, boolean isServerInitiated, QuicConnectionControl.StreamType streamType,
                       long initialMaxStreamDataToSend, long initialMaxStreamToReceive) {

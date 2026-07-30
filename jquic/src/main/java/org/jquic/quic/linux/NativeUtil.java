@@ -27,15 +27,42 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 
 public class NativeUtil {
+    public enum OS {
+        WINDOWS,
+        LINUX,
+    }
+
+    public static OS detectOs() {
+        String os = System.getProperty("os.name").toLowerCase();
+        String arch = System.getProperty("os.arch").toLowerCase();
+
+        if (os.contains("linux") && (arch.contains("amd64") || arch.contains("x86_64"))) {
+            return OS.LINUX;
+        } else if (os.contains("win")) {
+            return OS.WINDOWS;
+        } else {
+            throw new UnsupportedOperationException("Unsupported OS/Arch target mapping.");
+        }
+    }
+
+    public static String getLibExt(OS os) {
+        return switch (os) {
+            case WINDOWS -> ".dll";
+            case LINUX -> ".so";
+        };
+    }
+
     public static void loadLib(String libName) throws IOException {
+        String filename = libName + getLibExt(detectOs());
+
         // 1. Java elegantly finds the resource relative to this class's package
-        URL resourceUrl = NativeUtil.class.getResource("/"+libName);
+        URL resourceUrl = NativeUtil.class.getResource("/"+filename);
         if (resourceUrl == null) {
-            throw new FileNotFoundException("Cannot find native file in package: " + libName);
+            throw new FileNotFoundException("Cannot find native file in package: " + filename);
         }
 
         // 2. Extract out of the JAR archive to a temporary file
-        Path tempLib = Files.createTempFile("native-", "-" + libName);
+        Path tempLib = Files.createTempFile("native-", "-" + filename);
         tempLib.toFile().deleteOnExit();
 
         try (InputStream is = resourceUrl.openStream()) {

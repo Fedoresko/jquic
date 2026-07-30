@@ -42,3 +42,11 @@ gradle classes
 
 For Linux environments, native components (eBPF and ECN) are pre-compiled and located in `jquic/src/main/resources/`.
 
+### Licensing
+
+This project is licensed under the Apache License 2.0. See the `jquic/LICENSE` file for details.
+
+#### Third-Party Licenses
+
+This project includes BoringSSL binaries (libcrypto.dll, libcrypto.so), which are subject to the ISC, OpenSSL, and SSLeay licenses. See `jquic/LICENSE-BORINGSSL` and `jquic/NOTICE` for more information.
+

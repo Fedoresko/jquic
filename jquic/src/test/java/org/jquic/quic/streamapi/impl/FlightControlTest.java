@@ -189,7 +189,7 @@ class FlightControlTest {
         // currentMaxData - totalReceivedBytes = 5000 - 3000 = 2000.
         // (maxDataCap - totalBufferedBytes) / 2 = (5000 - 3000) / 2 = 1000.
         // 2000 < 1000 is FALSE. No MAX_DATA sent yet.
-        verify(streamManager, never()).sendMaxDataFrame(anyLong(), anyLong());
+        verify(streamManager, never()).sendMaxDataFrame(anyLong());
 
         // Now free 2500 bytes. totalBufferedBytes = 500.
         flightControl.byfferedBytesFreed(streamId, 2500);
@@ -202,7 +202,7 @@ class FlightControlTest {
         // newMaxData = maxDataCap - totalBufferedBytes + totalReceivedBytes
         // newMaxData = 5000 - 500 + 3000 = 7500.
         
-        verify(streamManager).sendMaxDataFrame(eq(7500L), anyLong());
+        verify(streamManager).sendMaxDataFrame(eq(7500L));
     }
 
     @Test
@@ -533,6 +533,42 @@ class FlightControlTest {
         
         // Should now be able to send 5001 bytes
         assertTrue(flightControl.canSend(state, 5001));
+    }
+
+    @Test
+    void testMaxDataIndependence() {
+        // Initially, both are at INITIAL_MAX_DATA (5000)
+        
+        // Peer increases OUR send limit (currentClientMaxData)
+        flightControl.onMaxData(10000);
+        
+        // Now, currentClientMaxData should be 10000.
+        // If they share a variable, currentServerMaxData will also be 10000.
+        
+        // To check currentServerMaxData, we trigger updateMaxDataIfNeeded.
+        // It triggers if: currentServerMaxData.get() - totalMaxOffsetsSum < (maxDataCap - totalBufferedBytes.get()) / 2
+        
+        // Let totalMaxOffsetsSum = 3000, totalBufferedBytes = 0.
+        // maxDataCap = 5000.
+        // Threshold = (5000 - 0) / 2 = 2500.
+        
+        // If currentServerMaxData is 5000:
+        // 5000 - 3000 = 2000. 2000 < 2500 is TRUE. -> MAX_DATA sent.
+        
+        // If currentServerMaxData is 10000 (bug):
+        // 10000 - 3000 = 7000. 7000 < 2500 is FALSE. -> MAX_DATA NOT sent.
+        
+        StreamState state = flightControl.incomingStream(0);
+        flightControl.addReceivedBytes(state, 0, 3000);
+        
+        // Trigger updateMaxDataIfNeeded (usually called by bufferedBytesFreed)
+        flightControl.byfferedBytesFreed(0, 3000); 
+        
+        // If independent, MAX_DATA should be sent with value:
+        // newMaxData = maxDataCap - totalBufferedBytes + totalReceivedBytes
+        // newMaxData = 5000 - 0 + 3000 = 8000.
+        
+        verify(streamManager).sendMaxDataFrame(eq(8000L));
     }
 
     @Test

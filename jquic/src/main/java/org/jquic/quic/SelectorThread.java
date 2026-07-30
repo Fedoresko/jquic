@@ -19,8 +19,9 @@ import org.jquic.LogTool;
 import org.jquic.quic.buffers.BufferPool;
 import org.jquic.quic.buffers.PoolBuffer;
 import org.jquic.quic.linux.BpfRouting;
-import org.jquic.quic.streamapi.impl.OutboxRecord;
+import org.jquic.quic.streamapi.impl.EventRecord;
 import org.jctools.queues.*;
+import org.jquic.quic.streamapi.impl.EventType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -28,6 +29,7 @@ import java.io.IOException;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.DatagramChannel;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.Map;
@@ -37,7 +39,7 @@ import java.util.concurrent.locks.LockSupport;
 // =========================================================================
 // SELECTOR THREAD LOGIC
 // =========================================================================
-public class SelectorThread implements Runnable {
+public class SelectorThread extends Thread {
     private static final Logger logger = LoggerFactory.getLogger(SelectorThread.class);
     private static final LogTool log = new LogTool(logger);
     public static final int OUTBOUND_APP_QUEUE_SIZE = 1000;
@@ -48,22 +50,28 @@ public class SelectorThread implements Runnable {
     private final DatagramChannel socket;
     private final SpscLinkedQueue<PacketData> forwardedPackets;
     private final SpscArrayQueue<HandshakeTask> handshakeQueue = new SpscArrayQueue<>(HANDSHAKE_QUEUE_CAP);
-    private final MessagePassingQueue<OutboxRecord> applicationQueue = new MpscArrayQueue<>(OUTBOUND_APP_QUEUE_SIZE);
+    private final MessagePassingQueue<EventRecord> applicationQueue = new MpscArrayQueue<>(OUTBOUND_APP_QUEUE_SIZE);
     private final ConcurrentHashMap<Long, Integer> cidToSelectorMap;
     private final Map<Long, QuicConnection> activeConnections;
     private final Map<ByteBuffer, QuicConnection> initializingConnections = new HashMap<>();
 
     @SuppressWarnings("unchecked")
-    private final LinkedList<OutboxRecord>[] timerWheel = new LinkedList[2000];
+    private final LinkedList<EventRecord>[] timerWheel = new LinkedList[2000];
     private long lastDrainedSlot = 0;
 
     private final BufferPool bufferPool = new BufferPool();
 
     // Timeout management: PriorityQueue ordered by timeout timestamp
     private final TimeoutHeap<QuicConnection> timeoutHeap = new TimeoutHeap<>(QuicConnection.class);
-    private long lastTimeoutCheck = System.nanoTime() / 1_000_000;
+    private long lastTimeoutCheck = System.currentTimeMillis();
     private static final long TIMEOUT_CHECK_INTERVAL_MS = 1000; // Check every second
     private int idleCounter = 0;
+    private long startIdlingTimeMs = 0;
+    private long tickTimeEmaNs = 0;
+
+    private long sentPackets;
+    private long retransmittedPackets;
+    private double retransmitRateEma = 0.0;
 
     public BufferPool getBufferPool() {
         return bufferPool;
@@ -82,7 +90,8 @@ public class SelectorThread implements Runnable {
         }
     }
 
-    public SelectorThread(int threadId, DatagramChannel socket, ConcurrentHashMap<Long, Integer> cidToSelectorMap) throws IOException, NoSuchFieldException, IllegalAccessException {
+    public SelectorThread(int threadId, DatagramChannel socket, ConcurrentHashMap<Long, Integer> cidToSelectorMap, String name) throws IOException, NoSuchFieldException, IllegalAccessException {
+        super(name);
         this.threadId = threadId;
         this.socket = socket;
         this.forwardedPackets = new SpscLinkedQueue<>();
@@ -91,6 +100,22 @@ public class SelectorThread implements Runnable {
         for (int i = 0; i < timerWheel.length; i++) {
             timerWheel[i] = new LinkedList<>();
         }
+    }
+
+    public int getActiveConnectionCount() {
+        return activeConnections.size();
+    }
+
+    public long getTickTimeEmaNs() {
+        return tickTimeEmaNs;
+    }
+
+    public double getRetransmitRateEma() {
+        return retransmitRateEma;
+    }
+
+    public int[] bufferStats() {
+        return new int[]{ bufferPool.readBufferSize(), bufferPool.writeBufferSize() };
     }
 
     private static final String[] COLORS = new String[] { ANSIConstants.GREEN_FG, ANSIConstants.MAGENTA_FG, ANSIConstants.BLUE_FG, ANSIConstants.CYAN_FG};
@@ -129,16 +154,25 @@ public class SelectorThread implements Runnable {
             int[] metricsHolder = new int[1];
 
             lastDrainedSlot = System.nanoTime() /10_000;
-
+            long lastTime = System.nanoTime();
             while (!Thread.currentThread().isInterrupted()) {
+
                 long nowNs = System.nanoTime();
-                long now = nowNs / 1_000_000;
+                long now = System.currentTimeMillis();
+                tickTimeEmaNs = tickTimeEmaNs * 4 / 5 + (nowNs - lastTime) / 5;
+                if (sentPackets > 0) {
+                    retransmitRateEma = retransmitRateEma * 0.8 + ( ((double) retransmittedPackets) / sentPackets) * 0.2;
+                }
+
+                lastTime = nowNs;
+                retransmittedPackets = 0;
+                sentPackets = 0;
 
                 boolean hadWork = false;
 
                 int start = buffer.buf().position();
                 // Process packets from socket
-                SocketAddress sender = (idleCounter > 100) ?
+                SocketAddress sender = (now - startIdlingTimeMs > 1_000) ?
                         channel.receiveBlocking(buffer.buf(), metricsHolder) :
                         channel.receive(buffer.buf(), metricsHolder);
 
@@ -176,13 +210,23 @@ public class SelectorThread implements Runnable {
                     lastDrainedSlot = curSlot - timerWheel.length + 1;
                 }
 
-                OutboxRecord appPacket;
+                ArrayList<EventRecord> recordsToProcess = new ArrayList<>();
+
+                EventRecord event;
                 for (long slot = lastDrainedSlot; slot <= curSlot; slot ++) {
-                    while ((appPacket = timerWheel[(int)(slot % timerWheel.length)].poll()) != null) {
-                        hadWork |= processApplicationPacket(appPacket, now);
+                    while ((event = timerWheel[(int)(slot % timerWheel.length)].poll()) != null) {
+                        recordsToProcess.add(event);
                     }
                 }
                 lastDrainedSlot = curSlot;
+
+                for (EventRecord eventRecord : recordsToProcess) {
+                    hadWork |= switch (eventRecord.eventType()) {
+                        case APPLICATION_DATA -> processApplicationPacket(eventRecord, now);
+                        case LOSS_DETECTION -> retransmitPackagesInConnection(eventRecord, curSlot);
+                        default -> false;
+                    };
+                }
 
                 // Check for timed out connections periodically
                 if (now - lastTimeoutCheck > TIMEOUT_CHECK_INTERVAL_MS) {
@@ -191,9 +235,19 @@ public class SelectorThread implements Runnable {
                 }
 
                 if (!hadWork) {
-                    LockSupport.parkNanos(1000);
+                    if (idleCounter == 0) {
+                        startIdlingTimeMs = now;
+                    }
+                    if (idleCounter > 100) {
+                        if (startIdlingTimeMs < 1) {
+                            Thread.yield();
+                        } else {
+                            LockSupport.parkNanos(10_000);
+                        }
+                    }
                     idleCounter++;
                 } else {
+                    startIdlingTimeMs = now;
                     idleCounter = 0;
                 }
             }
@@ -202,7 +256,33 @@ public class SelectorThread implements Runnable {
         }
     }
 
-    private boolean processApplicationPacket(OutboxRecord appPacket, long now) throws IOException {
+    private boolean retransmitPackagesInConnection(EventRecord event, long curSlot) throws IOException {
+        QuicConnection conn = activeConnections.get(event.connectionId());
+        if (conn != null) {
+            conn.retransmitLostPackets();
+
+
+            pollConnectionDataAndSend(conn);
+
+            timerWheel[(int) ((curSlot + 100) % timerWheel.length)].add(event);
+            return true;
+        }
+        return false;
+    }
+
+    private void pollConnectionDataAndSend(QuicConnection conn) throws IOException {
+        EventRecord outbound;
+        while ((outbound = conn.pollOutbound()) != null) {
+            channel.send(outbound.data().buf(), conn.getRemoteAddress());
+            outbound.data().release();
+            switch (outbound.eventType()) {
+                case DATA -> sentPackets++;
+                case RETRANSMISSION -> retransmittedPackets++;
+            }
+        }
+    }
+
+    private boolean processApplicationPacket(EventRecord appPacket, long now) throws IOException {
         QuicConnection conn = activeConnections.get(appPacket.connectionId());
         if (conn != null) {
             logger.debug("Polled application data frame cid {}", conn.getConnectionId());
@@ -212,49 +292,14 @@ public class SelectorThread implements Runnable {
             // Update timeout in heap after processing
             timeoutHeap.insertOrUpdate(conn);
 
-            PoolBuffer outbound;
             if (conn.outboundQueueSize() > 0) {
                 log.debug(logColor(), "Selector-{}: Connection CID: {} sending {} response packets.", threadId, conn.getConnectionId(), conn.outboundQueueSize());
             }
-
-            while ((outbound = conn.pollOutbound()) != null) {
-                channel.send(outbound.buf(), conn.getRemoteAddress());
-                outbound.release();
-            }
-
+            pollConnectionDataAndSend(conn);
             return true;
         }
         return false;
     }
-//
-//    static class StatsFile implements AutoCloseable {
-//        private final RandomAccessFile file;
-//        private final FileChannel channel;
-//        private final String name;
-//        StatsFile(String name, String path) throws FileNotFoundException {
-//            file = new RandomAccessFile(path, "rw");
-//            this.name = name;
-//            channel = file.getChannel();
-//        }
-//        public void put(String val) {
-//            try {
-//                log.info("Stats {} : {}", name, val);
-//                byte[] bytes = val.getBytes(StandardCharsets.UTF_8);
-//                MappedByteBuffer buffer = channel.map(FileChannel.MapMode.READ_WRITE, 0, bytes.length);
-//                buffer.put(bytes);
-//                buffer.force();
-//            } catch (IOException e) {
-//                logger.warn("Could not update stats file {}", name, e);
-//            }
-//        }
-//
-//        @Override
-//        public void close() throws IOException {
-//            channel.close();
-//            file.close();
-//        }
-//    }
-
 
     /**
      * Processes a received datagram which may contain multiple coalesced packets.
@@ -336,12 +381,9 @@ public class SelectorThread implements Runnable {
 
                     // Drain any packets the connection produced internally (e.g. early-1RTT
                     // replay triggered by the ESTABLISHED transition, or sendFrame() calls).
-                    PoolBuffer outbound;
                     log.info(logColor(), "Selector-{}: Connection CID: {} sending {} response packets.", threadId, cid, connection.outboundQueueSize());
-                    while ((outbound = connection.pollOutbound()) != null) {
-                        channel.send(outbound.buf(), connection.getRemoteAddress());
-                        outbound.release();
-                    }
+
+                    pollConnectionDataAndSend(connection);
                 } catch (Exception e) {
                     log.error(logColor(), "Selector-{}: Failed to process packet for CID: {}", threadId, cid, e);
                     break;
@@ -366,7 +408,13 @@ public class SelectorThread implements Runnable {
             log.warn(logColor(), "Selector-{}: Processing Initial packet for new CID: {}", threadId, task.allocatedCid);
 
             QuicConnection connection = activeConnections.computeIfAbsent(task.allocatedCid,
-                    _ -> new QuicConnection(task.allocatedCid, task.packetSummary.version(), task.sender, applicationQueue,this));
+                    _ -> {
+                        QuicConnection conn = new QuicConnection(task.allocatedCid, task.packetSummary.version(), task.sender, applicationQueue, this);
+                        timeoutHeap.insertOrUpdate(conn);
+                        timerWheel[(int) ((now + 1) * 100 % timerWheel.length)].add(new EventRecord(EventType.LOSS_DETECTION, task.allocatedCid, 0, null));
+                        return  conn;
+                    });
+
             connection.setCurrentTimestamp(now);
 
             assignConnectionToSelector(connection.getConnectionId());
@@ -436,8 +484,13 @@ public class SelectorThread implements Runnable {
      */
     private void evictConnection(long connectionId) {
         try {
+
             // Remove from active connections
             QuicConnection removed = activeConnections.remove(connectionId);
+            if(removed == null) {
+                removed = initializingConnections.remove(connectionId);
+            }
+
             if (removed != null) {
                 log.info(logColor(), "Selector-{}: Evicted connection CID: {} from activeConnections", 
                           threadId, connectionId);
@@ -446,6 +499,7 @@ public class SelectorThread implements Runnable {
                 removed.setState(QuicConnection.State.CLOSED);
                 timeoutHeap.remove(removed);
             }
+
 
             // Remove from CID-to-Selector mapping
             cidToSelectorMap.remove(connectionId);

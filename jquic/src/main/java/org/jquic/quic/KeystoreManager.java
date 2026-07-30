@@ -179,31 +179,6 @@ public class KeystoreManager {
     }
 
     /**
-     * Generates ECDHE key share for TLS 1.3 (x25519).
-     * Returns the public key bytes for inclusion in ServerHello.
-     */
-    public byte[] generateKeyShare() throws GeneralSecurityException {
-        // Generate ephemeral ECDH key pair for x25519
-        KeyPairGenerator keyGen = KeyPairGenerator.getInstance("XDH");
-        keyGen.initialize(255); // X25519 uses Curve25519
-        KeyPair keyPair = keyGen.generateKeyPair();
-
-        // Return public key bytes
-        byte[] publicKey = keyPair.getPublic().getEncoded();
-
-        // XDH public key is typically in SubjectPublicKeyInfo format
-        // For x25519, we need to extract the 32-byte raw key
-        // Simplified: return last 32 bytes
-        if (publicKey.length >= 32) {
-            byte[] rawKey = new byte[32];
-            System.arraycopy(publicKey, publicKey.length - 32, rawKey, 0, 32);
-            return rawKey;
-        }
-
-        return publicKey;
-    }
-
-    /**
      * Signs data using the private key.
      * Used for TLS CertificateVerify message.
      */

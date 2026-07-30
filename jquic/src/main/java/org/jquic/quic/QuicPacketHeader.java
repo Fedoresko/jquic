@@ -15,12 +15,16 @@
  */
 package org.jquic.quic;
 
+import org.jquic.quic.crypto.NativeCrypto;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.crypto.Cipher;
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.nio.ByteBuffer;
 import java.util.Objects;
 
@@ -31,6 +35,8 @@ import java.util.Objects;
  */
 public class QuicPacketHeader {
     private static final Logger log = LoggerFactory.getLogger(QuicPacketHeader.class);
+    private static final ThreadLocal<ByteBuffer> sample = ThreadLocal.withInitial(()->ByteBuffer.allocateDirect(16));
+
     public final Long packetNumber;
     public final int pnLength;
     public final int version;
@@ -41,7 +47,7 @@ public class QuicPacketHeader {
     public final long payloadLength;
     public final int headerLength;
     public final byte flags;
-    public final byte[] rawData;
+    public final ByteBuffer rawData;
 
     public QuicPacketHeader(PacketNumber packetNumber,
                             QuicVersion quicVersion, byte[] destinationCid,
@@ -51,7 +57,7 @@ public class QuicPacketHeader {
 
     public QuicPacketHeader(PacketNumber packetNumber,
                             QuicVersion quicVersion, byte[] destinationCid,
-                            byte[] sourceCid, PacketType packetType, byte[] token, long payloadLength, byte keyPhase, byte[] rawData) {
+                            byte[] sourceCid, PacketType packetType, byte[] token, long payloadLength, byte keyPhase, ByteBuffer rawData) {
 
         flags = packetType.isLongHeader() ?
                 buildLongHeaderFlags(quicVersion, packetType, packetNumber.pnLength) :
@@ -65,7 +71,7 @@ public class QuicPacketHeader {
         this.sourceCid = sourceCid;
         this.token = token;
         this.payloadLength = payloadLength;
-        this.headerLength = (rawData == null) ? measureHeaderLength() : rawData.length;
+        this.headerLength = (rawData == null) ? measureHeaderLength() : rawData.remaining();
         this.rawData = rawData;
     }
 
@@ -160,7 +166,7 @@ public class QuicPacketHeader {
      * Returns a masked header that needs unmask() to be called.
      * Returns null if the packet is malformed (RFC 9000: silently discard).
      */
-    public static QuicPacketHeader parse(ByteBuffer packet, @Nullable Cipher headerProtection, long largestPn) {
+    public static QuicPacketHeader parse(ByteBuffer packet, @Nullable NativeCrypto crypto, long largestPn) {
         try {
             int startPosition = packet.position();
 
@@ -169,9 +175,9 @@ public class QuicPacketHeader {
             boolean isLongHeader = (flags & 0x80) != 0;
 
             if (isLongHeader) {
-                return parseLongHeader(packet, startPosition, flags, headerProtection, largestPn);
+                return parseLongHeader(packet, startPosition, flags, crypto, largestPn);
             } else {
-                return parseShortHeader(packet, startPosition, flags, headerProtection, largestPn);
+                return parseShortHeader(packet, startPosition, flags, crypto, largestPn);
             }
         } catch (Exception e) {
             // RFC 9000: Silently discard malformed packets
@@ -239,7 +245,7 @@ public class QuicPacketHeader {
         }
     }
 
-    private static QuicPacketHeader parseLongHeader(ByteBuffer packet, int startPosition, byte flags, Cipher headerProtection, long largestPn) {
+    private static QuicPacketHeader parseLongHeader(ByteBuffer packet, int startPosition, byte flags, NativeCrypto crypto, long largestPn) {
         // Read version (4 bytes)
         QuicVersion version = QuicVersion.of(packet.getInt());
 
@@ -266,41 +272,38 @@ public class QuicPacketHeader {
 
         // Read payload length (varint)
         long payloadLength = QuicVarint.read(packet);
-        PacketNumber packetNumber = readPacketNumber(packet, true, flags, startPosition, headerProtection, largestPn);
+        PacketNumber packetNumber = readPacketNumber(packet, true, flags, startPosition, crypto, largestPn);
 
-        int headerLen = packet.position() - startPosition;
-        byte [] rawData = new byte[headerLen];
-        packet.duplicate().position(startPosition).get(rawData);
-
+        int hederEnd = packet.position();
+        ByteBuffer rawData = packet.duplicate().position(startPosition).limit(hederEnd);
         return new QuicPacketHeader(packetNumber, version, destinationCid, sourceCid,
                                          packetType, token, payloadLength, (byte) 0, rawData);
     }
 
-    private static QuicPacketHeader parseShortHeader(ByteBuffer packet, int startPosition, byte flags, Cipher headerProtection, long largestPn) {
+    private static QuicPacketHeader parseShortHeader(ByteBuffer packet, int startPosition, byte flags, NativeCrypto crypto, long largestPn) {
         // Short header has DCID but no length field (must know from connection context)
         // For now, assume 8-byte DCID
         byte[] destinationCid = new byte[8];
         packet.get(destinationCid);
 
-        PacketNumber packetNumber = readPacketNumber(packet, false, flags, startPosition, headerProtection, largestPn);
+        PacketNumber packetNumber = readPacketNumber(packet, false, flags, startPosition, crypto, largestPn);
 
-        int headerLen = packet.position() - startPosition;
-        byte [] rawData = new byte[headerLen];
-        packet.duplicate().position(startPosition).get(rawData);
+        int hederEnd = packet.position();
+        ByteBuffer rawData = packet.duplicate().position(startPosition).limit(hederEnd);
 
         return new QuicPacketHeader(packetNumber, QuicVersion.UNKNOWN, destinationCid, null, PacketType.ONE_RTT, null, -1, (byte) (packetNumber.flags >> 2 & 0x01), rawData);
     }
 
     public record PacketNumber(int pnLength, long packetNumber, byte flags) {}
 
-    public static PacketNumber readPacketNumber(ByteBuffer packet, boolean isLongHeader, byte protectedFlags, int startPosition, @Nullable Cipher headerProtection, long largestPn) {
-        if (headerProtection == null) {
+    public static PacketNumber readPacketNumber(ByteBuffer packet, boolean isLongHeader, byte protectedFlags, int startPosition, @Nullable NativeCrypto crypto, long largestPn) {
+        if (crypto == null || crypto.getHpKey() == null) {
             int pnLength = getPacketNumberLength(protectedFlags);
             long truncatedPn = readPacketNumber(packet, pnLength);
             long fullPn = decodePacketNumber(largestPn, truncatedPn, pnLength * 8);
             return new PacketNumber(pnLength, fullPn, protectedFlags);
         } else {
-            return readPacketNumberMasked(packet, isLongHeader, protectedFlags, startPosition, headerProtection, largestPn);
+            return readPacketNumberMasked(packet, isLongHeader, protectedFlags, startPosition, crypto, largestPn);
         }
     }
 
@@ -309,26 +312,24 @@ public class QuicPacketHeader {
      *
      * @return Unmasked QuicPacketHeader with correct packet number, or null if unmasking fails
      */
-    public static PacketNumber readPacketNumberMasked(ByteBuffer packet, boolean isLongHeader, byte protectedFlags, int startPosition, @NonNull Cipher headerProtection, long largestPn) {
+    public static PacketNumber readPacketNumberMasked(ByteBuffer packet, boolean isLongHeader, byte protectedFlags, int startPosition, @NonNull NativeCrypto crypto, long largestPn) {
 
         try {
             // Sample starts 4 bytes after packet number starts
             int sampleOffset = 4;
-            byte[] sample = new byte[16];
 
-//            ByteBuffer packetHeader = ByteBuffer.wrap(rowData);
-
-            packet.duplicate().position(packet.position() + sampleOffset).get(sample);
+            sample.get().rewind().put(0, packet, packet.position() + sampleOffset, 16);
 
             // Generate mask using AES-ECB
-            byte[] mask = headerProtection.doFinal(sample);
+            crypto.encryptEcbInPlace(sample.get());
+            ByteBuffer mask = sample.get();
 
             // Unmask the flags byte
             byte unmaskedFlags = protectedFlags;
             if (isLongHeader) {
-                unmaskedFlags ^= (byte) (mask[0] & 0x0F); // Unmask lower 4 bits
+                unmaskedFlags ^= (byte) (mask.get(0) & 0x0F); // Unmask lower 4 bits
             } else {
-                unmaskedFlags ^= (byte) (mask[0] & 0x1F); // Unmask lower 5 bits
+                unmaskedFlags ^= (byte) (mask.get(0) & 0x1F); // Unmask lower 5 bits
             }
 
             log.info("Masked flags {}, unmasked flags {}", protectedFlags, unmaskedFlags);
@@ -342,7 +343,7 @@ public class QuicPacketHeader {
             long truncatedPn = 0;
             for (int i = 0; i < pnLength; i++) {
                 byte protectedByte = packet.get();
-                byte unmaskedByte = (byte) (protectedByte ^ mask[1 + i]);
+                byte unmaskedByte = (byte) (protectedByte ^ mask.get(1 + i));
                 packet.position(packet.position()-1).put(unmaskedByte);
                 truncatedPn = (truncatedPn << 8) | (unmaskedByte & 0xFF);
             }

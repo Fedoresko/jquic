@@ -1,0 +1,17 @@
+jQuic: High-Performance Java QUIC Server
+Copyright 2026 Fedor Malyshev
+
+This product includes software developed at
+jQuic (https://github.com/jquic/jquic).
+
+This product includes BoringSSL binaries (libcrypto.dll, libcrypto.so)
+Copyright (c) 2015, Google Inc.
+
+This product includes software developed by the OpenSSL Project
+for use in the OpenSSL Toolkit (http://www.openssl.org/)
+Copyright (c) 1998-2011 The OpenSSL Project. All rights reserved.
+
+This product includes cryptographic software written by Eric Young
+(eay@cryptsoft.com).
+
+This product includes software written by Tim Hudson (tjh@cryptsoft.com).

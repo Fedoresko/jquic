@@ -41,7 +41,7 @@ class SelectorThreadTest {
         channel = DatagramChannel.open();
         ConcurrentHashMap<Long, Integer> cidToSelectorMap = new ConcurrentHashMap<>();
 
-        selectorThread = new SelectorThread(0, channel, cidToSelectorMap);
+        selectorThread = new SelectorThread(0, channel, cidToSelectorMap, "Test");
     }
 
     @AfterEach
