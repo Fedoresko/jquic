@@ -303,7 +303,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
                 case ESTABLISHED -> applicationSpace;
                 default -> null;
             };
-            space.discardSentPackets();
+
             if (state == State.CLOSING) {
                 this.timeoutTimestamp = currentTimestamp + 3 * space.getPTO();
             }
@@ -322,6 +322,10 @@ public class QuicConnection implements TimeoutHeap.Entry {
 
         if (state == CLOSED) {
             try {
+                initialSpace.discardSentPackets();
+                handshakeSpace.discardSentPackets();
+                applicationSpace.discardSentPackets();
+
                 if (connectionMetadata.clientApplicationCrypto != null) {
                     connectionMetadata.clientApplicationCrypto.close();
                     connectionMetadata.clientApplicationCrypto = null;

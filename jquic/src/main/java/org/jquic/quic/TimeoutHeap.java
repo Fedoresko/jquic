@@ -62,6 +62,7 @@ public class TimeoutHeap<T extends TimeoutHeap.Entry> {
         if (size == 0) return null;
         T entry = heap[0];
         swap(0, --size);
+        heap[size] = null;
         siftDown(0);
         return entry;
     }
@@ -82,11 +83,13 @@ public class TimeoutHeap<T extends TimeoutHeap.Entry> {
     public void remove(T entry) {
         int index = entry.getTimeoutHeapIndex();
         if (index != -1 && index < size) {
-            swap(index, size - 1);
-            siftDown(index);
-            siftUp(index);
+            swap(index, --size);
+            heap[size] = null;
+            if (index < size) {
+                siftDown(index);
+                siftUp(index);
+            }
             entry.setTimeoutHeapIndex(-1);
-            size--;
         }
     }
 

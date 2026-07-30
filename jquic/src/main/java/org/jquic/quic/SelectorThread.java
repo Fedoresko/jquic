@@ -114,6 +114,10 @@ public class SelectorThread extends Thread {
         return retransmitRateEma;
     }
 
+    public int[] bufferStats() {
+        return new int[]{ bufferPool.readBufferSize(), bufferPool.writeBufferSize() };
+    }
+
     private static final String[] COLORS = new String[] { ANSIConstants.GREEN_FG, ANSIConstants.MAGENTA_FG, ANSIConstants.BLUE_FG, ANSIConstants.CYAN_FG};
     private String logColor() {
         return COLORS[threadId % COLORS.length];

@@ -34,6 +34,13 @@ public class BufferPool {
         }
     }
 
+    public int readBufferSize() {
+        return readBufferPool.size();
+    }
+    public int writeBufferSize() {
+        return writeBufferPool.size();
+    }
+
     public PoolBuffer requestReadBuffer() {
         RootPoolBuffer buffer = readBufferPool.poll();
         if (buffer == null) {

@@ -15,16 +15,25 @@ public class StatThread extends Thread {
             long sumTickTimeEmaNs = 0;
             int threadCount = QuicEngine.getSelectorThreads().size();
 
+            int[] bufferStats = new int[4];
+
             for (SelectorThread selectorThread : QuicEngine.getSelectorThreads()) {
                 totalActiveConnections += selectorThread.getActiveConnectionCount();
                 sumRetransmitRateEma += selectorThread.getRetransmitRateEma();
                 sumTickTimeEmaNs += selectorThread.getTickTimeEmaNs();
+
+                int[] tBufferStats = selectorThread.bufferStats();
+                for (int i = 0; i < tBufferStats.length; i++) {
+                    bufferStats[i] += tBufferStats[i];
+                }
             };
 
             System.out.println("### Total active connections: " + totalActiveConnections + " | AVG Tick Time: "
                     + (sumTickTimeEmaNs/threadCount) + "ns | AVG Retransmit Rate: " + sumRetransmitRateEma/threadCount);
+            System.out.println("### Total buffer stats: " + bufferStats[0] + " read buffers | " +
+                    bufferStats[1] + " write buffers.");
 
-            LockSupport.parkUntil(System.currentTimeMillis() + 5000);
+            LockSupport.parkUntil(System.currentTimeMillis() + 1000);
         }
     }
 }
