@@ -2,596 +2,444 @@
 
 package org.jquic.boringssl;
 
-import java.lang.invoke.*;
+import org.jquic.quic.linux.NativeUtil;
+
+import java.io.IOException;
 import java.lang.foreign.*;
-import java.nio.ByteOrder;
-import java.util.*;
-import java.util.function.*;
-import java.util.stream.*;
+import java.lang.invoke.MethodHandle;
+import java.util.Arrays;
+import java.util.stream.Collectors;
 
-import static java.lang.foreign.ValueLayout.*;
-import static java.lang.foreign.MemoryLayout.PathElement.*;
+public class evp_h {
+    public static final ValueLayout.OfByte C_CHAR =(ValueLayout.OfByte) Linker.nativeLinker().canonicalLayouts().get("char");
+    public static final ValueLayout.OfShort C_SHORT = (ValueLayout.OfShort) Linker.nativeLinker().canonicalLayouts().get("short");
+    public static final ValueLayout.OfInt C_INT = (ValueLayout.OfInt) Linker.nativeLinker().canonicalLayouts().get("int");
+    public static final ValueLayout.OfLong C_LONG_LONG = (ValueLayout.OfLong) Linker.nativeLinker().canonicalLayouts().get("long long");
+    public static final ValueLayout.OfFloat C_FLOAT = (ValueLayout.OfFloat) Linker.nativeLinker().canonicalLayouts().get("float");
+    public static final ValueLayout.OfDouble C_DOUBLE = (ValueLayout.OfDouble) Linker.nativeLinker().canonicalLayouts().get("double");
+    public static final AddressLayout C_POINTER = ((AddressLayout) Linker.nativeLinker().canonicalLayouts().get("void*"))
+            .withTargetLayout(MemoryLayout.sequenceLayout(java.lang.Long.MAX_VALUE, C_CHAR));
+    public static final ValueLayout C_LONG = (ValueLayout) Linker.nativeLinker().canonicalLayouts().get("long");
+    public static final ValueLayout.OfDouble C_LONG_DOUBLE = (ValueLayout.OfDouble) Linker.nativeLinker().canonicalLayouts().get("double");
 
-public class evp_h extends evp_h_1 {
+    static final boolean TRACE_DOWNCALLS = Boolean.getBoolean("jextract.trace.downcalls");
 
-    evp_h() {
-        // Should not be called directly
+    static void traceDowncall(String name, Object... args) {
+        String traceArgs = Arrays.stream(args)
+                .map(Object::toString)
+                .collect(Collectors.joining(", "));
+        System.out.printf("%s(%s)\n", name, traceArgs);
     }
-    /**
-     * {@snippet lang=c :
-     * #define SN_dhSinglePass_cofactorDH_sha256kdf_scheme "dhSinglePass-cofactorDH-sha256kdf-scheme"
-     * }
-     */
-    public static MemorySegment SN_dhSinglePass_cofactorDH_sha256kdf_scheme() {
-        class Holder {
-            static final MemorySegment SN_dhSinglePass_cofactorDH_sha256kdf_scheme
-                = evp_h.LIBRARY_ARENA.allocateFrom("dhSinglePass-cofactorDH-sha256kdf-scheme");
+
+    static {
+        try {
+            NativeUtil.loadLib("libcrypto");
+        } catch (IOException e) {
+            throw new RuntimeException(e);
         }
-        return Holder.SN_dhSinglePass_cofactorDH_sha256kdf_scheme;
     }
-    private static final int OBJ_dhSinglePass_cofactorDH_sha256kdf_scheme = (int)1L;
+
+    static final SymbolLookup SYMBOL_LOOKUP = SymbolLookup.loaderLookup();
+
+    private static final int EVP_AEAD_DEFAULT_TAG_LENGTH = (int)0L;
     /**
      * {@snippet lang=c :
-     * #define OBJ_dhSinglePass_cofactorDH_sha256kdf_scheme 1
+     * #define EVP_AEAD_DEFAULT_TAG_LENGTH 0
      * }
      */
-    public static int OBJ_dhSinglePass_cofactorDH_sha256kdf_scheme() {
-        return OBJ_dhSinglePass_cofactorDH_sha256kdf_scheme;
+    public static int EVP_AEAD_DEFAULT_TAG_LENGTH() {
+        return EVP_AEAD_DEFAULT_TAG_LENGTH;
     }
+
+    /**
+     * Variadic invoker class for:
+     * {@snippet lang=c :
+     * void __va_start(va_list *, ...)
+     * }
+     */
+    public static class __va_start {
+
+    }
+
     /**
      * {@snippet lang=c :
-     * #define SN_dhSinglePass_cofactorDH_sha384kdf_scheme "dhSinglePass-cofactorDH-sha384kdf-scheme"
+     * typedef long _off_t
      * }
      */
-    public static MemorySegment SN_dhSinglePass_cofactorDH_sha384kdf_scheme() {
-        class Holder {
-            static final MemorySegment SN_dhSinglePass_cofactorDH_sha384kdf_scheme
-                = evp_h.LIBRARY_ARENA.allocateFrom("dhSinglePass-cofactorDH-sha384kdf-scheme");
+//    public static final OfInt _off_t = evp_h.C_LONG;
+    /**
+     * {@snippet lang=c :
+     * typedef _off_t off_t
+     * }
+     */
+//    public static final OfInt off_t = evp_h.C_LONG;
+
+    private static class EVP_aead_aes_128_gcm {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+                evp_h.C_POINTER    );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("EVP_aead_aes_128_gcm");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * {@snippet lang=c :
+     * const EVP_AEAD *EVP_aead_aes_128_gcm()
+     * }
+     */
+    public static MemorySegment EVP_aead_aes_128_gcm() {
+        var mh$ = EVP_aead_aes_128_gcm.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("EVP_aead_aes_128_gcm");
+            }
+            return (MemorySegment)mh$.invokeExact();
+        } catch (Error | RuntimeException ex) {
+            throw ex;
+        } catch (Throwable ex$) {
+            throw new AssertionError("should not reach here", ex$);
         }
-        return Holder.SN_dhSinglePass_cofactorDH_sha384kdf_scheme;
     }
-    private static final int OBJ_dhSinglePass_cofactorDH_sha384kdf_scheme = (int)1L;
+
+
+
+    private static class EVP_AEAD_CTX_init {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+                evp_h.C_INT,
+                evp_h.C_POINTER,
+                evp_h.C_POINTER,
+                evp_h.C_POINTER,
+                evp_h.C_LONG_LONG,
+                evp_h.C_LONG_LONG,
+                evp_h.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("EVP_AEAD_CTX_init");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+
     /**
      * {@snippet lang=c :
-     * #define OBJ_dhSinglePass_cofactorDH_sha384kdf_scheme 1
+     * int EVP_AEAD_CTX_init(EVP_AEAD_CTX *ctx, const EVP_AEAD *aead, const uint8_t *key, size_t key_len, size_t tag_len, ENGINE *impl)
      * }
      */
-    public static int OBJ_dhSinglePass_cofactorDH_sha384kdf_scheme() {
-        return OBJ_dhSinglePass_cofactorDH_sha384kdf_scheme;
-    }
-    /**
-     * {@snippet lang=c :
-     * #define SN_dhSinglePass_cofactorDH_sha512kdf_scheme "dhSinglePass-cofactorDH-sha512kdf-scheme"
-     * }
-     */
-    public static MemorySegment SN_dhSinglePass_cofactorDH_sha512kdf_scheme() {
-        class Holder {
-            static final MemorySegment SN_dhSinglePass_cofactorDH_sha512kdf_scheme
-                = evp_h.LIBRARY_ARENA.allocateFrom("dhSinglePass-cofactorDH-sha512kdf-scheme");
+    public static int EVP_AEAD_CTX_init(MemorySegment ctx, MemorySegment aead, MemorySegment key, long key_len, long tag_len, MemorySegment impl) {
+        var mh$ = EVP_AEAD_CTX_init.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("EVP_AEAD_CTX_init", ctx, aead, key, key_len, tag_len, impl);
+            }
+            return (int)mh$.invokeExact(ctx, aead, key, key_len, tag_len, impl);
+        } catch (Error | RuntimeException ex) {
+            throw ex;
+        } catch (Throwable ex$) {
+            throw new AssertionError("should not reach here", ex$);
         }
-        return Holder.SN_dhSinglePass_cofactorDH_sha512kdf_scheme;
     }
-    private static final int OBJ_dhSinglePass_cofactorDH_sha512kdf_scheme = (int)1L;
+
+    private static class EVP_AEAD_CTX_cleanup {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(
+                evp_h.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("EVP_AEAD_CTX_cleanup");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
     /**
      * {@snippet lang=c :
-     * #define OBJ_dhSinglePass_cofactorDH_sha512kdf_scheme 1
+     * void EVP_AEAD_CTX_cleanup(EVP_AEAD_CTX *ctx)
      * }
      */
-    public static int OBJ_dhSinglePass_cofactorDH_sha512kdf_scheme() {
-        return OBJ_dhSinglePass_cofactorDH_sha512kdf_scheme;
-    }
-    /**
-     * {@snippet lang=c :
-     * #define SN_dh_std_kdf "dh-std-kdf"
-     * }
-     */
-    public static MemorySegment SN_dh_std_kdf() {
-        class Holder {
-            static final MemorySegment SN_dh_std_kdf
-                = evp_h.LIBRARY_ARENA.allocateFrom("dh-std-kdf");
+    public static void EVP_AEAD_CTX_cleanup(MemorySegment ctx) {
+        var mh$ = EVP_AEAD_CTX_cleanup.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("EVP_AEAD_CTX_cleanup", ctx);
+            }
+            mh$.invokeExact(ctx);
+        } catch (Error | RuntimeException ex) {
+            throw ex;
+        } catch (Throwable ex$) {
+            throw new AssertionError("should not reach here", ex$);
         }
-        return Holder.SN_dh_std_kdf;
     }
+
+    private static class EVP_AEAD_CTX_seal {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+                evp_h.C_INT,
+                evp_h.C_POINTER,
+                evp_h.C_POINTER,
+                evp_h.C_POINTER,
+                evp_h.C_LONG_LONG,
+                evp_h.C_POINTER,
+                evp_h.C_LONG_LONG,
+                evp_h.C_POINTER,
+                evp_h.C_LONG_LONG,
+                evp_h.C_POINTER,
+                evp_h.C_LONG_LONG
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("EVP_AEAD_CTX_seal");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
     /**
      * {@snippet lang=c :
-     * #define SN_dh_cofactor_kdf "dh-cofactor-kdf"
+     * int EVP_AEAD_CTX_seal(const EVP_AEAD_CTX *ctx, uint8_t *out, size_t *out_len, size_t max_out_len, const uint8_t *nonce, size_t nonce_len, const uint8_t *in, size_t in_len, const uint8_t *ad, size_t ad_len)
      * }
      */
-    public static MemorySegment SN_dh_cofactor_kdf() {
-        class Holder {
-            static final MemorySegment SN_dh_cofactor_kdf
-                = evp_h.LIBRARY_ARENA.allocateFrom("dh-cofactor-kdf");
+    public static int EVP_AEAD_CTX_seal(MemorySegment ctx, MemorySegment out, MemorySegment out_len, long max_out_len, MemorySegment nonce, long nonce_len, MemorySegment in, long in_len, MemorySegment ad, long ad_len) {
+        var mh$ = EVP_AEAD_CTX_seal.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("EVP_AEAD_CTX_seal", ctx, out, out_len, max_out_len, nonce, nonce_len, in, in_len, ad, ad_len);
+            }
+            return (int)mh$.invokeExact(ctx, out, out_len, max_out_len, nonce, nonce_len, in, in_len, ad, ad_len);
+        } catch (Error | RuntimeException ex) {
+            throw ex;
+        } catch (Throwable ex$) {
+            throw new AssertionError("should not reach here", ex$);
         }
-        return Holder.SN_dh_cofactor_kdf;
     }
+
+    private static class EVP_AEAD_CTX_open {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+                evp_h.C_INT,
+                evp_h.C_POINTER,
+                evp_h.C_POINTER,
+                evp_h.C_POINTER,
+                evp_h.C_LONG_LONG,
+                evp_h.C_POINTER,
+                evp_h.C_LONG_LONG,
+                evp_h.C_POINTER,
+                evp_h.C_LONG_LONG,
+                evp_h.C_POINTER,
+                evp_h.C_LONG_LONG
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("EVP_AEAD_CTX_open");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
     /**
      * {@snippet lang=c :
-     * #define SN_X25519 "X25519"
+     * int EVP_AEAD_CTX_open(const EVP_AEAD_CTX *ctx, uint8_t *out, size_t *out_len, size_t max_out_len, const uint8_t *nonce, size_t nonce_len, const uint8_t *in, size_t in_len, const uint8_t *ad, size_t ad_len)
      * }
      */
-    public static MemorySegment SN_X25519() {
-        class Holder {
-            static final MemorySegment SN_X25519
-                = evp_h.LIBRARY_ARENA.allocateFrom("X25519");
+    public static int EVP_AEAD_CTX_open(MemorySegment ctx, MemorySegment out, MemorySegment out_len, long max_out_len, MemorySegment nonce, long nonce_len, MemorySegment in, long in_len, MemorySegment ad, long ad_len) {
+        var mh$ = EVP_AEAD_CTX_open.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("EVP_AEAD_CTX_open", ctx, out, out_len, max_out_len, nonce, nonce_len, in, in_len, ad, ad_len);
+            }
+            return (int)mh$.invokeExact(ctx, out, out_len, max_out_len, nonce, nonce_len, in, in_len, ad, ad_len);
+        } catch (Error | RuntimeException ex) {
+            throw ex;
+        } catch (Throwable ex$) {
+            throw new AssertionError("should not reach here", ex$);
         }
-        return Holder.SN_X25519;
     }
-    private static final int OBJ_X25519 = (int)1L;
+
+
+    private static class EVP_aes_128_ecb {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+                evp_h.C_POINTER    );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("EVP_aes_128_ecb");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
     /**
      * {@snippet lang=c :
-     * #define OBJ_X25519 1
+     * const EVP_CIPHER *EVP_aes_128_ecb()
      * }
      */
-    public static int OBJ_X25519() {
-        return OBJ_X25519;
-    }
-    /**
-     * {@snippet lang=c :
-     * #define SN_ED25519 "ED25519"
-     * }
-     */
-    public static MemorySegment SN_ED25519() {
-        class Holder {
-            static final MemorySegment SN_ED25519
-                = evp_h.LIBRARY_ARENA.allocateFrom("ED25519");
+    public static MemorySegment EVP_aes_128_ecb() {
+        var mh$ = EVP_aes_128_ecb.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("EVP_aes_128_ecb");
+            }
+            return (MemorySegment)mh$.invokeExact();
+        } catch (Error | RuntimeException ex) {
+            throw ex;
+        } catch (Throwable ex$) {
+            throw new AssertionError("should not reach here", ex$);
         }
-        return Holder.SN_ED25519;
     }
-    private static final int OBJ_ED25519 = (int)1L;
+
+    private static class EVP_CIPHER_CTX_init {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(
+                evp_h.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("EVP_CIPHER_CTX_init");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
     /**
      * {@snippet lang=c :
-     * #define OBJ_ED25519 1
+     * void EVP_CIPHER_CTX_init(EVP_CIPHER_CTX *ctx)
      * }
      */
-    public static int OBJ_ED25519() {
-        return OBJ_ED25519;
-    }
-    /**
-     * {@snippet lang=c :
-     * #define SN_chacha20_poly1305 "ChaCha20-Poly1305"
-     * }
-     */
-    public static MemorySegment SN_chacha20_poly1305() {
-        class Holder {
-            static final MemorySegment SN_chacha20_poly1305
-                = evp_h.LIBRARY_ARENA.allocateFrom("ChaCha20-Poly1305");
+    public static void EVP_CIPHER_CTX_init(MemorySegment ctx) {
+        var mh$ = EVP_CIPHER_CTX_init.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("EVP_CIPHER_CTX_init", ctx);
+            }
+            mh$.invokeExact(ctx);
+        } catch (Error | RuntimeException ex) {
+            throw ex;
+        } catch (Throwable ex$) {
+            throw new AssertionError("should not reach here", ex$);
         }
-        return Holder.SN_chacha20_poly1305;
     }
+
+    private static class EVP_CIPHER_CTX_new {
+
+    }
+
+    private static class EVP_CIPHER_CTX_cleanup {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+                evp_h.C_INT,
+                evp_h.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("EVP_CIPHER_CTX_cleanup");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
     /**
      * {@snippet lang=c :
-     * #define LN_chacha20_poly1305 "chacha20-poly1305"
+     * int EVP_CIPHER_CTX_cleanup(EVP_CIPHER_CTX *ctx)
      * }
      */
-    public static MemorySegment LN_chacha20_poly1305() {
-        class Holder {
-            static final MemorySegment LN_chacha20_poly1305
-                = evp_h.LIBRARY_ARENA.allocateFrom("chacha20-poly1305");
+    public static int EVP_CIPHER_CTX_cleanup(MemorySegment ctx) {
+        var mh$ = EVP_CIPHER_CTX_cleanup.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("EVP_CIPHER_CTX_cleanup", ctx);
+            }
+            return (int)mh$.invokeExact(ctx);
+        } catch (Error | RuntimeException ex) {
+            throw ex;
+        } catch (Throwable ex$) {
+            throw new AssertionError("should not reach here", ex$);
         }
-        return Holder.LN_chacha20_poly1305;
     }
+
+    private static class EVP_EncryptInit_ex {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+                evp_h.C_INT,
+                evp_h.C_POINTER,
+                evp_h.C_POINTER,
+                evp_h.C_POINTER,
+                evp_h.C_POINTER,
+                evp_h.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("EVP_EncryptInit_ex");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
     /**
      * {@snippet lang=c :
-     * #define SN_kx_rsa "KxRSA"
+     * int EVP_EncryptInit_ex(EVP_CIPHER_CTX *ctx, const EVP_CIPHER *cipher, ENGINE *impl, const uint8_t *key, const uint8_t *iv)
      * }
      */
-    public static MemorySegment SN_kx_rsa() {
-        class Holder {
-            static final MemorySegment SN_kx_rsa
-                = evp_h.LIBRARY_ARENA.allocateFrom("KxRSA");
+    public static int EVP_EncryptInit_ex(MemorySegment ctx, MemorySegment cipher, MemorySegment impl, MemorySegment key, MemorySegment iv) {
+        var mh$ = EVP_EncryptInit_ex.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("EVP_EncryptInit_ex", ctx, cipher, impl, key, iv);
+            }
+            return (int)mh$.invokeExact(ctx, cipher, impl, key, iv);
+        } catch (Error | RuntimeException ex) {
+            throw ex;
+        } catch (Throwable ex$) {
+            throw new AssertionError("should not reach here", ex$);
         }
-        return Holder.SN_kx_rsa;
     }
+
+    private static class EVP_DecryptInit_ex {
+
+    }
+
+    private static class EVP_EncryptUpdate {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+                evp_h.C_INT,
+                evp_h.C_POINTER,
+                evp_h.C_POINTER,
+                evp_h.C_POINTER,
+                evp_h.C_POINTER,
+                evp_h.C_INT
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("EVP_EncryptUpdate");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
     /**
      * {@snippet lang=c :
-     * #define LN_kx_rsa "kx-rsa"
+     * int EVP_EncryptUpdate(EVP_CIPHER_CTX *ctx, uint8_t *out, int *out_len, const uint8_t *in, int in_len)
      * }
      */
-    public static MemorySegment LN_kx_rsa() {
-        class Holder {
-            static final MemorySegment LN_kx_rsa
-                = evp_h.LIBRARY_ARENA.allocateFrom("kx-rsa");
+    public static int EVP_EncryptUpdate(MemorySegment ctx, MemorySegment out, MemorySegment out_len, MemorySegment in, int in_len) {
+        var mh$ = EVP_EncryptUpdate.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("EVP_EncryptUpdate", ctx, out, out_len, in, in_len);
+            }
+            return (int)mh$.invokeExact(ctx, out, out_len, in, in_len);
+        } catch (Error | RuntimeException ex) {
+            throw ex;
+        } catch (Throwable ex$) {
+            throw new AssertionError("should not reach here", ex$);
         }
-        return Holder.LN_kx_rsa;
     }
+
+    private static class EVP_CIPHER_CTX_set_padding {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+                evp_h.C_INT,
+                evp_h.C_POINTER,
+                evp_h.C_INT
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("EVP_CIPHER_CTX_set_padding");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
     /**
      * {@snippet lang=c :
-     * #define SN_kx_ecdhe "KxECDHE"
+     * int EVP_CIPHER_CTX_set_padding(EVP_CIPHER_CTX *ctx, int pad)
      * }
      */
-    public static MemorySegment SN_kx_ecdhe() {
-        class Holder {
-            static final MemorySegment SN_kx_ecdhe
-                = evp_h.LIBRARY_ARENA.allocateFrom("KxECDHE");
+    public static int EVP_CIPHER_CTX_set_padding(MemorySegment ctx, int pad) {
+        var mh$ = EVP_CIPHER_CTX_set_padding.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("EVP_CIPHER_CTX_set_padding", ctx, pad);
+            }
+            return (int)mh$.invokeExact(ctx, pad);
+        } catch (Error | RuntimeException ex) {
+            throw ex;
+        } catch (Throwable ex$) {
+            throw new AssertionError("should not reach here", ex$);
         }
-        return Holder.SN_kx_ecdhe;
-    }
-    /**
-     * {@snippet lang=c :
-     * #define LN_kx_ecdhe "kx-ecdhe"
-     * }
-     */
-    public static MemorySegment LN_kx_ecdhe() {
-        class Holder {
-            static final MemorySegment LN_kx_ecdhe
-                = evp_h.LIBRARY_ARENA.allocateFrom("kx-ecdhe");
-        }
-        return Holder.LN_kx_ecdhe;
-    }
-    /**
-     * {@snippet lang=c :
-     * #define SN_kx_psk "KxPSK"
-     * }
-     */
-    public static MemorySegment SN_kx_psk() {
-        class Holder {
-            static final MemorySegment SN_kx_psk
-                = evp_h.LIBRARY_ARENA.allocateFrom("KxPSK");
-        }
-        return Holder.SN_kx_psk;
-    }
-    /**
-     * {@snippet lang=c :
-     * #define LN_kx_psk "kx-psk"
-     * }
-     */
-    public static MemorySegment LN_kx_psk() {
-        class Holder {
-            static final MemorySegment LN_kx_psk
-                = evp_h.LIBRARY_ARENA.allocateFrom("kx-psk");
-        }
-        return Holder.LN_kx_psk;
-    }
-    /**
-     * {@snippet lang=c :
-     * #define SN_auth_rsa "AuthRSA"
-     * }
-     */
-    public static MemorySegment SN_auth_rsa() {
-        class Holder {
-            static final MemorySegment SN_auth_rsa
-                = evp_h.LIBRARY_ARENA.allocateFrom("AuthRSA");
-        }
-        return Holder.SN_auth_rsa;
-    }
-    /**
-     * {@snippet lang=c :
-     * #define LN_auth_rsa "auth-rsa"
-     * }
-     */
-    public static MemorySegment LN_auth_rsa() {
-        class Holder {
-            static final MemorySegment LN_auth_rsa
-                = evp_h.LIBRARY_ARENA.allocateFrom("auth-rsa");
-        }
-        return Holder.LN_auth_rsa;
-    }
-    /**
-     * {@snippet lang=c :
-     * #define SN_auth_ecdsa "AuthECDSA"
-     * }
-     */
-    public static MemorySegment SN_auth_ecdsa() {
-        class Holder {
-            static final MemorySegment SN_auth_ecdsa
-                = evp_h.LIBRARY_ARENA.allocateFrom("AuthECDSA");
-        }
-        return Holder.SN_auth_ecdsa;
-    }
-    /**
-     * {@snippet lang=c :
-     * #define LN_auth_ecdsa "auth-ecdsa"
-     * }
-     */
-    public static MemorySegment LN_auth_ecdsa() {
-        class Holder {
-            static final MemorySegment LN_auth_ecdsa
-                = evp_h.LIBRARY_ARENA.allocateFrom("auth-ecdsa");
-        }
-        return Holder.LN_auth_ecdsa;
-    }
-    /**
-     * {@snippet lang=c :
-     * #define SN_auth_psk "AuthPSK"
-     * }
-     */
-    public static MemorySegment SN_auth_psk() {
-        class Holder {
-            static final MemorySegment SN_auth_psk
-                = evp_h.LIBRARY_ARENA.allocateFrom("AuthPSK");
-        }
-        return Holder.SN_auth_psk;
-    }
-    /**
-     * {@snippet lang=c :
-     * #define LN_auth_psk "auth-psk"
-     * }
-     */
-    public static MemorySegment LN_auth_psk() {
-        class Holder {
-            static final MemorySegment LN_auth_psk
-                = evp_h.LIBRARY_ARENA.allocateFrom("auth-psk");
-        }
-        return Holder.LN_auth_psk;
-    }
-    /**
-     * {@snippet lang=c :
-     * #define SN_kx_any "KxANY"
-     * }
-     */
-    public static MemorySegment SN_kx_any() {
-        class Holder {
-            static final MemorySegment SN_kx_any
-                = evp_h.LIBRARY_ARENA.allocateFrom("KxANY");
-        }
-        return Holder.SN_kx_any;
-    }
-    /**
-     * {@snippet lang=c :
-     * #define LN_kx_any "kx-any"
-     * }
-     */
-    public static MemorySegment LN_kx_any() {
-        class Holder {
-            static final MemorySegment LN_kx_any
-                = evp_h.LIBRARY_ARENA.allocateFrom("kx-any");
-        }
-        return Holder.LN_kx_any;
-    }
-    /**
-     * {@snippet lang=c :
-     * #define SN_auth_any "AuthANY"
-     * }
-     */
-    public static MemorySegment SN_auth_any() {
-        class Holder {
-            static final MemorySegment SN_auth_any
-                = evp_h.LIBRARY_ARENA.allocateFrom("AuthANY");
-        }
-        return Holder.SN_auth_any;
-    }
-    /**
-     * {@snippet lang=c :
-     * #define LN_auth_any "auth-any"
-     * }
-     */
-    public static MemorySegment LN_auth_any() {
-        class Holder {
-            static final MemorySegment LN_auth_any
-                = evp_h.LIBRARY_ARENA.allocateFrom("auth-any");
-        }
-        return Holder.LN_auth_any;
-    }
-    /**
-     * {@snippet lang=c :
-     * #define SN_ED448 "ED448"
-     * }
-     */
-    public static MemorySegment SN_ED448() {
-        class Holder {
-            static final MemorySegment SN_ED448
-                = evp_h.LIBRARY_ARENA.allocateFrom("ED448");
-        }
-        return Holder.SN_ED448;
-    }
-    private static final int OBJ_ED448 = (int)1L;
-    /**
-     * {@snippet lang=c :
-     * #define OBJ_ED448 1
-     * }
-     */
-    public static int OBJ_ED448() {
-        return OBJ_ED448;
-    }
-    /**
-     * {@snippet lang=c :
-     * #define SN_X448 "X448"
-     * }
-     */
-    public static MemorySegment SN_X448() {
-        class Holder {
-            static final MemorySegment SN_X448
-                = evp_h.LIBRARY_ARENA.allocateFrom("X448");
-        }
-        return Holder.SN_X448;
-    }
-    private static final int OBJ_X448 = (int)1L;
-    /**
-     * {@snippet lang=c :
-     * #define OBJ_X448 1
-     * }
-     */
-    public static int OBJ_X448() {
-        return OBJ_X448;
-    }
-    /**
-     * {@snippet lang=c :
-     * #define SN_sha512_256 "SHA512-256"
-     * }
-     */
-    public static MemorySegment SN_sha512_256() {
-        class Holder {
-            static final MemorySegment SN_sha512_256
-                = evp_h.LIBRARY_ARENA.allocateFrom("SHA512-256");
-        }
-        return Holder.SN_sha512_256;
-    }
-    /**
-     * {@snippet lang=c :
-     * #define LN_sha512_256 "sha512-256"
-     * }
-     */
-    public static MemorySegment LN_sha512_256() {
-        class Holder {
-            static final MemorySegment LN_sha512_256
-                = evp_h.LIBRARY_ARENA.allocateFrom("sha512-256");
-        }
-        return Holder.LN_sha512_256;
-    }
-    private static final int OBJ_sha512_256 = (int)2L;
-    /**
-     * {@snippet lang=c :
-     * #define OBJ_sha512_256 2
-     * }
-     */
-    public static int OBJ_sha512_256() {
-        return OBJ_sha512_256;
-    }
-    /**
-     * {@snippet lang=c :
-     * #define SN_hkdf "HKDF"
-     * }
-     */
-    public static MemorySegment SN_hkdf() {
-        class Holder {
-            static final MemorySegment SN_hkdf
-                = evp_h.LIBRARY_ARENA.allocateFrom("HKDF");
-        }
-        return Holder.SN_hkdf;
-    }
-    /**
-     * {@snippet lang=c :
-     * #define LN_hkdf "hkdf"
-     * }
-     */
-    public static MemorySegment LN_hkdf() {
-        class Holder {
-            static final MemorySegment LN_hkdf
-                = evp_h.LIBRARY_ARENA.allocateFrom("hkdf");
-        }
-        return Holder.LN_hkdf;
-    }
-    /**
-     * {@snippet lang=c :
-     * #define SN_X25519Kyber768Draft00 "X25519Kyber768Draft00"
-     * }
-     */
-    public static MemorySegment SN_X25519Kyber768Draft00() {
-        class Holder {
-            static final MemorySegment SN_X25519Kyber768Draft00
-                = evp_h.LIBRARY_ARENA.allocateFrom("X25519Kyber768Draft00");
-        }
-        return Holder.SN_X25519Kyber768Draft00;
-    }
-    /**
-     * {@snippet lang=c :
-     * #define SN_X25519MLKEM768 "X25519MLKEM768"
-     * }
-     */
-    public static MemorySegment SN_X25519MLKEM768() {
-        class Holder {
-            static final MemorySegment SN_X25519MLKEM768
-                = evp_h.LIBRARY_ARENA.allocateFrom("X25519MLKEM768");
-        }
-        return Holder.SN_X25519MLKEM768;
-    }
-    private static final int EVP_PKEY_NONE = (int)0L;
-    /**
-     * {@snippet lang=c :
-     * #define EVP_PKEY_NONE 0
-     * }
-     */
-    public static int EVP_PKEY_NONE() {
-        return EVP_PKEY_NONE;
-    }
-    private static final int EVP_PKEY_RSA = (int)6L;
-    /**
-     * {@snippet lang=c :
-     * #define EVP_PKEY_RSA 6
-     * }
-     */
-    public static int EVP_PKEY_RSA() {
-        return EVP_PKEY_RSA;
-    }
-    private static final int EVP_PKEY_RSA_PSS = (int)912L;
-    /**
-     * {@snippet lang=c :
-     * #define EVP_PKEY_RSA_PSS 912
-     * }
-     */
-    public static int EVP_PKEY_RSA_PSS() {
-        return EVP_PKEY_RSA_PSS;
-    }
-    private static final int EVP_PKEY_DSA = (int)116L;
-    /**
-     * {@snippet lang=c :
-     * #define EVP_PKEY_DSA 116
-     * }
-     */
-    public static int EVP_PKEY_DSA() {
-        return EVP_PKEY_DSA;
-    }
-    private static final int EVP_PKEY_EC = (int)408L;
-    /**
-     * {@snippet lang=c :
-     * #define EVP_PKEY_EC 408
-     * }
-     */
-    public static int EVP_PKEY_EC() {
-        return EVP_PKEY_EC;
-    }
-    private static final int EVP_PKEY_ED25519 = (int)949L;
-    /**
-     * {@snippet lang=c :
-     * #define EVP_PKEY_ED25519 949
-     * }
-     */
-    public static int EVP_PKEY_ED25519() {
-        return EVP_PKEY_ED25519;
-    }
-    private static final int EVP_PKEY_X25519 = (int)948L;
-    /**
-     * {@snippet lang=c :
-     * #define EVP_PKEY_X25519 948
-     * }
-     */
-    public static int EVP_PKEY_X25519() {
-        return EVP_PKEY_X25519;
-    }
-    private static final int EVP_PKEY_HKDF = (int)963L;
-    /**
-     * {@snippet lang=c :
-     * #define EVP_PKEY_HKDF 963
-     * }
-     */
-    public static int EVP_PKEY_HKDF() {
-        return EVP_PKEY_HKDF;
-    }
-    private static final int EVP_PKEY_DH = (int)28L;
-    /**
-     * {@snippet lang=c :
-     * #define EVP_PKEY_DH 28
-     * }
-     */
-    public static int EVP_PKEY_DH() {
-        return EVP_PKEY_DH;
-    }
-    private static final int EVP_PKEY_RSA2 = (int)19L;
-    /**
-     * {@snippet lang=c :
-     * #define EVP_PKEY_RSA2 19
-     * }
-     */
-    public static int EVP_PKEY_RSA2() {
-        return EVP_PKEY_RSA2;
-    }
-    private static final int EVP_PKEY_X448 = (int)961L;
-    /**
-     * {@snippet lang=c :
-     * #define EVP_PKEY_X448 961
-     * }
-     */
-    public static int EVP_PKEY_X448() {
-        return EVP_PKEY_X448;
-    }
-    private static final int EVP_PKEY_ED448 = (int)960L;
-    /**
-     * {@snippet lang=c :
-     * #define EVP_PKEY_ED448 960
-     * }
-     */
-    public static int EVP_PKEY_ED448() {
-        return EVP_PKEY_ED448;
     }
 }
 

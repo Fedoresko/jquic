@@ -21,12 +21,9 @@ import org.jquic.quic.crypto.NativeCrypto;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.lang.foreign.Arena;
-import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
 import java.security.SecureRandom;
 
-import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static org.jquic.quic.QuicCrypto.GCM_TAG_LENGTH;
 
 /**
@@ -43,7 +40,6 @@ public class QuicPacketBuilder {
     public static final int STATELESS_RESET_TOKEN_LENGTH = 16; // RFC 9000: 16 bytes
     private static final Logger log = LoggerFactory.getLogger(QuicPacketBuilder.class);
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
-    private static final byte[] ZERO_BLOCK = new byte[4096];
     private static final int MIN_STATELESS_RESET_LENGTH = 21; // 1 byte fixed bit + 4 bytes unpredictable + 16 bytes token
     private static final ThreadLocal<ByteBuffer> sample = ThreadLocal.withInitial(()->ByteBuffer.allocateDirect(16));
 

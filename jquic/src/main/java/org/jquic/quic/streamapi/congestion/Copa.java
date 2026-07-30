@@ -164,9 +164,6 @@ public class Copa implements CongestionControl {
     int getVelocity() {
         return velocity;
     }
-    
-    void setDelta(double delta) {
-        this.delta = delta;
-    }
+
 }
 

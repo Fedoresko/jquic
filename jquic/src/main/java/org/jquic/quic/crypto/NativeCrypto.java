@@ -3,7 +3,7 @@ package org.jquic.quic.crypto;
 import org.jquic.boringssl.EVP_AEAD_CTX;
 import org.jquic.boringssl.EVP_CIPHER_CTX;
 import org.jquic.boringssl.err_h;
-import org.jquic.boringssl.evp_h_3;
+import org.jquic.boringssl.evp_h;
 import org.jquic.quic.QuicCrypto;
 import org.jspecify.annotations.NonNull;
 import org.slf4j.Logger;
@@ -12,7 +12,6 @@ import org.slf4j.LoggerFactory;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
-import java.nio.Buffer;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 
@@ -32,8 +31,8 @@ public class NativeCrypto implements AutoCloseable {
 
     /**
      * Set ecnription keys used for the all further encription calls.
-     * @param keys
-     * @throws QuicCrypto.CryptoException
+     * @param keys - encryption key parameters
+     * @throws QuicCrypto.CryptoException - exception if crypto problems
      */
     public NativeCrypto(QuicCrypto.PacketProtectionKeysWithHP keys) throws QuicCrypto.CryptoException {
         this.keys = keys;
@@ -56,7 +55,7 @@ public class NativeCrypto implements AutoCloseable {
         }
 
         if (keys.key() != null) {
-            MemorySegment aead_engine = evp_h_3.EVP_aead_aes_128_gcm();
+            MemorySegment aead_engine = evp_h.EVP_aead_aes_128_gcm();
             if (EVP_AEAD_CTX_init(aeadCtx, aead_engine, MemorySegment.ofBuffer(keys.key()),
                     keys.key().remaining(), EVP_AEAD_DEFAULT_TAG_LENGTH(), MemorySegment.NULL) != 1) {
 
@@ -68,9 +67,6 @@ public class NativeCrypto implements AutoCloseable {
 
     public ByteBuffer getHpKey() {
         return keys == null ? null : keys.headerProtection();
-    }
-    public ByteBuffer getKey() {
-        return keys == null ? null : keys.key();
     }
 
     @Override

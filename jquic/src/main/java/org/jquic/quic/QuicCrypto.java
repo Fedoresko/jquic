@@ -26,7 +26,6 @@ import javax.crypto.Mac;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 import java.io.IOException;
-import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
 import java.security.*;
 import java.util.*;
@@ -40,14 +39,6 @@ import static org.jquic.quic.QuicPacketBuilder.STATELESS_RESET_TOKEN_LENGTH;
  */
 public class QuicCrypto {
     private static final Logger logger = LoggerFactory.getLogger(QuicCrypto.class);
-
-//    static {
-//        // Register Conscrypt eagerly when the class is loaded,
-//        // before any method can reference it by name.
-//        if (Security.getProvider("Conscrypt") == null) {
-//            Security.addProvider(Conscrypt.newProvider());
-//        }
-//    }
 
     // QUIC v1 constants
     public static final byte[] QUIC_VERSION_1_SALT = {
@@ -348,7 +339,7 @@ public class QuicCrypto {
 
             logger.debug("Initials negotiated max_data {}, max stream data bidi local {}, max stream data bidi remote {}, max stream data uni {}, max streams bidi {}, max streams uni {}", initialMaxData, initialMaxStreamDataBidiLocal, initialMaxStreamDataBidiRemote, initialMaxStreamDataUni, initialMaxStreamsBidi, initialMaxStreamsUni);
 
-            return new ConnectionMetadata.ClientMetadataNegotiated(alpn, maxIdleTimeout, supportedGroups, clientKeys, maxUdpPayloadSize, initialMaxData, initialMaxStreamDataBidiLocal, initialMaxStreamDataBidiRemote, initialMaxStreamDataUni, initialMaxStreamsBidi, initialMaxStreamsUni, signatures, ackDelayExponent, activeConnectionIdLimit);
+            return new ConnectionMetadata.ClientMetadataNegotiated(alpn, maxIdleTimeout, supportedGroups, clientKeys, maxUdpPayloadSize, initialMaxData, initialMaxStreamDataBidiLocal, initialMaxStreamDataBidiRemote, initialMaxStreamDataUni, initialMaxStreamsBidi, initialMaxStreamsUni, signatures, ackDelayExponent);
 
         } catch (CryptoException ce) {
             throw ce;
@@ -387,7 +378,6 @@ public class QuicCrypto {
             // -- Step 1: Create TlsMetadata - the golden source of state.
             // Early Secret = HKDF-Extract(salt=0, IKM=0) [RFC 8446 В§7.1, no PSK]
             byte[] earlySecret = hkdfExtract(new byte[32], new byte[32]);
-            metadata.earlySecret = earlySecret;
             logger.debug("TlsMetadata created with Early Secret");
 
             // -- Step 2: Feed raw ClientHello bytes into the running transcript.

@@ -1,8 +1,13 @@
 package org.jquic.quic;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.util.concurrent.locks.LockSupport;
 
 public class StatThread extends Thread {
+    private final static Logger log = LoggerFactory.getLogger(StatThread.class);
+
     public StatThread() {
         super("Stat thread");
     }
@@ -26,12 +31,11 @@ public class StatThread extends Thread {
                 for (int i = 0; i < tBufferStats.length; i++) {
                     bufferStats[i] += tBufferStats[i];
                 }
-            };
+            }
 
-            System.out.println("### Total active connections: " + totalActiveConnections + " | AVG Tick Time: "
-                    + (sumTickTimeEmaNs/threadCount) + "ns | AVG Retransmit Rate: " + sumRetransmitRateEma/threadCount);
-            System.out.println("### Total buffer stats: " + bufferStats[0] + " read buffers | " +
-                    bufferStats[1] + " write buffers.");
+            log.info("### Total active connections: {} | AVG Tick Time: {}ns | AVG Retransmit Rate: {}",
+                    totalActiveConnections, (sumTickTimeEmaNs/threadCount), sumRetransmitRateEma/threadCount);
+            log.info("### Total buffer stats: {} read buffers | {} write buffers.", bufferStats[0], bufferStats[1]);
 
             LockSupport.parkUntil(System.currentTimeMillis() + 1000);
         }

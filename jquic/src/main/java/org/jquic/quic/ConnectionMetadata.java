@@ -21,10 +21,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.crypto.SecretKey;
-import java.lang.foreign.Arena;
-import java.lang.foreign.MemorySegment;
-import java.lang.foreign.ValueLayout;
-import java.nio.Buffer;
 import java.nio.ByteBuffer;
 import java.security.GeneralSecurityException;
 import java.util.List;
@@ -52,11 +48,6 @@ import java.util.Map;
  */
 public class ConnectionMetadata {
     // ---- Set at construction (always present) ----
-    /**
-     * Early Secret = HKDF-Extract(salt=0, IKM=0) without PSK.
-     * Retained so future PSK support only needs to change the derivation here.
-     */
-    public byte[] earlySecret;
 
     /**
      * Running SHA-256 digest of handshake messages in wire order.
@@ -367,13 +358,12 @@ public class ConnectionMetadata {
         public final long maxUdpPayloadSize;
         public final InitialStreamLimits initialStreamLimits = new InitialStreamLimits();
         public final long ackDelayExponent;
-        public final long activeConnectionIdLimit;
         public final List<Short> supportedSignatures;
         public final List<Short> supportedGroups;
         public final Map<Short, byte[]> clientKeys;
         public final String selectedCipherSuite = QuicCrypto.CIPHER_SUITE;
 
-        public ClientMetadataNegotiated(String alpn, long maxIdleTimeoutMs, List<Short> supportedGroups, Map<Short, byte[]> clientKeys, long maxUdpPayloadSize, long initialMaxData, long initialMaxStreamDataBidiLocal, long initialMaxStreamDataBidiRemote, long initialMaxStreamDataUni, long initialMaxStreamsBidi, long initialMaxStreamsUni, List<Short> supportedSignatures, long ackDelayExponent, long activeConnectionIdLimit) {
+        public ClientMetadataNegotiated(String alpn, long maxIdleTimeoutMs, List<Short> supportedGroups, Map<Short, byte[]> clientKeys, long maxUdpPayloadSize, long initialMaxData, long initialMaxStreamDataBidiLocal, long initialMaxStreamDataBidiRemote, long initialMaxStreamDataUni, long initialMaxStreamsBidi, long initialMaxStreamsUni, List<Short> supportedSignatures, long ackDelayExponent) {
             this.alpn = alpn;
             this.maxIdleTimeoutMs = maxIdleTimeoutMs;
             this.maxUdpPayloadSize = maxUdpPayloadSize;
@@ -386,7 +376,6 @@ public class ConnectionMetadata {
             this.supportedSignatures = supportedSignatures;
             this.supportedGroups = supportedGroups;
             this.ackDelayExponent = ackDelayExponent;
-            this.activeConnectionIdLimit = activeConnectionIdLimit;
             this.clientKeys = clientKeys;
         }
     }

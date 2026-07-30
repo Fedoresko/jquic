@@ -143,7 +143,6 @@ class AcceptorThread implements Runnable {
                                         new HandshakeTask(buffer.borrow(), sender, newCid, packetSummary)
                                 );
                             } else if (packetSummary.type() != QuicPacketHeader.PacketType.INITIAL) {
-                                int pStart = buffer.buf().position();
                                 skipPacket(buffer.buf());
                                 
                                 log.warn(ANSIConstants.RED_FG, "[Acceptor] Non-Initial packed with unknown DCID: {} type {} - no mapping found, sending STATELESS_RESET", dcid, packetSummary.type());

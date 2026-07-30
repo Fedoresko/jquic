@@ -300,35 +300,6 @@ public class SelectorThread extends Thread {
         }
         return false;
     }
-//
-//    static class StatsFile implements AutoCloseable {
-//        private final RandomAccessFile file;
-//        private final FileChannel channel;
-//        private final String name;
-//        StatsFile(String name, String path) throws FileNotFoundException {
-//            file = new RandomAccessFile(path, "rw");
-//            this.name = name;
-//            channel = file.getChannel();
-//        }
-//        public void put(String val) {
-//            try {
-//                log.info("Stats {} : {}", name, val);
-//                byte[] bytes = val.getBytes(StandardCharsets.UTF_8);
-//                MappedByteBuffer buffer = channel.map(FileChannel.MapMode.READ_WRITE, 0, bytes.length);
-//                buffer.put(bytes);
-//                buffer.force();
-//            } catch (IOException e) {
-//                logger.warn("Could not update stats file {}", name, e);
-//            }
-//        }
-//
-//        @Override
-//        public void close() throws IOException {
-//            channel.close();
-//            file.close();
-//        }
-//    }
-
 
     /**
      * Processes a received datagram which may contain multiple coalesced packets.
