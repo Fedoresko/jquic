@@ -13,9 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.jquic.quic;
+package org.jquic.quic.crypto;
 
 //import org.conscrypt.Conscrypt;
+import org.jquic.quic.*;
 import org.jquic.quic.buffers.ChunkedOutputStreamWithAmendments;
 import org.jquic.quic.streamapi.QuicApplicationProtocol;
 import org.slf4j.Logger;
@@ -106,7 +107,7 @@ public class QuicCrypto {
 
     private static KeystoreManager keystoreManager;
 
-    static void initKeystore() {
+    public static void initKeystore() {
         // Install Conscrypt as the preferred security provider
 //        Security.insertProviderAt(Conscrypt.newProvider(), 1);
 
@@ -351,7 +352,7 @@ public class QuicCrypto {
     /**
      * Returns the current keystore manager, or null if not initialized.
      */
-    static KeystoreManager getKeystoreManager() {
+    public static KeystoreManager getKeystoreManager() {
         return keystoreManager;
     }
 

@@ -16,6 +16,7 @@
 package org.jquic.quic.streamapi.impl;
 
 import org.jquic.quic.streamapi.QuicConnectionControl;
+import org.jquic.quic.struct.TriStateQueue;
 
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -29,6 +30,10 @@ public class StreamState {
 
     public void setBufferedBytes(long bufferedBytes) {
         this.bufferedBytes = bufferedBytes;
+    }
+
+    public TriStateQueue<ApplicationData> getSendQueue() {
+        return sendQueue;
     }
 
     /**
@@ -51,6 +56,8 @@ public class StreamState {
         }
     }
 
+    private final TriStateQueue<ApplicationData> sendQueue = new TriStateQueue<>(ApplicationData.EMPTY, ApplicationData.PROCESSED);
+
     private final long streamId;
     final QuicConnectionControl.StreamType streamType;
     private State state;
@@ -64,7 +71,7 @@ public class StreamState {
     private long bufferedBytes;       // Bytes in receive buffer
     AtomicLong lastDataBlockedAt  = new AtomicLong(0);
 
-    public StreamState(long streamId, boolean isServerInitiated, QuicConnectionControl.StreamType streamType,
+    public StreamState(long streamId, QuicConnectionControl.StreamType streamType,
                       long initialMaxStreamDataToSend, long initialMaxStreamToReceive) {
         this.streamId = streamId;
         this.streamType = streamType;

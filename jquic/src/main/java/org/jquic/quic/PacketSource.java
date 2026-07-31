@@ -13,8 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-rootProject.name = 'root'
+package org.jquic.quic;
 
-include 'http3'
-include 'jquic'
-include 'quic-application'
+public enum PacketSource {
+    NEW,
+    RETRANSMISSION,
+}

@@ -155,7 +155,7 @@ class FlightControlTest {
         boolean result = flightControl.canSend(state, 6000);
         
         assertFalse(result);
-        verify(streamManager).sendStreamDataBlockedFrame(eq(streamId), eq((long)INITIAL_MAX_STREAM_DATA + 6000));
+        verify(streamManager).sendStreamDataBlockedFrame(eq(streamId), eq((long)INITIAL_MAX_STREAM_DATA));
     }
 
     @Test

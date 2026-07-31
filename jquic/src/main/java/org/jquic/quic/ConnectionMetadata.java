@@ -16,6 +16,7 @@
 package org.jquic.quic;
 
 import org.jquic.quic.crypto.NativeCrypto;
+import org.jquic.quic.crypto.QuicCrypto;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -62,7 +63,7 @@ public class ConnectionMetadata {
     /**
      * Handshake secret bytes retained for Master Secret derivation in stage 2.
      */
-    byte[] handshakeSecretBytes;
+    public byte[] handshakeSecretBytes;
 
     public NativeCrypto clientInitialCrypto;
     public NativeCrypto serverInitialCrypto;

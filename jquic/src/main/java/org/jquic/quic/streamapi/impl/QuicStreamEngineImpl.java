@@ -20,6 +20,7 @@ import org.jquic.quic.streamapi.ConnectionStreamManager;
 import org.jquic.quic.streamapi.QuicApplicationProtocol;
 import org.jquic.quic.streamapi.QuicStreamEngine;
 import org.jctools.queues.MessagePassingQueue;
+import org.jquic.quic.struct.TriStateQueue;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -75,7 +76,7 @@ public class QuicStreamEngineImpl implements QuicStreamEngine {
      * @param connection   QuicConnection instance
      * @param protocolName Application protocol name
      */
-    public ConnectionStreamManager createConnection(long connectionId, QuicConnection connection, String protocolName, MessagePassingQueue<EventRecord> outputQueue) {
+    public ConnectionStreamManager createConnection(long connectionId, QuicConnection connection, String protocolName, MessagePassingQueue<TriStateQueue<ApplicationData>> wakeQueue) {
         QuicApplicationProtocol protocol = protocols.get(protocolName);
         if (protocol == null) {
             logger.error("Protocol {} not registered", protocolName);
@@ -92,7 +93,7 @@ public class QuicStreamEngineImpl implements QuicStreamEngine {
                 connection,
                 protocol,
                 workerPool.getStreamWorker(workerIndex),
-                outputQueue
+                wakeQueue
         );
 
         logger.info("Created connection {} with protocol {} (worker {})", connectionId, protocolName, workerIndex);

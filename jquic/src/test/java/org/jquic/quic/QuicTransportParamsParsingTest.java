@@ -15,12 +15,12 @@
  */
 package org.jquic.quic;
 
+import org.jquic.quic.crypto.QuicCrypto;
 import org.junit.jupiter.api.Test;
 
 import java.nio.ByteBuffer;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
-import java.security.Security;
 import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;

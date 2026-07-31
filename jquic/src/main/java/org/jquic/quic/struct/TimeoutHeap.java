@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.jquic.quic;
+package org.jquic.quic.struct;
 
 import java.lang.reflect.Array;
 
@@ -27,7 +27,7 @@ public class TimeoutHeap<T extends TimeoutHeap.Entry> {
      * Represents an entry that can be managed in a timeout heap.
      * It should keep its heap index internally.
      */
-    interface Entry {
+    public interface Entry {
         /**
          * Returns the index of this entry in a timeout heap.
          * @return The index of this entry in a timeout heap, or -1 if is not in heap yet.

@@ -16,16 +16,16 @@
 package org.jquic.quic;
 
 import org.apache.commons.codec.digest.MurmurHash3;
-import org.jquic.LogTool;
 import org.jquic.quic.buffers.BufferPool;
 import org.jquic.quic.buffers.PoolBuffer;
+import org.jquic.quic.crypto.QuicCrypto;
+import org.jquic.quic.struct.LruCache;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.DatagramChannel;
-import java.util.Collection;
 import java.util.HexFormat;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -37,12 +37,10 @@ import static org.jquic.quic.SelectorThread.skipPacket;
 // =========================================================================
 class AcceptorThread implements Runnable {
     private static final Logger logger = LoggerFactory.getLogger(AcceptorThread.class);
-    private static final LogTool log = new LogTool(logger);
     public static final int INITIAL_CONNECTIONS_MAP_SIZE = 1000;
     public static final int MINIMUM_INITIAL_PACKET = 1200;
 
     private final BufferPool  bufferPool = new BufferPool();
-
 
     private final DatagramChannel channel;
     private SelectorThread[] selectors;
@@ -84,12 +82,12 @@ class AcceptorThread implements Runnable {
                 if (buffer.buf().remaining() > 0) {
                     QuicPacketHeader.PacketSummary packetSummary = QuicPacketHeader.parseSummary(buffer.buf());
                     if (packetSummary == null) {
-                        log.info(ANSIConstants.RED_FG, "Could not parse paket summary");
+                        logger.info("Could not parse paket summary");
                         continue; // skip remaining
                     }
 
                     if (packetSummary.type() != QuicPacketHeader.PacketType.ONE_RTT && packetSummary.version() == QuicVersion.UNKNOWN) {
-                        log.info(ANSIConstants.RED_FG, "[Acceptor] Unsupported QUIC version. Sending Version Negotiation.");
+                        logger.info("[Acceptor] Unsupported QUIC version. Sending Version Negotiation.");
                         byte[] payload = new byte[buffer.buf().remaining()];
                         buffer.buf().duplicate().get(payload);
                         System.out.println(HexFormat.of().formatHex(payload));
@@ -100,7 +98,7 @@ class AcceptorThread implements Runnable {
                             try {
                                 channel.send(vnPacket.buf(), sender);
                             } catch (Exception e) {
-                                log.error(ANSIConstants.RED_FG, "Failed to send Version Negotiation packet", e);
+                                logger.error("Failed to send Version Negotiation packet", e);
                             }
                             vnPacket.release();
                         }
@@ -108,11 +106,11 @@ class AcceptorThread implements Runnable {
                     }
 
                     byte[] dcid = packetSummary.dcid();
-                    log.debug(ANSIConstants.RED_FG, "[Acceptor] Received {} packet, DCID: {}", packetSummary.type(), dcid);
+                    logger.debug("[Acceptor] Received {} packet, DCID: {}", packetSummary.type(), dcid);
 
                     SelectorCID assignedSelectorId = initialSelectorMap.get(ByteBuffer.wrap(dcid));
                     if (assignedSelectorId != null) {
-                        log.debug(ANSIConstants.RED_FG, "[Acceptor] Packet in initialization mapping  CID: {}, enqueueing for handshake", assignedSelectorId.cid);
+                        logger.debug("[Acceptor] Packet in initialization mapping  CID: {}, enqueueing for handshake", assignedSelectorId.cid);
 
                         buffer.buf().rewind();
                         selectors[assignedSelectorId.selectorId].forwardHandshake(
@@ -124,14 +122,14 @@ class AcceptorThread implements Runnable {
                         Integer owningSelectorId = cidToSelectorMap.get(cid);
 
                         if (owningSelectorId != null) {
-                            log.debug(ANSIConstants.RED_FG, "[Acceptor] Packet in regular mapping  CID: {}, forwarding to selector", owningSelectorId);
+                            logger.debug("[Acceptor] Packet in regular mapping  CID: {}, forwarding to selector", owningSelectorId);
                             // Forward this packet to the appropriate Selector
                             forwardToSelector(owningSelectorId, buffer, sender);
                         } else {
                             if (packetSummary.type() == QuicPacketHeader.PacketType.INITIAL && buffer.buf().remaining() >= MINIMUM_INITIAL_PACKET) {
                                 // LONG HEADER: Generate CID and enqueue for handshake processing
                                 long newCid = cidGenerator.getAndIncrement();
-                                log.warn(ANSIConstants.RED_FG, "[Acceptor] First initial packet, allocated CID: {}, enqueueing for handshake", newCid);
+                                logger.warn("[Acceptor] First initial packet, allocated CID: {}, enqueueing for handshake", newCid);
 
                                 int selectorId = (int) (getLongHash(dcid) % selectors.length);
 
@@ -145,7 +143,7 @@ class AcceptorThread implements Runnable {
                             } else if (packetSummary.type() != QuicPacketHeader.PacketType.INITIAL) {
                                 skipPacket(buffer.buf());
                                 
-                                log.warn(ANSIConstants.RED_FG, "[Acceptor] Non-Initial packed with unknown DCID: {} type {} - no mapping found, sending STATELESS_RESET", dcid, packetSummary.type());
+                                logger.warn("[Acceptor] Non-Initial packed with unknown DCID: {} type {} - no mapping found, sending STATELESS_RESET", dcid, packetSummary.type());
                                 int incomingPacketSize = buffer.buf().position() - start;
                                 if (incomingPacketSize > 25) { //ignore to small packets
                                     byte[] statelessResetToken = QuicCrypto.generateStatelessResetToken(dcid);
@@ -153,13 +151,13 @@ class AcceptorThread implements Runnable {
                                     try {
                                         channel.send(resetPacket.buf(), sender);
                                     } catch (Exception e) {
-                                        log.error(ANSIConstants.RED_FG, "Failed to send Stateless Reset packet", e);
+                                        logger.error("Failed to send Stateless Reset packet", e);
                                     }
                                     resetPacket.release();
                                 }
                             } else {
                                 buffer.buf().position(buffer.buf().limit());
-                                log.warn(ANSIConstants.RED_FG, "[Acceptor] Initial packed with unknown DCID: {} too short {}  dropping packet", dcid, buffer.buf().remaining());
+                                logger.warn("[Acceptor] Initial packed with unknown DCID: {} too short {}  dropping packet", dcid, buffer.buf().remaining());
                             }
                         }
                     }

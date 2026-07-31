@@ -18,14 +18,14 @@ package org.jquic.quic;
 import org.jquic.quic.buffers.BufferPool;
 import org.jquic.quic.buffers.RootPoolBuffer;
 import org.jquic.quic.crypto.NativeCrypto;
+import org.jquic.quic.crypto.QuicCrypto;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
-import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
 
 import static org.jquic.quic.QuicConnectionCryptoIntegrationTest.destinationCidBytes;
-import static org.jquic.quic.QuicCrypto.GCM_TAG_LENGTH;
+import static org.jquic.quic.crypto.QuicCrypto.GCM_TAG_LENGTH;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;

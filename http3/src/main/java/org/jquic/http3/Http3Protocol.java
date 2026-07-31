@@ -18,6 +18,7 @@ package org.jquic.http3;
 import org.jquic.quic.streamapi.CongestionControl;
 import org.jquic.quic.streamapi.QuicApplicationProtocol;
 import org.jquic.quic.streamapi.QuicApplicationProtocolConnectionHandler;
+import org.jquic.quic.streamapi.congestion.BBRv3;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -90,7 +91,7 @@ public class Http3Protocol implements QuicApplicationProtocol {
         return new CongestionControl() {
             @Override
             public long getDelay(long currentTimeMs, long dataSize, long connectionId, long streamId, long smoothedRtt, long lastRtt, long minRtt, long bytesAckedInRtt, long bytesLostInRtt, long bytesAckedInWindow, long bytesLostInWindow, long packetsAckedInWindow, long lastLostTimeMs, long inFlightData, long receiveBufferRemaining, long sendBufferSize, long ceCounter, long cePacketsInWindow) {
-                return 1000000;
+                return 0;
             }
 
             @Override

@@ -15,6 +15,7 @@
  */
 package org.jquic.quic;
 
+import org.jquic.quic.crypto.QuicCrypto;
 import org.jquic.quic.linux.BpfRouting;
 import org.jquic.quic.streamapi.QuicStreamEngine;
 import org.jquic.quic.streamapi.impl.QuicStreamEngineImpl;

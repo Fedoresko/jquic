@@ -18,13 +18,14 @@ package org.jquic.quic;
 import org.jquic.quic.buffers.BufferPool;
 import org.jquic.quic.buffers.PoolBuffer;
 import org.jquic.quic.crypto.NativeCrypto;
+import org.jquic.quic.crypto.QuicCrypto;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.nio.ByteBuffer;
 import java.security.SecureRandom;
 
-import static org.jquic.quic.QuicCrypto.GCM_TAG_LENGTH;
+import static org.jquic.quic.crypto.QuicCrypto.GCM_TAG_LENGTH;
 
 /**
  * Builds complete QUIC packets with proper headers and encryption (RFC 9000 Section 17, RFC 9001 Section 5).
@@ -240,7 +241,7 @@ public class QuicPacketBuilder {
         // Randomize packet length a bit
         int minLen = Math.min(32, incomingPacketSize - 1);
         int maxLen = Math.min(64, incomingPacketSize - 1);
-        int len = SECURE_RANDOM.nextInt(maxLen - minLen) + minLen;
+        int len = (maxLen == minLen) ? minLen : SECURE_RANDOM.nextInt(maxLen - minLen) + minLen;
 
         // Fill with random unpredictable bits (excluding last 16 bytes for token)
         int randomBytesCount = len - STATELESS_RESET_TOKEN_LENGTH;

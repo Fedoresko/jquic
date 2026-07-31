@@ -1,7 +1,7 @@
 /*
  * Copyright 2026 Fedor Malyshev
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
+ * Licensed under the Apache License, Version 2.0 (the "License") ;
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
@@ -13,10 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.jquic.quic.streamapi.impl;
+package org.jquic.quic;
 
 import org.jquic.quic.buffers.PoolBuffer;
 
-public record EventRecord(EventType eventType, long connectionId, long timeToSendNs, PoolBuffer data) {
+public record OutboundPacket(PacketSource packetSource, PoolBuffer data) {
 }
-

@@ -17,6 +17,7 @@ package org.jquic.quic;
 
 import org.jquic.quic.buffers.PoolBuffer;
 import org.jquic.quic.struct.SortedIntervals;
+import org.jquic.quic.struct.TimeoutHeap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

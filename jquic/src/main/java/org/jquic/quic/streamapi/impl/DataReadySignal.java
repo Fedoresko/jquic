@@ -13,8 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-rootProject.name = 'root'
+package org.jquic.quic.streamapi.impl;
 
-include 'http3'
-include 'jquic'
-include 'quic-application'
+import org.jquic.quic.struct.TriStateQueue;
+
+public record DataReadySignal(TriStateQueue<ApplicationData> queue) {}

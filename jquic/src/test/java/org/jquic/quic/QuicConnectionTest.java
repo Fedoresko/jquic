@@ -21,12 +21,12 @@ import org.jquic.quic.buffers.BufferPool;
 import org.jquic.quic.buffers.PoolBuffer;
 import org.jquic.quic.buffers.RootPoolBuffer;
 import org.jquic.quic.crypto.NativeCrypto;
+import org.jquic.quic.crypto.QuicCrypto;
 import org.jquic.quic.streamapi.ConnectionStreamManager;
 import org.jquic.quic.streamapi.QuicApplicationProtocol;
 import org.jquic.quic.streamapi.QuicApplicationProtocolConnectionHandler;
 import org.jquic.quic.streamapi.frames.ProtocolFrame;
 import org.jquic.quic.streamapi.frames.StreamFrameData;
-import org.jquic.quic.streamapi.impl.EventRecord;
 import org.jquic.quic.streamapi.impl.QuicStreamEngineImpl;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
@@ -294,7 +294,7 @@ class QuicConnectionTest {
         // Create 1-RTT packet with STREAM frame
         ByteBuffer packet = createMock1RttPacketWithStreamData(4L, "Hello QUIC".getBytes());
         connection.process1RttPacket(new RootPoolBuffer(packet, pool, false), 0);
-        EventRecord ackResponse = connection.pollOutbound();
+        OutboundPacket ackResponse = connection.pollOutbound();
 
 
         // Verify stream data was delivered
@@ -335,7 +335,7 @@ class QuicConnectionTest {
         // Send CONNECTION_CLOSE frame
         ByteBuffer closePacket = createMock1RttPacketWithConnectionClose();
         connection.process1RttPacket(new RootPoolBuffer(closePacket, pool, false), 0);
-        EventRecord ackResponse = connection.pollOutbound();
+        OutboundPacket ackResponse = connection.pollOutbound();
 
         // Verify state transition
         assertEquals(QuicConnection.State.CLOSING, connection.getState(),
@@ -370,11 +370,6 @@ class QuicConnectionTest {
             @Override
             public void onProtocolFrame(ProtocolFrame frame) {
                 callback.accept(frame);
-            }
-
-            @Override
-            public void onDataSend(int dataSize) {
-
             }
 
             @Override

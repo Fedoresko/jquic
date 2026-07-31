@@ -16,18 +16,22 @@
 package org.jquic.quic;
 
 import org.jctools.queues.MessagePassingQueue;
-import org.jquic.LogTool;
 import org.jquic.quic.buffers.BufferPool;
 import org.jquic.quic.buffers.ChunkedOutputStreamWithAmendments;
 import org.jquic.quic.buffers.PoolBuffer;
 import org.jquic.quic.buffers.TranscryptHashSupport;
 import org.jquic.quic.crypto.NativeCrypto;
+import org.jquic.quic.crypto.QuicCrypto;
+import org.jquic.quic.streamapi.CongestionControl;
 import org.jquic.quic.streamapi.ConnectionStreamManager;
 import org.jquic.quic.streamapi.QuicApplicationProtocol;
 import org.jquic.quic.streamapi.frames.*;
-import org.jquic.quic.streamapi.impl.EventRecord;
-import org.jquic.quic.streamapi.impl.EventType;
+import org.jquic.quic.streamapi.impl.ApplicationData;
 import org.jquic.quic.streamapi.impl.QuicStreamEngineImpl;
+import org.jquic.quic.streamapi.impl.StreamManager;
+import org.jquic.quic.struct.TimeoutHeap;
+import org.jquic.quic.struct.TriStateQueue;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -40,8 +44,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 import static org.jquic.quic.QuicConnection.State.*;
-import static org.jquic.quic.QuicCrypto.GCM_TAG_LENGTH;
 import static org.jquic.quic.QuicFrameBuilder.*;
+import static org.jquic.quic.crypto.QuicCrypto.GCM_TAG_LENGTH;
 import static org.jquic.quic.streamapi.impl.StreamFrameWriter.*;
 
 /**
@@ -49,14 +53,9 @@ import static org.jquic.quic.streamapi.impl.StreamFrameWriter.*;
  */
 public class QuicConnection implements TimeoutHeap.Entry {
     private static final Logger logger = LoggerFactory.getLogger(QuicConnection.class);
-    private static final LogTool log = new LogTool(logger);
 
     /** Maximum number of early 1-RTT packets buffered before ESTABLISHED. */
     private static final int MAX_EARLY_1RTT_QUEUE = 32;
-
-    public BufferPool getBufferPool() {
-        return selector.getBufferPool();
-    }
 
     /**
      * QUIC connection state following the connection lifecycle.
@@ -110,17 +109,18 @@ public class QuicConnection implements TimeoutHeap.Entry {
      * SPSC: single producer (this connection, always on the selector thread),
      * single consumer (the selector thread).
      */
-    private final Deque<EventRecord> outboundQueue = new ArrayDeque<>();
-    private final MessagePassingQueue<EventRecord> outputQueue;
+    private final Deque<OutboundPacket> outboundQueue = new ArrayDeque<>();
+    private final MessagePassingQueue<TriStateQueue<ApplicationData>> wakeQueue;
     private CryptoFrameRebuilder cryptoFrameRebuilder;
     byte[] clientCid;
     private final SelectorThread selector;
+    private CongestionControl congestionControl;
 
-    public QuicConnection(long connectionId, QuicVersion version, SocketAddress remoteAddress, MessagePassingQueue<EventRecord> outputQueue, SelectorThread selector) {
+    public QuicConnection(long connectionId, QuicVersion version, SocketAddress remoteAddress, MessagePassingQueue<TriStateQueue<ApplicationData>> wakeQueue, SelectorThread selector) {
         this.connectionId = connectionId;
         this.connectionIdBytes = ByteBuffer.allocate(8).putLong(connectionId);
         this.remoteAddress = remoteAddress;
-        this.outputQueue = outputQueue;
+        this.wakeQueue = wakeQueue;
         this.state.set(INITIAL);
         this.currentTimestamp = System.currentTimeMillis();
         this.timeoutTimestamp = idleTimeoutMs + currentTimestamp;
@@ -129,6 +129,13 @@ public class QuicConnection implements TimeoutHeap.Entry {
         statelessResetToken = QuicCrypto.generateStatelessResetToken(ByteBuffer.allocate(8).putLong(connectionId).array());
         logger.info("Connection {} initial tiemout set to {}", connectionId, timeoutTimestamp);
     }
+
+    public BufferPool getBufferPool() {
+        return selector.getBufferPool();
+    }
+
+    @Nullable
+    public CongestionControl getCongestionControl() { return  congestionControl; }
 
     public void setCurrentTimestamp(long timestamp) {
         this.currentTimestamp = timestamp;
@@ -149,9 +156,6 @@ public class QuicConnection implements TimeoutHeap.Entry {
             logger.warn("Cannot send frame, connection not established (state: {})", state);
             return false;
         }
-        if (connectionStreamManager != null) {
-            connectionStreamManager.onDataSend(frame.buf().remaining());
-        }
 
         sendApplicationPacket(frame, false);
         return true;
@@ -165,7 +169,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
      *
      * @return the next ready-to-send encrypted packet, or {@code null} if the queue is empty
      */
-    EventRecord pollOutbound() {
+    OutboundPacket pollOutbound() {
         return outboundQueue.pollFirst();
     }
 
@@ -260,10 +264,11 @@ public class QuicConnection implements TimeoutHeap.Entry {
                 QuicStreamEngineImpl engine =
                         QuicEngine.getStreamEngineInternal();
                 if (engine != null) {
-                    setConnectionStreamManager(engine.createConnection(connectionId, this, negotiatedProtocol, outputQueue));
+                    setConnectionStreamManager(engine.createConnection(connectionId, this, negotiatedProtocol, wakeQueue));
                     QuicApplicationProtocol protocol = engine.getProtocol(negotiatedProtocol);
                     if (protocol != null) {
                         applicationSpace.setTimeWindowMs(protocol.getCongestionControl().timeWindowMs());
+                        congestionControl = protocol.getCongestionControl();
                     }
 
                     logger.info("Registered connection {} with stream engine (protocol: {})",
@@ -690,10 +695,6 @@ public class QuicConnection implements TimeoutHeap.Entry {
 
                 logger.info("Got Stream frame CID {} frame type {} stream id {}, offset {}, length {}", connectionId, frameType, streamId, offset, length);
 
-//                byte[] data = new byte[(int) Math.min(length, plaintext.remaining())];
-//                plaintext.get(data);
-//                log.info(ANSIConstants.RED_FG,"STREAM frame received. Stream id {}, data: {}, str: {}", streamId, HexFormat.of().formatHex(data), new String(data));
-
                 if (connectionStreamManager != null) {
                     PoolBuffer borrowed = plaintext.borrow();
                     borrowed.buf().limit(borrowed.buf().position() + (int) length);
@@ -801,8 +802,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
                 int cidLen          = plaintext.buf().get() & 0xFF;
                 plaintext.buf().position(plaintext.buf().position() + cidLen); // skip connection_id
                 plaintext.buf().position(plaintext.buf().position() + 16);     // skip stateless_reset_token
-                log.debug(ANSIConstants.RED_FG,
-                        "Connection migration initiated but NOT SUPPORTED! CID={} seqNum={} retirePriorTo={}",
+                logger.debug("Connection migration initiated but NOT SUPPORTED! CID={} seqNum={} retirePriorTo={}",
                         connectionId, seqNum, retirePriorTo);
                 needsAck = true;
             } else if (frameType == 0x19) { // RETIRE_CONNECTION_ID
@@ -1068,7 +1068,9 @@ public class QuicConnection implements TimeoutHeap.Entry {
 
             logger.debug("Sending CONNECTION_CLOSE packet");
             if (ext) {
-                outputQueue.offer(new EventRecord(EventType.APPLICATION_DATA, connectionId, System.nanoTime(), byteBuffer));
+                TriStateQueue<ApplicationData> applicationDataTriStateQueue = new TriStateQueue<>(ApplicationData.EMPTY, ApplicationData.PROCESSED);
+                applicationDataTriStateQueue.put(new ApplicationData(this, null, StreamManager.SERVICE_DATA, byteBuffer), 0, 0);
+                wakeQueue.offer(applicationDataTriStateQueue);
             } else {
                 sendPacket(byteBuffer, phase, false);
             }
@@ -1142,7 +1144,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
         // Track sent packet: store UNENCRYPTED payload for retransmission
         space.onPacketSent(currentTimestamp, packetNumber, payload, true);
 
-        outboundQueue.add(new EventRecord(retrasmit ? EventType.RETRANSMISSION : EventType.DATA, connectionId, 0, completePacket));
+        outboundQueue.add(new OutboundPacket(retrasmit ? PacketSource.RETRANSMISSION : PacketSource.NEW, completePacket));
     }
 
     private void sendInitialPacket(PoolBuffer payload, boolean retrasmit) {
@@ -1177,7 +1179,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
         // Create ServerHello uses the server's ephemeral public key already stored in tlsMetadata
 
         ChunkedOutputStreamWithAmendments outs = ChunkedOutputStreamWithAmendments.createNonWrapping(getBufferPool(),
-                (int) (connectionMetadata.clientMetadata.maxUdpPayloadSize - CRYPTO_FRAME_MAX_HEADER_LENGTH - GCM_TAG_LENGTH),
+                (int) (connectionMetadata.clientMetadata.maxUdpPayloadSize - CRYPTO_FRAME_MAX_HEADER_LENGTH - GCM_TAG_LENGTH - MAX_LONG_HEADER_LENGTH),
                 GCM_TAG_LENGTH,
                 (buffer, offset, _) -> {
                     QuicFrameBuilder.prependCryptoFrameHeader(offset, buffer);
@@ -1211,7 +1213,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
      */
     private void sendHandshakePacket() throws Exception {
         ChunkedOutputStreamWithAmendments out = ChunkedOutputStreamWithAmendments.createNonWrapping(getBufferPool(),
-                (int) connectionMetadata.clientMetadata.maxUdpPayloadSize - GCM_TAG_LENGTH,
+                (int) connectionMetadata.clientMetadata.maxUdpPayloadSize - GCM_TAG_LENGTH - MAX_LONG_HEADER_LENGTH,
                 GCM_TAG_LENGTH,
                 (buffer, offset, _) -> {
                     QuicFrameBuilder.prependCryptoFrameHeader(offset, buffer);

@@ -16,6 +16,8 @@
 package org.jquic.quic;
 
 import org.jctools.queues.SpscLinkedQueue;
+import org.jquic.quic.crypto.QuicCrypto;
+import org.jquic.quic.struct.TimeoutHeap;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;

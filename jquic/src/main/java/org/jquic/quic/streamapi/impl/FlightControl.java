@@ -32,12 +32,12 @@ import static org.jquic.quic.streamapi.QuicConnectionControl.StreamType.Bidirect
 import static org.jquic.quic.streamapi.QuicConnectionControl.StreamType.Unidirectional;
 import static org.jquic.quic.streamapi.impl.StreamState.State.CLOSED;
 
-class FlightControl {
+public class FlightControl {
     private static final Logger logger = LoggerFactory.getLogger(FlightControl.class);
     
     private final Map<Long, StreamState> streams = new HashMap<>();
 
-    final int maxStreamDataCap;
+    private final int maxStreamDataCap;
     private final long maxDataCap; // Hard limit per connection
     private final AtomicLong currentClientMaxData; // Current MAX_DATA value advertised to peer
     private final AtomicLong currentServerMaxData; // Current MAX_DATA value advertised to peer
@@ -181,19 +181,19 @@ class FlightControl {
         long streamId = state.getStreamId();
         if (!state.canSendBytes(dataSize)) {
             if (state.lastDataBlockedAt.get() < state.getMaxStreamData() + dataSize) {
-                logger.debug("Stream {} blocked by MAX_STREAM_DATA: sent={}, data={}, limit={}",
+                logger.warn("Stream {} blocked by MAX_STREAM_DATA: sent={}, data={}, limit={}",
                         streamId, state.getSentBytes(), dataSize, state.getMaxStreamData());
-                streamManager.sendStreamDataBlockedFrame(streamId, state.getMaxStreamData() + dataSize);
+                streamManager.sendStreamDataBlockedFrame(streamId, state.getMaxStreamData());
                 state.lastDataBlockedAt.set(state.getMaxStreamData() + dataSize);
             }
             return false;
         }
         if (!canSendMoreConnectionData(dataSize)) {
             if (lastDataBlockedAt.get() < currentClientMaxData.get() + dataSize) {
-                logger.debug("Connection blocked by MAX_DATA: in-flight={}, data={}, limit={}",
+                logger.warn("Connection blocked by MAX_DATA: in-flight={}, data={}, limit={}",
                         totalInFlightBytes, dataSize, currentClientMaxData.get());
                 // Send DATA_BLOCKED frame to inform peer
-                streamManager.sendDataBlockedFrame(currentClientMaxData.get() + dataSize, streamId);
+                streamManager.sendDataBlockedFrame(currentClientMaxData.get(), streamId);
                 lastDataBlockedAt.set(state.getMaxStreamData() + dataSize);
             }
             return false;
@@ -231,7 +231,7 @@ class FlightControl {
             throw new QuicStreamException("Stream limit reached for " + streamType);
         }
 
-        StreamState state = new StreamState(streamId, true, streamType,
+        StreamState state = new StreamState(streamId, streamType,
             streamType == Bidirectional ? serverInitialLimits.maxStreamDataBidiLocal : serverInitialLimits.maxStreamDataUni,
             streamType == Bidirectional ? clientInitialLimits.maxStreamDataBidiRemote : clientInitialLimits.maxStreamDataUni);
         streams.put(streamId, state);
@@ -299,9 +299,9 @@ class FlightControl {
         }
 
         boolean isNew = !streams.containsKey(streamId);
-        StreamState state = streams.computeIfAbsent(streamId, id -> new StreamState(id, false, type,
-                isBidi ? serverInitialLimits.maxStreamDataBidiRemote : serverInitialLimits.maxStreamDataUni,
-                isBidi ? clientInitialLimits.maxStreamDataBidiLocal : clientInitialLimits.maxStreamDataUni));
+        StreamState state = streams.computeIfAbsent(streamId, id -> new StreamState(id, type,
+                isBidi ? clientInitialLimits.maxStreamDataBidiLocal : clientInitialLimits.maxStreamDataUni,
+                isBidi ? serverInitialLimits.maxStreamDataBidiLocal : serverInitialLimits.maxStreamDataUni));
 
         if (isNew) {
             long streamIndex = streamId / 4;
@@ -501,16 +501,22 @@ class FlightControl {
 
     public void onStreamResetAck(long streamId) {
         StreamState streamState = streams.get(streamId);
-        if (streamState.getState() != StreamState.State.RESET_SENT) {
-            logger.warn("Received ack for STREAM_RESET in state {} for stream {}", streamState.getState(), streamId);
+        if (streamState != null) {
+            if (streamState.getState() != StreamState.State.RESET_SENT) {
+                logger.warn("Received ack for STREAM_RESET in state {} for stream {}", streamState.getState(), streamId);
+            }
+            streamState.setState(StreamState.State.RESET_ACK_RECEIVED);
+            decrementActiveStreamCount(streamId);
+            streams.remove(streamId);
         }
-        streamState.setState(StreamState.State.RESET_ACK_RECEIVED);
-        decrementActiveStreamCount(streamId);
-        streams.remove(streamId);
     }
 
     public long getBytesBuffered() {
         return totalBufferedBytes.get();
+    }
+
+    public int getMaxStreamDataCap() {
+        return maxStreamDataCap;
     }
 }
 

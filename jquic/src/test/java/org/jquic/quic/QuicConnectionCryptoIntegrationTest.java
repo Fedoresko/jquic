@@ -21,14 +21,11 @@ import org.jquic.quic.buffers.BufferPool;
 import org.jquic.quic.buffers.PoolBuffer;
 import org.jquic.quic.buffers.RootPoolBuffer;
 import org.jquic.quic.crypto.NativeCrypto;
+import org.jquic.quic.crypto.QuicCrypto;
 import org.jquic.quic.streamapi.QuicApplicationProtocol;
-import org.jquic.quic.streamapi.impl.EventRecord;
 import org.junit.jupiter.api.*;
 import org.mockito.MockedStatic;
 
-import java.lang.foreign.Arena;
-import java.lang.foreign.MemorySegment;
-import java.lang.foreign.ValueLayout;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.security.KeyPair;
@@ -249,7 +246,7 @@ class QuicConnectionCryptoIntegrationTest {
 
     public static List<ByteBuffer> getOutboundPackets(QuicConnection connection) {
         List<ByteBuffer> responses = new ArrayList<>();
-        for (EventRecord res = connection.pollOutbound(); res != null; res = connection.pollOutbound()) {
+        for (OutboundPacket res = connection.pollOutbound(); res != null; res = connection.pollOutbound()) {
             responses.add(res.data().buf().duplicate());
         }
         return responses;
