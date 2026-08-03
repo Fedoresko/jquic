@@ -72,6 +72,7 @@ public class QpackDecoder implements Decoder {
     private final DataOutputStream decoderOutputStream;
     private final Set<Long> activeStreams = new LinkedHashSet<>();
     private long maxPermittedCapacity;
+    private long lastSentInsertCount = 0;
     private Consumer<Long> unblockedStreamListener;
 
     public QpackDecoder() {
@@ -207,7 +208,8 @@ public class QpackDecoder implements Decoder {
                 int nameIndex = (int) decodePrefixInt(frame, b, LITERAL_POST_BASE_NAME_REF_PREFIX_BITS);
                 long absoluteIndex = base + nameIndex;
                 Header entry = dynamicTable.get(absoluteIndex);
-                if (entry == null) throw new IOException("Invalid dynamic table index: " + absoluteIndex);
+                if (entry == null)
+                    throw new IOException("Invalid dynamic table index: " + absoluteIndex);
                 String value = decodeString(frame);
                 headers.add(new Header(entry.name(), value));
             }
@@ -216,60 +218,38 @@ public class QpackDecoder implements Decoder {
         return headers;
     }
 
-    @Override
-    public void onEncoderData(ByteBuffer frame) {
-        long startInsertCount = dynamicTable.getInsertCount();
-        while (frame.hasRemaining()) {
-            int b = frame.get() & 0xFF;
-            try {
-                if ((b & ENCODER_INSERT_NAME_REF_PREFIX) != 0) {
-                    // Insert With Name Reference (Section 4.3.2)
-                    boolean isStatic = (b & ENCODER_INSERT_STATIC_BIT) != 0;
-                    int nameIndex = (int) decodePrefixInt(frame, b, ENCODER_INSERT_NAME_REF_PREFIX_BITS);
-                    String value = decodeString(frame);
-                    if (logger.isDebugEnabled()) {
-                        logger.debug("Decoder received Insert With Name Reference: static={}, index={}, value={}", isStatic, nameIndex, value);
-                    }
-                    insertWithNameReference(isStatic, nameIndex, value);
-                } else if ((b & ENCODER_INSERT_LITERAL_NAME_PREFIX) != 0) {
-                    // Insert With Literal Name (Section 4.3.3)
-                    String name = decodeString(frame, b, ENCODER_INSERT_LITERAL_NAME_PREFIX_BITS);
-                    String value = decodeString(frame);
-                    if (logger.isDebugEnabled()) {
-                        logger.debug("Decoder received Insert With Literal Name: name={}, value={}", name, value);
-                    }
-                    insertWithLiteralName(name, value);
-                } else if ((b & ENCODER_CAPACITY_PREFIX) == ENCODER_CAPACITY_PREFIX) {
-                    // Set Dynamic Table Capacity (Section 4.3.1)
-                    long capacity = decodePrefixInt(frame, b, ENCODER_CAPACITY_PREFIX_BITS);
-                    if (logger.isDebugEnabled()) {
-                        logger.debug("Decoder received Set Dynamic Table Capacity: capacity={}", capacity);
-                    }
-                    setDynamicTableCapacity(capacity);
-                } else if ((b & 0xE0) == ENCODER_DUPLICATE_PREFIX) {
-                    // Duplicate (Section 4.3.4)
-                    int index = (int) decodePrefixInt(frame, b, ENCODER_DUPLICATE_PREFIX_BITS);
-                    if (logger.isDebugEnabled()) {
-                        logger.debug("Decoder received Duplicate: index={}", index);
-                    }
-                    duplicate(index);
-                } else {
-                    throw new IOException("Unknown encoder instruction: " + Integer.toHexString(b));
-                }
-            } catch (Exception e) {
-                if (e instanceof RuntimeException) throw (RuntimeException) e;
-                throw new RuntimeException("Error decoding encoder instruction: b=" + Integer.toHexString(b), e);
-            }
+    private void addToDynamicTable(Header header) {
+        dynamicTable.add(header);
+
+        long currentInsertCount = dynamicTable.getInsertCount();
+        sendInsertCountIncrement(1);
+        if (unblockedStreamListener != null) {
+            unblockedStreamListener.accept(currentInsertCount);
         }
-        long increment = dynamicTable.getInsertCount() - startInsertCount;
-        if (increment > 0) {
-            if (logger.isDebugEnabled()) {
-                logger.debug("QPACK Decoder processed {} entries from encoder stream", increment);
+    }
+
+    @Override
+    public void onEncoderInstruction(QpackInstruction.EncoderInstruction instruction) {
+        if (logger.isDebugEnabled()) {
+            logger.debug("Decoder received encoder instruction: {}", instruction);
+        }
+        processEncoderInstruction(instruction);
+    }
+
+    private void processEncoderInstruction(QpackInstruction.EncoderInstruction instruction) {
+        try {
+            if (instruction instanceof QpackInstruction.EncoderInstruction.InsertWithNameRef i) {
+                insertWithNameReference(i.isStatic(), i.nameIndex(), i.value());
+            } else if (instruction instanceof QpackInstruction.EncoderInstruction.InsertWithLiteralName i) {
+                insertWithLiteralName(i.name(), i.value());
+            } else if (instruction instanceof QpackInstruction.EncoderInstruction.SetCapacity i) {
+                setDynamicTableCapacity(i.capacity());
+            } else if (instruction instanceof QpackInstruction.EncoderInstruction.Duplicate i) {
+                duplicate(i.index());
             }
-            sendInsertCountIncrement(increment);
-            if (unblockedStreamListener != null) {
-                unblockedStreamListener.accept(dynamicTable.getInsertCount());
-            }
+        } catch (Exception e) {
+            if (e instanceof RuntimeException) throw (RuntimeException) e;
+            throw new RuntimeException("Error processing encoder instruction: " + instruction, e);
         }
     }
 
@@ -356,13 +336,19 @@ public class QpackDecoder implements Decoder {
 
         int shift = 0;
         while (true) {
-            if (!buffer.hasRemaining()) throw new IOException("Unexpected end of buffer");
+            if (!buffer.hasRemaining()) {
+                logger.error("Unexpected end of buffer during varint decoding (pos={}, limit={})", buffer.position(), buffer.limit());
+                throw new IOException("Unexpected end of buffer");
+            }
             int b = buffer.get() & 0xFF;
             value += (long) (b & VARINT_7BIT_MASK) << shift;
             if ((b & VARINT_CONTINUATION_BIT) == 0) {
                 break;
             }
             shift += VARINT_SHIFT;
+            if (shift >= 64) {
+                throw new IOException("Varint too long");
+            }
         }
         return value;
     }
@@ -418,26 +404,17 @@ public class QpackDecoder implements Decoder {
             if (entry == null) throw new IOException("Invalid dynamic table index: " + absoluteIndex);
             name = entry.name();
         }
-        if (logger.isDebugEnabled()) {
-            logger.debug("Decoder inserting into dynamic table (name reference): {}={}", name, value);
-        }
-        dynamicTable.add(new Header(name, value));
+        addToDynamicTable(new Header(name, value));
     }
 
     private void insertWithLiteralName(String name, String value) {
-        if (logger.isDebugEnabled()) {
-            logger.debug("Decoder inserting into dynamic table (literal name): {}={}", name, value);
-        }
-        dynamicTable.add(new Header(name, value));
+        addToDynamicTable(new Header(name, value));
     }
 
     private void duplicate(int index) throws IOException {
         long absoluteIndex = dynamicTable.getInsertCount() - index - 1;
         Header entry = dynamicTable.get(absoluteIndex);
         if (entry == null) throw new IOException("Invalid dynamic table index: " + absoluteIndex);
-        if (logger.isDebugEnabled()) {
-            logger.debug("Decoder duplicating entry at relative index {} (absoluteIndex={}): {}={}", index, absoluteIndex, entry.name(), entry.value());
-        }
-        dynamicTable.add(entry);
+        addToDynamicTable(entry);
     }
 }

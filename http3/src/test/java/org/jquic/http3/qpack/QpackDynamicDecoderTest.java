@@ -15,6 +15,9 @@
  */
 package org.jquic.http3.qpack;
 
+import org.jquic.http3.Http3ClientStreamRole;
+import org.jquic.http3.Http3StreamContext;
+import org.jquic.http3.QpackStreamWrapper;
 import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -22,6 +25,22 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 public class QpackDynamicDecoderTest {
+
+    private void feedEncoderData(QpackDecoder decoder, byte[] data) throws IOException {
+        QpackStreamWrapper wrapper = new QpackStreamWrapper(new Http3StreamContext(Http3ClientStreamRole.QPACK_ENCODER) {
+            private boolean read = false;
+            @Override
+            public byte[] readAllBytes() {
+                if (read) return new byte[0];
+                read = true;
+                return data;
+            }
+        });
+        QpackInstruction instruction;
+        while ((instruction = wrapper.getNextInstruction()) != null) {
+            decoder.onEncoderInstruction((QpackInstruction.EncoderInstruction) instruction);
+        }
+    }
 
     @Test
     public void testDynamicTableInsertAndIndexed() throws Exception {
@@ -43,7 +62,9 @@ public class QpackDynamicDecoderTest {
         capacityData.put((byte) 0x3F);
         capacityData.put((byte) 0x61); // 31 + 97 = 128.
         capacityData.flip();
-        decoder.onEncoderData(capacityData);
+        byte[] capData = new byte[capacityData.remaining()];
+        capacityData.get(capData);
+        feedEncoderData(decoder, capData);
 
         // 1. Encoder instruction: Insert With Literal Name "custom-key", "custom-value"
         // 01nnnnnn -> prefix 6. No, it's 01Hnnnnn -> prefix 5. 
@@ -55,7 +76,9 @@ public class QpackDynamicDecoderTest {
         encoderData.put("custom-value".getBytes());
         encoderData.flip();
         
-        decoder.onEncoderData(encoderData);
+        byte[] encData = new byte[encoderData.remaining()];
+        encoderData.get(encData);
+        feedEncoderData(decoder, encData);
         
         // 2. Decode header block using the dynamic entry
         // RIC=1. Capacity is 128, so MaxEntries = 4, FullRange = 8.
@@ -88,7 +111,9 @@ public class QpackDynamicDecoderTest {
         capacityData.put((byte) 0x3F);
         capacityData.put((byte) 0x61); 
         capacityData.flip();
-        decoder.onEncoderData(capacityData);
+        byte[] capData2 = new byte[capacityData.remaining()];
+        capacityData.get(capData2);
+        feedEncoderData(decoder, capData2);
 
         // 1. Insert ":method", "PUT" (Static name reference index 17 - :method)
         // 1Tnnnnnn -> T=1, index 17 -> 1101 0001 = 0xD1
@@ -98,7 +123,9 @@ public class QpackDynamicDecoderTest {
         encoderData.put("PUT".getBytes());
         encoderData.flip();
         
-        decoder.onEncoderData(encoderData);
+        byte[] encData2 = new byte[encoderData.remaining()];
+        encoderData.get(encData2);
+        feedEncoderData(decoder, encData2);
         
         // 2. Decode header block
         // RIC=1, Base=1. Capacity 128 -> MaxEntries 4 -> EncodedRIC = 2.
@@ -130,7 +157,9 @@ public class QpackDynamicDecoderTest {
         capacityData.put((byte) 0x3F);
         capacityData.put((byte) 0x61); 
         capacityData.flip();
-        decoder.onEncoderData(capacityData);
+        byte[] capData3 = new byte[capacityData.remaining()];
+        capacityData.get(capData3);
+        feedEncoderData(decoder, capData3);
 
         // 1. Insert "k1", "v1"
         ByteBuffer encoderData = ByteBuffer.allocate(100);
@@ -139,7 +168,9 @@ public class QpackDynamicDecoderTest {
         encoderData.put((byte) 0x02);
         encoderData.put("v1".getBytes());
         encoderData.flip();
-        decoder.onEncoderData(encoderData);
+        byte[] encData3 = new byte[encoderData.remaining()];
+        encoderData.get(encData3);
+        feedEncoderData(decoder, encData3);
         
         // 2. Header Block with Base=0 (RIC=1, Sign=1 (-), Delta=0 -> Base = 1 - 0 - 1 = 0)
         // Capacity 128 -> MaxEntries 4 -> EncodedRIC = 2.
@@ -184,7 +215,9 @@ public class QpackDynamicDecoderTest {
         encoderData.put("v2".getBytes());
         encoderData.flip();
         
-        decoder.onEncoderData(encoderData);
+        byte[] encData4 = new byte[encoderData.remaining()];
+        encoderData.get(encData4);
+        feedEncoderData(decoder, encData4);
         
         // Try to access absolute index 0 (k1) - should fail
         // Capacity 40 -> MaxEntries 1 -> FullRange 2.

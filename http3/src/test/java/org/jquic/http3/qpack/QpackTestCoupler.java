@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 package org.jquic.http3.qpack;
-
+import org.jquic.http3.Http3ClientStreamRole;
+import org.jquic.http3.Http3StreamContext;
+import org.jquic.http3.QpackStreamWrapper;
 import org.jspecify.annotations.NonNull;
 
 import java.io.ByteArrayOutputStream;
@@ -43,8 +45,48 @@ public class QpackTestCoupler {
     }
 
     public void bind(Encoder encoder, Decoder decoder) {
-        encoderToDecoder.setConsumer(decoder::onEncoderData);
-        decoderToEncoder.setConsumer(encoder::onDecoderData);
+        encoderToDecoder.setConsumer(data -> {
+            QpackStreamWrapper wrapper = new QpackStreamWrapper(new Http3StreamContext(Http3ClientStreamRole.QPACK_ENCODER) {
+                private boolean read = false;
+                @Override
+                public byte[] readAllBytes() {
+                    if (read) return new byte[0];
+                    read = true;
+                    byte[] bytes = new byte[data.remaining()];
+                    data.get(bytes);
+                    return bytes;
+                }
+            });
+            try {
+                QpackInstruction instruction;
+                while ((instruction = wrapper.getNextInstruction()) != null) {
+                    decoder.onEncoderInstruction((QpackInstruction.EncoderInstruction) instruction);
+                }
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        });
+        decoderToEncoder.setConsumer(data -> {
+            QpackStreamWrapper wrapper = new QpackStreamWrapper(new Http3StreamContext(Http3ClientStreamRole.QPACK_DECODER) {
+                private boolean read = false;
+                @Override
+                public byte[] readAllBytes() {
+                    if (read) return new byte[0];
+                    read = true;
+                    byte[] bytes = new byte[data.remaining()];
+                    data.get(bytes);
+                    return bytes;
+                }
+            });
+            try {
+                QpackInstruction instruction;
+                while ((instruction = wrapper.getNextInstruction()) != null) {
+                    encoder.onDecoderInstruction((QpackInstruction.DecoderInstruction) instruction);
+                }
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        });
     }
 
     public List<byte[]> getCapturedEncoderData() {

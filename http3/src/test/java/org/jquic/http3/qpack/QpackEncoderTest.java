@@ -15,8 +15,12 @@
  */
 package org.jquic.http3.qpack;
 
+import org.jquic.http3.Http3ClientStreamRole;
+import org.jquic.http3.Http3StreamContext;
+import org.jquic.http3.QpackStreamWrapper;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.List;
 
@@ -24,6 +28,22 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class QpackEncoderTest {
+
+    private void feedEncoderData(QpackDecoder decoder, byte[] data) throws IOException {
+        QpackStreamWrapper wrapper = new QpackStreamWrapper(new Http3StreamContext(Http3ClientStreamRole.QPACK_ENCODER) {
+            private boolean read = false;
+            @Override
+            public byte[] readAllBytes() {
+                if (read) return new byte[0];
+                read = true;
+                return data;
+            }
+        });
+        QpackInstruction instruction;
+        while ((instruction = wrapper.getNextInstruction()) != null) {
+            decoder.onEncoderInstruction((QpackInstruction.EncoderInstruction) instruction);
+        }
+    }
 
     @Test
     public void testEncodeStaticIndexed() throws Exception {
@@ -167,7 +187,7 @@ public class QpackEncoderTest {
         coupler.bind(encoder, decoder);
 
         // Set capacity! 1000 = 0x3E8. (0x3F, 0xC9, 0x07)
-        decoder.onEncoderData(ByteBuffer.wrap(new byte[]{0x3F, (byte)0xC9, 0x07}));
+        feedEncoderData(decoder, new byte[]{0x3F, (byte)0xC9, 0x07});
 
         // 1. First encode: should insert into dynamic table
         List<Header> headers1 = List.of(new Header("custom-name", "custom-value"));
@@ -234,7 +254,7 @@ public class QpackEncoderTest {
         encoder.setDynamicTableCapacity(100);
 
         // Set capacity! 100 = 0x20 | 31 (0x3F) + (100 - 31 = 69 = 0x45)
-        decoder.onEncoderData(ByteBuffer.wrap(new byte[]{0x3F, 0x45}));
+        feedEncoderData(decoder, new byte[]{0x3F, 0x45});
 
         // 1. Add first header
         List<Header> headers1 = List.of(new Header("a", "1"));
@@ -276,7 +296,7 @@ public class QpackEncoderTest {
         coupler.bind(encoder, decoder);
 
         // Set capacity!
-        decoder.onEncoderData(ByteBuffer.wrap(new byte[]{0x3F, (byte)0xC9, 0x07}));
+        feedEncoderData(decoder, new byte[]{0x3F, (byte)0xC9, 0x07});
 
         List<Header> headers = List.of(new Header("custom", "value"));
         ByteBuffer encoded = encoder.encodeHeaders(0, headers);
@@ -295,13 +315,11 @@ public class QpackEncoderTest {
         // Let's use 1000. 1000 = 0x3E8.
         // 001xxxxx -> 0x20 | 31 = 0x3F. Remaining 1000 - 31 = 969.
         // 969 = 0x3C9. 0xC9 (1001001), 0x07.
-        ByteBuffer capBuffer = ByteBuffer.wrap(new byte[]{0x3F, (byte)0xC9, 0x07});
-        decoder.onEncoderData(capBuffer);
+        feedEncoderData(decoder, new byte[]{0x3F, (byte)0xC9, 0x07});
 
         // 2. Insert With Literal Name: 01xxxxxx, Huffman=0, name="a", Huffman=0, value="1"
         // 0x41, 0x61, 0x01, 0x31.
-        ByteBuffer buffer = ByteBuffer.wrap(new byte[]{0x41, 0x61, 0x01, 0x31});
-        decoder.onEncoderData(buffer);
+        feedEncoderData(decoder, new byte[]{0x41, 0x61, 0x01, 0x31});
         
         // RIC=1, Base=1, Indexed Dynamic 0
         // RIC=1 encodes to (1 % (2*MaxEntries)) + 1 = 2.

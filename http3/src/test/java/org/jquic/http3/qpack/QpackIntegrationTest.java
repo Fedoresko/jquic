@@ -15,6 +15,9 @@
  */
 package org.jquic.http3.qpack;
 
+import org.jquic.http3.Http3ClientStreamRole;
+import org.jquic.http3.Http3StreamContext;
+import org.jquic.http3.QpackStreamWrapper;
 import org.junit.jupiter.api.Test;
 import java.nio.ByteBuffer;
 import java.util.List;
@@ -129,7 +132,19 @@ public class QpackIntegrationTest {
         }
         
         // Now provide the instructions
-        realDecoder.onEncoderData(ByteBuffer.wrap(instructions));
+        QpackStreamWrapper wrapper = new QpackStreamWrapper(new Http3StreamContext(Http3ClientStreamRole.QPACK_ENCODER) {
+            private boolean read = false;
+            @Override
+            public byte[] readAllBytes() {
+                if (read) return new byte[0];
+                read = true;
+                return instructions;
+            }
+        });
+        QpackInstruction instruction;
+        while ((instruction = wrapper.getNextInstruction()) != null) {
+            realDecoder.onEncoderInstruction((QpackInstruction.EncoderInstruction) instruction);
+        }
         
         // Unblock - actually it's now done automatically via onEncoderData -> listener
         // but since we are simulating it, we can still call tryUnblockStreams if we want, 

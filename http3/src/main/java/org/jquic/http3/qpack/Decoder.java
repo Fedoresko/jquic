@@ -53,9 +53,9 @@ public interface Decoder extends Closeable{
     void setUnblockedStreamListener(java.util.function.Consumer<Long> listener);
 
     /**
-     *  Receive encoder data frame from peer.
+     *  Receive encoder instruction from peer.
      */
-    void onEncoderData(ByteBuffer frame);
+    void onEncoderInstruction(QpackInstruction.EncoderInstruction instruction);
 
     /**
      * Cancel a stream.

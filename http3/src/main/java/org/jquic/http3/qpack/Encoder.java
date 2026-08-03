@@ -36,9 +36,9 @@ public interface Encoder extends Closeable {
     ByteBuffer encodeHeaders(long streamId, List<Header> headers) throws IOException;
 
     /**
-     *  Receive decoder data frame from peer.
+     *  Receive decoder instruction from peer.
      */
-    void onDecoderData(ByteBuffer frame);
+    void onDecoderInstruction(QpackInstruction.DecoderInstruction instruction);
 
     void setDynamicTableCapacity(long peerQpackMaxTableCapacity);
 

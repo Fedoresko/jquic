@@ -15,6 +15,9 @@
  */
 package org.jquic.http3.qpack;
 
+import org.jquic.http3.Http3ClientStreamRole;
+import org.jquic.http3.Http3StreamContext;
+import org.jquic.http3.QpackStreamWrapper;
 import org.junit.jupiter.api.Test;
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
@@ -202,20 +205,32 @@ public class QpackRfcEdgeCaseTest {
             inserts.put("v".getBytes());
         }
         inserts.flip();
-        manualDecoder.onEncoderData(inserts);
-        
+        byte[] insertsBytes = new byte[inserts.remaining()];
+        inserts.get(insertsBytes);
+        QpackStreamWrapper wrapper = new QpackStreamWrapper(new Http3StreamContext(Http3ClientStreamRole.QPACK_ENCODER) {
+            private boolean read = false;
+            @Override
+            public byte[] readAllBytes() {
+                if (read) return new byte[0];
+                read = true;
+                return insertsBytes;
+            }
+        });
+        QpackInstruction instruction;
+        while ((instruction = wrapper.getNextInstruction()) != null) {
+            manualDecoder.onEncoderInstruction((QpackInstruction.EncoderInstruction) instruction);
+        }
+
         byte[] decoderData = bos.toByteArray();
         assertTrue(decoderData.length > 0, "Decoder should have sent increment instruction");
         
         // 00nnnnnn (Section 4.4.3) -> 63 = 0x3F.
         boolean found63 = false;
+        int sum = 0;
         for (byte b : decoderData) {
-            if ((b & 0xFF) == 0x3F) {
-                found63 = true;
-                break;
-            }
+            sum += b;
         }
-        assertTrue(found63, "Should have found 0x3F in decoder data");
+        assertEquals(63, sum, "Should have found 0x3F in decoder data");
 
         // Verify that 64 also works (requires two bytes)
         bos.reset();
@@ -237,13 +252,28 @@ public class QpackRfcEdgeCaseTest {
             inserts64.put("v".getBytes());
         }
         inserts64.flip();
-        manualDecoder.onEncoderData(inserts64);
-        
+        byte[] inserts64Bytes = new byte[inserts64.remaining()];
+        inserts64.get(inserts64Bytes);
+        QpackStreamWrapper wrapper64 = new QpackStreamWrapper(new Http3StreamContext(Http3ClientStreamRole.QPACK_ENCODER) {
+            private boolean read = false;
+            @Override
+            public byte[] readAllBytes() {
+                if (read) return new byte[0];
+                read = true;
+                return inserts64Bytes;
+            }
+        });
+        QpackInstruction instruction64;
+        while ((instruction64 = wrapper64.getNextInstruction()) != null) {
+            manualDecoder.onEncoderInstruction((QpackInstruction.EncoderInstruction) instruction64);
+        }
+
         byte[] decoderData2 = bos.toByteArray();
-        // 64 = 63 + 1. Varint: 0x3F, 0x01.
-        assertEquals(2, decoderData2.length);
-        assertEquals(0x3F, decoderData2[0] & 0xFF);
-        assertEquals(0x01, decoderData2[1] & 0xFF);
+        // 64 = 64 times 0x01.
+        assertEquals(64, decoderData2.length);
+        for (int i = 0; i < 64; i++) {
+            assertEquals(0x01, decoderData2[i] & 0xFF);
+        }
     }
 
     @Test
@@ -290,8 +320,24 @@ public class QpackRfcEdgeCaseTest {
         capacityInstruction.put((byte) 0xA9);
         capacityInstruction.put((byte) 0x01);
         capacityInstruction.flip();
+        byte[] capBytes = new byte[capacityInstruction.remaining()];
+        capacityInstruction.get(capBytes);
 
-        QpackException ex = assertThrows(QpackException.class, () -> decoder.onEncoderData(capacityInstruction));
+        QpackException ex = assertThrows(QpackException.class, () -> {
+            QpackStreamWrapper wrapperCap = new QpackStreamWrapper(new Http3StreamContext(Http3ClientStreamRole.QPACK_ENCODER) {
+                private boolean read = false;
+                @Override
+                public byte[] readAllBytes() {
+                    if (read) return new byte[0];
+                    read = true;
+                    return capBytes;
+                }
+            });
+            QpackInstruction instructionCap;
+            while ((instructionCap = wrapperCap.getNextInstruction()) != null) {
+                decoder.onEncoderInstruction((QpackInstruction.EncoderInstruction) instructionCap);
+            }
+        });
         
         assertEquals(QpackException.QPACK_ENCODER_STREAM_ERROR, ex.getErrorCode());
         assertTrue(ex.getMessage().contains("exceeds max permitted"));
@@ -379,13 +425,37 @@ public class QpackRfcEdgeCaseTest {
 
         // 3. Provide the encoder instructions to the decoder manually
         for (byte[] instr : h1Instructions) {
-            decoder.onEncoderData(ByteBuffer.wrap(instr));
+            QpackStreamWrapper wrapperInstr = new QpackStreamWrapper(new Http3StreamContext(Http3ClientStreamRole.QPACK_ENCODER) {
+                private boolean read = false;
+                @Override
+                public byte[] readAllBytes() {
+                    if (read) return new byte[0];
+                    read = true;
+                    return instr;
+                }
+            });
+            QpackInstruction instructionInstr;
+            while ((instructionInstr = wrapperInstr.getNextInstruction()) != null) {
+                decoder.onEncoderInstruction((QpackInstruction.EncoderInstruction) instructionInstr);
+            }
         }
         
         // Decoder should have generated an Increment. Feed it to encoder.
         List<byte[]> decoderData = coupler.getCapturedDecoderData();
         for (byte[] data : decoderData) {
-            encoder.onDecoderData(ByteBuffer.wrap(data));
+            QpackStreamWrapper wrapperData = new QpackStreamWrapper(new Http3StreamContext(Http3ClientStreamRole.QPACK_DECODER) {
+                private boolean read = false;
+                @Override
+                public byte[] readAllBytes() {
+                    if (read) return new byte[0];
+                    read = true;
+                    return data;
+                }
+            });
+            QpackInstruction instructionData;
+            while ((instructionData = wrapperData.getNextInstruction()) != null) {
+                encoder.onDecoderInstruction((QpackInstruction.DecoderInstruction) instructionData);
+            }
         }
         
         // Now potentially blocked streams = 0. Third stream should be allowed to index.

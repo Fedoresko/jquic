@@ -15,6 +15,7 @@
  */
 package org.jquic.http3;
 
+import org.jquic.http3.qpack.QpackInstruction;
 import org.jquic.quic.QuicVarint;
 import org.jquic.quic.streamapi.QuicApplicationProtocolConnectionHandler;
 import org.jquic.quic.streamapi.QuicConnectionControl;
@@ -273,41 +274,94 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
         context.appendData(data);
 
         // Unidirectional stream type identification (RFC 9114 §6.2)
-        if (context.getRole() == null) {
-            Http3ClientStreamRole role = getHttp3ClientStreamRole(streamId, response, context.tryReadStreamType());
-            if (role == null) {
-                logger.error("Failed to parse stream role for stream {} on connection {}", streamId, connectionId);
-                return;
+        Http3ClientStreamRole role = context.getRole();
+        if (role != null && validateClientStreamRole(streamId, response, role)) {
+           switch (role) {
+                case Http3ClientStreamRole.REQUEST -> handleRequestStream(streamId, response, isLastData, context);
+                case Http3ClientStreamRole.CONTROL ->
+                        handleControlStream(streamId, response, data, isLastData, context);
+                case Http3ClientStreamRole.QPACK_ENCODER ->
+                        handleEncoderStream(streamId, response, data, isLastData, context);
+                case Http3ClientStreamRole.QPACK_DECODER ->
+                        handleDecoderStream(streamId, response, data, isLastData, context);
+                case Http3ClientStreamRole.GREASE -> {
+                    logger.debug("Grease stream {} data received ({} bytes) - discarding", streamId, data.length);
+                    handleEnding(streamId, data, isLastData, context);
+                }
+                case Http3ClientStreamRole.UNKNOWN -> handleEnding(streamId, data, isLastData, context);
+                default -> throw new IllegalStateException("Unexpected value: " + role);
             }
-            context.setRole(role);
         }
+    }
 
-        switch (context.getRole()) {
-            case Http3ClientStreamRole.REQUEST -> handleRequestStream(streamId, response, isLastData, context);
-            case Http3ClientStreamRole.CONTROL -> handleControlStream(streamId, response, data, isLastData, context);
-            case Http3ClientStreamRole.QPACK_ENCODER ->
-                    handleEncoderStream(streamId, response, data, isLastData, context);
-            case Http3ClientStreamRole.QPACK_DECODER ->
-                    handleDecoderStream(streamId, response, data, isLastData, context);
-            case Http3ClientStreamRole.GREASE -> {
-                logger.debug("Grease stream {} data received ({} bytes) - discarding", streamId, data.length);
-                handleEnding(streamId, data, isLastData, context);
+    private boolean validateClientStreamRole(long streamId, @NonNull QuicConnectionControl response, Http3ClientStreamRole role) {
+        // RFC 9114 §6.2: Each endpoint MUST open at least one control stream.
+        // Receipt of a second control stream MUST be treated as H3_STREAM_CREATION_ERROR.
+        // RFC 9204 §4.2: Multiple QPACK encoder/decoder streams MUST be treated as H3_STREAM_CREATION_ERROR.
+        if (role == Http3ClientStreamRole.CONTROL) {
+            if (clientControlStreamId != null && clientControlStreamId != streamId) {
+                try {
+                    response.closeConnection(Http3Server.H3_STREAM_CREATION_ERROR, "Multiple control streams received");
+                } catch (Exception e) {
+                    logger.error("Failed to close connection after receiving multiple control streams", e);
+                }
+                return false;
             }
-            case Http3ClientStreamRole.UNKNOWN -> handleEnding(streamId, data, isLastData, context);
-            default -> throw new IllegalStateException("Unexpected value: " + context.getRole());
+            clientControlStreamId = streamId;
+        } else if (role == Http3ClientStreamRole.QPACK_ENCODER) {
+            if (clientQpackEncoderStreamId != null && clientQpackEncoderStreamId != streamId) {
+                try {
+                    response.closeConnection(Http3Server.H3_STREAM_CREATION_ERROR, "Multiple QPACK encoder streams received");
+                } catch (Exception e) {
+                    logger.error("Failed to close connection after receiving multiple QPACK encoder streams", e);
+                }
+                return false;
+            }
+            clientQpackEncoderStreamId = streamId;
+        } else if (role == Http3ClientStreamRole.QPACK_DECODER) {
+            if (clientQpackDecoderStreamId != null && clientQpackDecoderStreamId != streamId) {
+                try {
+                    response.closeConnection(Http3Server.H3_STREAM_CREATION_ERROR, "Multiple QPACK decoder streams received");
+                } catch (Exception e) {
+                    logger.error("Failed to close connection after receiving multiple QPACK decoder streams", e);
+                }
+                return false;
+            }
+            clientQpackDecoderStreamId = streamId;
+        } else if (role == Http3ClientStreamRole.UNKNOWN) {
+            logger.debug("Unknown unidirectional stream type on stream {} (connection {}) - ignoring",
+                    streamId, connectionId);
         }
+        return true;
     }
 
     private void handleEnding(long streamId, byte[] data, boolean isLastData, Http3StreamContext context) {
         if (isLastData) finishStream(streamId);
-        context.consume(data.length);
+        try {
+            context.readAllBytes();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     private void handleDecoderStream(long streamId, @NonNull QuicConnectionControl response, byte[] data, boolean isLastData, Http3StreamContext context) {
         // QPACK decoder stream - buffer acknowledgements; processing not yet implemented.
         logger.debug("QPACK decoder stream {} data received ({} bytes) - processing",
                 streamId, data.length);
-        qpackEncoder.onDecoderData(ByteBuffer.wrap(data));
+        try {
+            QpackStreamWrapper streamWrapper = (QpackStreamWrapper) context.getStreamWrapper();
+            QpackInstruction instruction;
+            while ((instruction = streamWrapper.getNextInstruction()) != null) {
+                qpackEncoder.onDecoderInstruction((QpackInstruction.DecoderInstruction) instruction);
+            }
+        } catch (Exception e) {
+            logger.error("Failed to process QPACK decoder stream data", e);
+            try {
+                response.closeConnection(Http3Server.H3_CLOSED_CRITICAL_STREAM, "QPACK decoder stream error");
+            } catch (Exception closeEx) {
+                logger.error("Failed to close connection after QPACK decoder error", closeEx);
+            }
+        }
         if (isLastData) {
             try {
                 response.closeConnection(Http3Server.H3_CLOSED_CRITICAL_STREAM, "QPACK decoder stream closed by peer");
@@ -323,7 +377,21 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
         // QPACK encoder stream - buffer instructions; processing not yet implemented.
         logger.debug("QPACK encoder stream {} data received ({} bytes) - processing",
                 streamId, data.length);
-        qpackDecoder.onEncoderData(ByteBuffer.wrap(data));
+        try {
+            QpackStreamWrapper streamWrapper = (QpackStreamWrapper) context.getStreamWrapper();
+            QpackInstruction instruction;
+            while ((instruction = streamWrapper.getNextInstruction()) != null) {
+                qpackDecoder.onEncoderInstruction((QpackInstruction.EncoderInstruction) instruction);
+            }
+        } catch (Exception e) {
+            logger.error("Failed to process QPACK encoder stream data", e);
+            try {
+                response.closeConnection(Http3Server.H3_CLOSED_CRITICAL_STREAM, "QPACK encoder stream error");
+            } catch (Exception closeEx) {
+                logger.error("Failed to close connection after QPACK encoder error", closeEx);
+            }
+        }
+
         if (isLastData) {
             try {
                 response.closeConnection(Http3Server.H3_CLOSED_CRITICAL_STREAM, "QPACK encoder stream closed by peer");
@@ -357,9 +425,10 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
         // Consume frames to avoid H3_FRAME_ERROR on cleanup
         try {
             Http3StreamContext.ParsedFrame frame;
-            while ((frame = context.pollFrame()) != null) {
-                if (!context.firstFrameReceived) {
-                    context.firstFrameReceived = true;
+            FramedStreamWrapper streamWrapper = (FramedStreamWrapper) context.getStreamWrapper();
+            boolean firstFrames = (streamWrapper.framesReturned() == 0);
+            while ((frame = streamWrapper.getNextFrame()) != null) {
+                if (firstFrames) {
                     if (frame.type() != 0x04 /* SETTINGS */) {
                         logger.warn("First frame on control stream {} is not SETTINGS (type 0x{}) - H3_MISSING_SETTINGS",
                                 streamId, Long.toHexString(frame.type()));
@@ -452,7 +521,9 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
         // then feed body DATA frames incrementally, without waiting for stream FIN.
         try {
             Http3StreamContext.ParsedFrame frame;
-            while ((frame = context.pollFrame()) != null) {
+            FramedStreamWrapper streamWrapper = (FramedStreamWrapper) context.getStreamWrapper();
+            while (true) {
+                if ((frame = streamWrapper.getNextFrame()) == null) break;
                 if (frame.type() == 0x01 /* HEADERS */ &&
                         context.getRequestState() == Http3StreamContext.RequestProcessingState.INITIAL) {
                     // Parse and dispatch the request immediately on first HEADERS frame.
@@ -595,56 +666,6 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
         streams.remove(streamId);
     }
 
-    private @Nullable Http3ClientStreamRole getHttp3ClientStreamRole(long streamId, @NonNull QuicConnectionControl response, Long type) {
-        if  (type == null) return null;
-
-        // Since this is a server-side handler, we only expect client-initiated unidirectional streams.
-        // In HTTP/3, servers never receive data on server-initiated streams.
-        Http3ClientStreamRole role = Http3ClientStreamRole.fromStreamType(type);
-
-        // RFC 9114 §6.2: Each endpoint MUST open at least one control stream.
-        // Receipt of a second control stream MUST be treated as H3_STREAM_CREATION_ERROR.
-        // RFC 9204 §4.2: Multiple QPACK encoder/decoder streams MUST be treated as H3_STREAM_CREATION_ERROR.
-        if (role == Http3ClientStreamRole.CONTROL) {
-            if (clientControlStreamId != null) {
-                try {
-                    response.closeConnection(Http3Server.H3_STREAM_CREATION_ERROR, "Multiple control streams received");
-                } catch (Exception e) {
-                    logger.error("Failed to close connection after receiving multiple control streams", e);
-                }
-                return null;
-            }
-            clientControlStreamId = streamId;
-        } else if (role == Http3ClientStreamRole.QPACK_ENCODER) {
-            if (clientQpackEncoderStreamId != null) {
-                try {
-                    response.closeConnection(Http3Server.H3_STREAM_CREATION_ERROR, "Multiple QPACK encoder streams received");
-                } catch (Exception e) {
-                    logger.error("Failed to close connection after receiving multiple QPACK encoder streams", e);
-                }
-                return null;
-            }
-            clientQpackEncoderStreamId = streamId;
-        } else if (role == Http3ClientStreamRole.QPACK_DECODER) {
-            if (clientQpackDecoderStreamId != null) {
-                try {
-                    response.closeConnection(Http3Server.H3_STREAM_CREATION_ERROR, "Multiple QPACK decoder streams received");
-                } catch (Exception e) {
-                    logger.error("Failed to close connection after receiving multiple QPACK decoder streams", e);
-                }
-                return null;
-            }
-            clientQpackDecoderStreamId = streamId;
-        } else if (role == Http3ClientStreamRole.UNKNOWN) {
-            logger.debug("Unknown unidirectional stream type {} on stream {} (connection {}) - ignoring",
-                    type, streamId, connectionId);
-        }
-
-        logger.debug("Unidirectional stream {} on connection {} identified as {}",
-                streamId, connectionId, role);
-        return role;
-    }
-
     @Override
     public void onDatagramReceived(byte[] data, @NonNull QuicConnectionControl control) {
         //No datagrams in Http3;
@@ -725,157 +746,5 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
         outputStream.write(payload.array(), payload.position(), payload.remaining());
     }
 
-    /**
-     * Context for a single HTTP/3 stream.
-     */
-    private static class Http3StreamContext {
-
-        enum RequestProcessingState {
-            INITIAL,
-            WAITING_FOR_BODY,
-            WAITING_FOR_FIN,
-            RESPONSE_SENDING,
-            FINISHED,
-        }
-
-        record ParsedFrame(long type, byte[] payload) {
-            ByteBuffer payloadAsBuffer() {
-                return ByteBuffer.wrap(payload);
-            }
-        }
-
-        private final Deque<ByteBuffer> chunks = new LinkedList<>();
-        private int bufferedBytes = 0;
-
-        /** HTTP/3-level role of this stream. */
-        private @Nullable Object role;
-
-        // ---- request state machine ----
-        private RequestProcessingState requestState = RequestProcessingState.INITIAL;
-        private Http3Request request;
-        private boolean firstFrameReceived = false;
-
-        public int readBodyBytes = 0;
-
-        Http3StreamContext(@Nullable Object role) {
-            this.role = role;
-        }
-
-        @Nullable Object getRole() {
-            return role;
-        }
-
-        void setRole(@NonNull Object role) {
-            this.role = role;
-        }
-
-        RequestProcessingState getRequestState() {
-            return requestState;
-        }
-
-        void setRequestState(RequestProcessingState state) {
-            this.requestState = state;
-        }
-
-        Http3Request getRequest() {
-            return request;
-        }
-
-        void setRequest(Http3Request request) {
-            this.request = request;
-        }
-
-        boolean hasUnconsumedData() {
-            return bufferedBytes > 0;
-        }
-
-        void appendData(byte[] data) {
-            chunks.add(ByteBuffer.wrap(data));
-            bufferedBytes += data.length;
-        }
-
-        private void consume(int n) {
-            bufferedBytes -= n;
-            while (n > 0 && !chunks.isEmpty()) {
-                ByteBuffer chunk = chunks.peek();
-                int toConsume = Math.min(n, chunk.remaining());
-                chunk.position(chunk.position() + toConsume);
-                n -= toConsume;
-                if (chunk.remaining() == 0) chunks.poll();
-            }
-        }
-
-        /**
-         * Peeks a varint from the buffered chunks at the specified offset from the current read position.
-         * Returns null if not enough data is available.
-         */
-        private @Nullable Long peekVarint(int skipBytes) {
-            byte[] peekBuf = new byte[8];
-            int available = 0;
-            int skipped = 0;
-            for (ByteBuffer chunk : chunks) {
-                ByteBuffer dupe = chunk.duplicate();
-                if (skipped < skipBytes) {
-                    int toSkip = Math.min(dupe.remaining(), skipBytes - skipped);
-                    dupe.position(dupe.position() + toSkip);
-                    skipped += toSkip;
-                }
-                if (skipped == skipBytes) {
-                    int toCopy = Math.min(dupe.remaining(), 8 - available);
-                    dupe.get(peekBuf, available, toCopy);
-                    available += toCopy;
-                    if (available == 8) break;
-                }
-            }
-            if (available == 0) return null;
-            int firstByte = peekBuf[0] & 0xFF;
-            int len = 1 << (firstByte >> 6);
-            if (available < len) return null;
-            return QuicVarint.read(ByteBuffer.wrap(peekBuf));
-        }
-
-        /**
-         * Attempts to read the leading stream-type varint for a unidirectional stream.
-         */
-        @Nullable Long tryReadStreamType() {
-            Long type = peekVarint(0);
-            if (type != null) {
-                consume(QuicVarint.sizeOf(type));
-                return type;
-            }
-            return null;
-        }
-
-        /**
-         * Tries to parse the next complete HTTP/3 frame from the buffer.
-         */
-        @Nullable ParsedFrame pollFrame() {
-            Long type = peekVarint(0);
-            if (type == null) return null;
-            int typeLen = QuicVarint.sizeOf(type);
-            Long length = peekVarint(typeLen);
-            if (length == null) return null;
-            int lengthLen = QuicVarint.sizeOf(length);
-
-            if (bufferedBytes < typeLen + lengthLen + length) return null;
-
-            // RFC 9114 §7.2.4: SETTINGS MUST be the first frame.
-            // We check this here to easily detect it before consuming.
-            // But role-specific validation is better done in onStreamDataReceived.
-
-            consume(typeLen + lengthLen);
-            byte[] payload = new byte[length.intValue()];
-            int pos = 0;
-            while (pos < payload.length && !chunks.isEmpty()) {
-                ByteBuffer chunk = chunks.peek();
-                int toCopy = Math.min(chunk.remaining(), payload.length - pos);
-                chunk.get(payload, pos, toCopy);
-                pos += toCopy;
-                bufferedBytes -= toCopy;
-                if (chunk.remaining() == 0) chunks.poll();
-            }
-            return new ParsedFrame(type, payload);
-        }
-    }
 }
 

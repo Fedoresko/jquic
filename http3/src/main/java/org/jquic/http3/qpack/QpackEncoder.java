@@ -343,63 +343,23 @@ public class QpackEncoder implements Encoder {
     }
 
     @Override
-    public void onDecoderData(ByteBuffer frame) {
-        while (frame.hasRemaining()) {
-            int firstByte = frame.get() & 0xFF;
-            try {
-                if ((firstByte & 0x80) != 0) {
-                    // Section Acknowledgment (Section 4.4.2)
-                    // 1xxxxxxx
-                    long streamId = decodePrefixInt(frame, firstByte, 7);
-                    if (logger.isDebugEnabled()) {
-                        logger.debug("Encoder received Section Acknowledgment: streamId={}", streamId);
-                    }
-                    sectionAcknowledgment(streamId);
-                } else if ((firstByte & 0x40) != 0) {
-                    // Stream Cancellation (Section 4.4.1)
-                    // 01xxxxxx
-                    long streamId = decodePrefixInt(frame, firstByte, 6);
-                    if (logger.isDebugEnabled()) {
-                        logger.debug("Encoder received Stream Cancellation: streamId={}", streamId);
-                    }
-                    streamCancelled(streamId);
-                } else {
-                    // Insert Count Increment (Section 4.4.3)
-                    // 00xxxxxx
-                    long increment = decodePrefixInt(frame, firstByte, 6);
-                    if (logger.isDebugEnabled()) {
-                        logger.debug("Encoder received Insert Count Increment: increment={}", increment);
-                    }
-                    insertCountIncrement(increment);
-                }
-            } catch (QpackException e) {
-                // Should we stop processing or just throw? 
-                // The interface doesn't allow throwing checked exceptions from onDecoderData.
-                // QpackException is a RuntimeException though.
-                throw e;
-            } catch (Exception e) {
-                throw new QpackException(QpackException.QPACK_DECODER_STREAM_ERROR, "Failed to decode decoder instruction: " + e.getMessage());
+    public void onDecoderInstruction(QpackInstruction.DecoderInstruction instruction) {
+        if (logger.isDebugEnabled()) {
+            logger.debug("Encoder received decoder instruction: {}", instruction);
+        }
+        try {
+            if (instruction instanceof QpackInstruction.DecoderInstruction.SectionAck i) {
+                sectionAcknowledgment(i.streamId());
+            } else if (instruction instanceof QpackInstruction.DecoderInstruction.StreamCancel i) {
+                streamCancelled(i.streamId());
+            } else if (instruction instanceof QpackInstruction.DecoderInstruction.InsertCountIncrement i) {
+                insertCountIncrement(i.increment());
             }
+        } catch (QpackException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new QpackException(QpackException.QPACK_DECODER_STREAM_ERROR, "Failed to process decoder instruction: " + e.getMessage());
         }
-    }
-
-    private long decodePrefixInt(ByteBuffer buffer, int firstByte, int prefixBits) {
-        int mask = (1 << prefixBits) - 1;
-        long value = firstByte & mask;
-        if (value < mask) {
-            return value;
-        }
-
-        int shift = 0;
-        while (true) {
-            int b = buffer.get() & 0xFF;
-            value += (long) (b & VARINT_7BIT_MASK) << shift;
-            if ((b & VARINT_CONTINUATION_BIT) == 0) {
-                break;
-            }
-            shift += VARINT_SHIFT;
-        }
-        return value;
     }
 
     protected void sectionAcknowledgment(long streamId) throws QpackException {
