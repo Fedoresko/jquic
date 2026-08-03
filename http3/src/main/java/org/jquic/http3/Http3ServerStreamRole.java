@@ -21,12 +21,12 @@ package org.jquic.http3;
 public enum Http3ServerStreamRole {
     /** Unidirectional control stream, stream type 0x00 (RFC 9114 §6.2.1). */
     CONTROL(0x00),
+    /** Unidirectional push stream, stream type 0x01 (RFC 9114 §6.2.2). */
+    PUSH(0x01),
     /** Unidirectional QPACK encoder stream, stream type 0x02 (RFC 9204 §4.2). */
     QPACK_ENCODER(0x02),
     /** Unidirectional QPACK decoder stream, stream type 0x03 (RFC 9204 §4.2). */
-    QPACK_DECODER(0x03),
-    /** Unidirectional push stream, stream type 0x01 (RFC 9114 §6.2.2). */
-    PUSH(0x01);
+    QPACK_DECODER(0x03);
 
     private final int typeValue;
 

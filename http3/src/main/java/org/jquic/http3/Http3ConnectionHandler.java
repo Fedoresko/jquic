@@ -22,16 +22,23 @@ import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import tech.kwik.qpack.Decoder;
-import tech.kwik.qpack.Encoder;
+import org.jquic.http3.qpack.QpackEncoder;
+import org.jquic.http3.qpack.Decoder;
+import org.jquic.http3.qpack.Encoder;
+import org.jquic.http3.qpack.Header;
+import org.jquic.http3.qpack.QpackException;
 
-import java.io.ByteArrayInputStream;
+import org.jquic.http3.qpack.QpackBlockingManager;
+import org.jquic.http3.qpack.QpackRequiredInsertCountException;
+
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 
 /**
@@ -41,22 +48,39 @@ import java.util.stream.Collectors;
 class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler {
     private static final Logger logger = LoggerFactory.getLogger(Http3ConnectionHandler.class);
 
+    private static final long SETTINGS_QPACK_MAX_TABLE_CAPACITY = 100;// 0x01;
+    private static final long SETTINGS_MAX_FIELD_SECTION_SIZE = 0x06;
+    private static final long SETTINGS_QPACK_BLOCKED_STREAMS = 0x07;
+
+    private static final long DEFAULT_MAX_FIELD_SECTION_SIZE = 128 * 1024L;
+    private static final long DEFAULT_QPACK_MAX_TABLE_CAPACITY = 4096L;
+    private static final long DEFAULT_QPACK_BLOCKED_STREAMS = 100L;
+
     private final long connectionId;
     private final Http3RequestHandler requestHandler;
     private final ConcurrentHashMap<Long, Http3StreamContext> streams = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long,  CompletableFuture<DataOutputStream>> futures = new ConcurrentHashMap<>();
 
     private final Map<Long, Http3ServerStreamRole> serverStreamRoles = new HashMap<>();
+    private final ExecutorService vExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
     private Long clientControlStreamId;
     private Long clientQpackEncoderStreamId;
     private Long clientQpackDecoderStreamId;
 
     /** When {@code true} QPACK encoding/decoding is used; otherwise plain-text framing. */
-    private final Encoder qpackEncoder = Encoder.newBuilder().build();
-    private final Decoder qpackDecoder = Decoder.newBuilder().build();
+    private Encoder qpackEncoder;
+    private Decoder qpackDecoder;
+    private QpackBlockingManager qpackBlockingManager;
 
+    private final long localQpackMaxTableCapacity = DEFAULT_QPACK_MAX_TABLE_CAPACITY;
+    private final long localMaxBlockedStreams = DEFAULT_QPACK_BLOCKED_STREAMS;
+    private final long localMaxFieldSectionSize = DEFAULT_MAX_FIELD_SECTION_SIZE;
 
+    private long peerQpackMaxTableCapacity = 0; // Default until SETTINGS received
+    private long peerMaxFieldSectionSize = 0; // Default until SETTINGS received
+
+    private QuicConnectionControl connectionControl;
 
     public Http3ConnectionHandler(long connectionId, Http3RequestHandler requestHandler) {
         this.connectionId = connectionId;
@@ -65,13 +89,14 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
 
     @Override
     public void onConnectionEstablished(@NonNull QuicConnectionControl control) {
+        this.connectionControl = control;
         try {
             // Trigger opening of mandatory streams.
             // RFC 9114 §6.2: Each endpoint MUST open at least one control stream.
             // RFC 9204 §4.2: QPACK requires two unidirectional streams in each direction.
-            serverStreamRoles.put(control.openStream(QuicConnectionControl.StreamType.Unidirectional), Http3ServerStreamRole.CONTROL);
-            serverStreamRoles.put(control.openStream(QuicConnectionControl.StreamType.Unidirectional), Http3ServerStreamRole.QPACK_ENCODER);
-            serverStreamRoles.put(control.openStream(QuicConnectionControl.StreamType.Unidirectional), Http3ServerStreamRole.QPACK_DECODER);
+            control.openStream(QuicConnectionControl.StreamType.Unidirectional);
+            control.openStream(QuicConnectionControl.StreamType.Unidirectional);
+            control.openStream(QuicConnectionControl.StreamType.Unidirectional);
         } catch (Exception e) {
             logger.error("Failed to trigger mandatory streams opening on connection {}", connectionId, e);
         }
@@ -100,20 +125,97 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
 
         Http3ServerStreamRole role = serverStreamRoles.get(streamId);
 
-        if (role != null) {
-            try {
-                QuicVarint.write(outputStream, role.getTypeValue());
-                if (role == Http3ServerStreamRole.CONTROL) {
-                    putHttp3SettingsFrame(outputStream, Map.of(
-                            0x06L, 128 * 1024L // SETTINGS_MAX_FIELD_SECTION_SIZE
-                    ));
+        if (role == null && streamType == QuicConnectionControl.StreamType.Unidirectional) {
+            if (!serverStreamRoles.containsValue(Http3ServerStreamRole.CONTROL)) {
+                serverStreamRoles.put(streamId, Http3ServerStreamRole.CONTROL);
+                sendSettings(streamId, outputStream);
+            } else if (!serverStreamRoles.containsValue(Http3ServerStreamRole.QPACK_ENCODER)) {
+                serverStreamRoles.put(streamId, Http3ServerStreamRole.QPACK_ENCODER);
+                qpackEncoder = Encoder.create(outputStream, peerQpackMaxTableCapacity, QpackEncoder.DEFAULT_INDEXING_THRESHOLD);
+                try {
+                    QuicVarint.write(outputStream, Http3ServerStreamRole.QPACK_ENCODER.getTypeValue());
+                    outputStream.flush();
+                } catch (IOException e) {
+                    logger.error("Failed to initialize ENCODER stream");
                 }
-                outputStream.flush();
-                logger.debug("Initialized mandatory server {} stream {} on connection {}", role, streamId, connectionId);
-            } catch (IOException e) {
-                logger.error("Failed to initialize mandatory server {} stream {} on connection {}", role, streamId, connectionId, e);
+            } else if (!serverStreamRoles.containsValue(Http3ServerStreamRole.QPACK_DECODER)) {
+                serverStreamRoles.put(streamId, Http3ServerStreamRole.QPACK_DECODER);
+                qpackDecoder = Decoder.create(outputStream, localQpackMaxTableCapacity);
+                qpackBlockingManager = new QpackBlockingManager(localMaxBlockedStreams, (sId, buffer) -> {
+                    try {
+                        return qpackDecoder.decodeHeaders(sId, buffer);
+                    } catch (IOException e) {
+                        throw new RuntimeException(e);
+                    }
+                });
+                qpackDecoder.setUnblockedStreamListener(qpackBlockingManager::tryUnblockStreams);
+                qpackBlockingManager.setUnblockedStreamListener(new Decoder.UnblockedStreamListener() {
+                    @Override
+                    public void onHeadersDecoded(long streamId, List<Header> headers) {
+                        handleUnblockedHeaders(streamId, headers);
+                    }
+
+                    @Override
+                    public void onDecodingError(long streamId, Exception e) {
+                        handleUnblockedDecodingError(streamId, e);
+                    }
+                });
+                try {
+                    QuicVarint.write(outputStream, Http3ServerStreamRole.QPACK_DECODER.getTypeValue());
+                    outputStream.flush();
+                } catch (IOException e) {
+                    logger.error("Failed to initialize DECODER stream");
+                }
             }
         }
+    }
+
+    private void sendSettings(long streamId, @NonNull DataOutputStream outputStream) {
+        try {
+            QuicVarint.write(outputStream, Http3ServerStreamRole.CONTROL.getTypeValue());
+            putHttp3SettingsFrame(outputStream, Map.of(
+                    SETTINGS_MAX_FIELD_SECTION_SIZE, localMaxFieldSectionSize,
+                    SETTINGS_QPACK_MAX_TABLE_CAPACITY, localQpackMaxTableCapacity,
+                    SETTINGS_QPACK_BLOCKED_STREAMS, localMaxBlockedStreams
+            ));
+            outputStream.flush();
+            logger.debug("Initialized mandatory server {} stream {} on connection {}", Http3ServerStreamRole.CONTROL, streamId, connectionId);
+        } catch (IOException e) {
+            logger.error("Failed to initialize mandatory server {} stream {} on connection {}", Http3ServerStreamRole.CONTROL, streamId, connectionId, e);
+        }
+    }
+
+    private Map<Long, Long> parseSettingsPayload(byte[] payload) throws IOException {
+        Map<Long, Long> settings = new HashMap<>();
+        ByteBuffer buffer = ByteBuffer.wrap(payload);
+        while (buffer.hasRemaining()) {
+            long id = QuicVarint.read(buffer);
+            if (!buffer.hasRemaining()) {
+                throw new IOException("Truncated SETTINGS frame");
+            }
+            long value = QuicVarint.read(buffer);
+            settings.put(id, value);
+        }
+        return settings;
+    }
+
+    private void handleSettings(Map<Long, Long> settings) {
+        if (settings.containsKey(SETTINGS_QPACK_MAX_TABLE_CAPACITY)) {
+            peerQpackMaxTableCapacity = settings.get(SETTINGS_QPACK_MAX_TABLE_CAPACITY);
+            if (qpackEncoder != null) {
+                qpackEncoder.setDynamicTableCapacity(peerQpackMaxTableCapacity);
+            }
+        }
+        if (settings.containsKey(SETTINGS_QPACK_BLOCKED_STREAMS)) {
+            long peerMaxBlockedStreams = settings.get(SETTINGS_QPACK_BLOCKED_STREAMS);
+            if (qpackEncoder != null) {
+                qpackEncoder.setMaxBlockedStreams(peerMaxBlockedStreams);
+            }
+        }
+        if (settings.containsKey(SETTINGS_MAX_FIELD_SECTION_SIZE)) {
+            peerMaxFieldSectionSize = settings.get(SETTINGS_MAX_FIELD_SECTION_SIZE);
+        }
+        logger.debug("Received SETTINGS on connection {}: {}", connectionId, settings);
     }
 
     @Override
@@ -129,9 +231,9 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
                     logger.error("Failed to close connection after receiving reserved stream", e);
                 }
             } else {
-                Http3StreamContext context = new Http3StreamContext(streamId, Http3ClientStreamRole.REQUEST);
+                Http3StreamContext context = new Http3StreamContext(Http3ClientStreamRole.REQUEST);
                 streams.put(streamId, context);
-                futures.put(streamId, CompletableFuture.supplyAsync(()->outputStream));
+                futures.put(streamId, CompletableFuture.supplyAsync(()->outputStream, vExecutor));
                 logger.debug("New HTTP/3 request stream {} allocated on connection {}", streamId, connectionId);
             }
         } else {
@@ -145,7 +247,7 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
             }
             // Unidirectional stream (remote peer opened it)
             // Wait for first byte to determine role.
-            Http3StreamContext context = new Http3StreamContext(streamId, null);
+            Http3StreamContext context = new Http3StreamContext(null);
             streams.put(streamId, context);
             logger.debug("New unidirectional stream {} allocated on connection {}, waiting for type byte", streamId, connectionId);
         }
@@ -166,6 +268,7 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
             finishStream(streamId);
             return;
         }
+        logger.warn("Received data for stream {} on connection {} last {} data {}", streamId, connectionId, isLastData, HexFormat.of().formatHex(data));
 
         context.appendData(data);
 
@@ -202,8 +305,9 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
 
     private void handleDecoderStream(long streamId, @NonNull QuicConnectionControl response, byte[] data, boolean isLastData, Http3StreamContext context) {
         // QPACK decoder stream - buffer acknowledgements; processing not yet implemented.
-        logger.debug("QPACK decoder stream {} data received ({} bytes) - processing not yet implemented",
+        logger.debug("QPACK decoder stream {} data received ({} bytes) - processing",
                 streamId, data.length);
+        qpackEncoder.onDecoderData(ByteBuffer.wrap(data));
         if (isLastData) {
             try {
                 response.closeConnection(Http3Server.H3_CLOSED_CRITICAL_STREAM, "QPACK decoder stream closed by peer");
@@ -217,8 +321,9 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
 
     private void handleEncoderStream(long streamId, @NonNull QuicConnectionControl response, byte[] data, boolean isLastData, Http3StreamContext context) {
         // QPACK encoder stream - buffer instructions; processing not yet implemented.
-        logger.debug("QPACK encoder stream {} data received ({} bytes) - processing not yet implemented",
+        logger.debug("QPACK encoder stream {} data received ({} bytes) - processing",
                 streamId, data.length);
+        qpackDecoder.onEncoderData(ByteBuffer.wrap(data));
         if (isLastData) {
             try {
                 response.closeConnection(Http3Server.H3_CLOSED_CRITICAL_STREAM, "QPACK encoder stream closed by peer");
@@ -261,6 +366,8 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
                         response.closeConnection(Http3Server.H3_MISSING_SETTINGS, "First frame not SETTINGS");
                         return;
                     }
+                    Map<Long, Long> settings = parseSettingsPayload(frame.payload());
+                    handleSettings(settings);
                 } else {
                     if (frame.type() == 0x04 /* SETTINGS */) {
                         // RFC 9114 §7.2.4: Only one SETTINGS frame is allowed.
@@ -289,6 +396,56 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
         }
     }
 
+    private void handleUnblockedHeaders(long streamId, List<Header> headers) {
+        Http3StreamContext context = streams.get(streamId);
+        if (context == null) return;
+
+        Map<String, String> headersMap = headers.stream()
+                .collect(Collectors.toMap(Header::name, Header::value, (v1, _) -> v1));
+
+        String method = headersMap.getOrDefault(":method", "GET");
+        String path = headersMap.getOrDefault(":path", "/");
+        Long contentLength = Optional.ofNullable(headersMap.get(":content-length")).map(Long::valueOf).orElse(null);
+
+        Http3Request request = new Http3Request(connectionId, method, path, contentLength);
+        context.setRequest(request);
+        dispatchRequest(streamId, context);
+    }
+
+    private void handleUnblockedDecodingError(long streamId, Exception e) {
+        logger.warn("QPACK decoding failed on unblocked stream {} (connection {}): {}",
+                streamId, connectionId, e.getMessage());
+        if (e instanceof QpackException qe) {
+            try {
+                if (connectionControl != null) {
+                    connectionControl.closeConnection(qe.getErrorCode(), qe.getMessage());
+                }
+            } catch (Exception ex) {
+                logger.error("Failed to close connection after QPACK error", ex);
+            }
+        }
+    }
+
+    private void dispatchRequest(long streamId, Http3StreamContext context) {
+        Http3Request request = context.getRequest();
+        if (request == null) return;
+
+        if (request.getContentLength() == null) {
+            context.setRequestState(Http3StreamContext.RequestProcessingState.WAITING_FOR_FIN);
+        } else if (request.getContentLength() == 0) {
+            context.setRequestState(Http3StreamContext.RequestProcessingState.RESPONSE_SENDING);
+            CompletableFuture<DataOutputStream> responseFuture = futures.get(streamId);
+            Http3Response response = requestHandler.handleRequest(request);
+            putResponse(streamId, responseFuture, response)
+                    .thenAccept(_ -> {
+                        context.setRequestState(Http3StreamContext.RequestProcessingState.FINISHED);
+                        finishStream(streamId);
+                    });
+        } else {
+            context.setRequestState(Http3StreamContext.RequestProcessingState.WAITING_FOR_BODY);
+        }
+    }
+
     private void handleRequestStream(long streamId, @NonNull QuicConnectionControl response, boolean isLastData, Http3StreamContext context) {
         // Client-initiated bidirectional request stream.
         // Use a state machine to dispatch the request as soon as headers arrive,
@@ -299,26 +456,29 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
                 if (frame.type() == 0x01 /* HEADERS */ &&
                         context.getRequestState() == Http3StreamContext.RequestProcessingState.INITIAL) {
                     // Parse and dispatch the request immediately on first HEADERS frame.
-                    Http3Request request = parseRequestQpack(frame.payloadAsBuffer());
-                    context.setRequest(request);
-                    if (request != null) {
-                        if (request.getContentLength() == null) {
-                            context.setRequestState(Http3StreamContext.RequestProcessingState.WAITING_FOR_FIN);
-                        } else if (request.getContentLength() == 0) {
-                            logger.debug("Dispatching HTTP/3 request on stream {} (connection {}) after HEADERS frame",
-                                    streamId, connectionId);
-                            Http3Response httpResponse = requestHandler.handleRequest(request);
-                            // Send the response immediately - do not wait for stream FIN.
-                            logger.debug("Sending HTTP/3 response on stream {} (connection {}) immediately after HEADERS",
-                                    streamId, connectionId);
-                            futures.computeIfPresent(streamId, (_, _) -> putResponse(futures.get(streamId), httpResponse));
-                            context.setRequestState(Http3StreamContext.RequestProcessingState.RESPONSE_SENDING);
-                        } else {
-                            context.setRequestState(Http3StreamContext.RequestProcessingState.WAITING_FOR_BODY);
+                    try {
+                        ByteBuffer payload = frame.payloadAsBuffer();
+                        if (checkHeadersSize(streamId, response, payload.remaining())) {
+                            List<Header> decoded = qpackDecoder.decodeHeaders(streamId, payload);
+                            if (decoded != null) {
+                                Map<String, String> headersMap = decoded.stream()
+                                        .collect(Collectors.toMap(Header::name, Header::value, (v1, _) -> v1));
+
+                                String method = headersMap.getOrDefault(":method", "GET");
+                                String path = headersMap.getOrDefault(":path", "/");
+                                Long contentLength = Optional.ofNullable(headersMap.get(":content-length")).map(Long::valueOf).orElse(null);
+
+                                Http3Request request = new Http3Request(connectionId, method, path, contentLength);
+                                context.setRequest(request);
+                                dispatchRequest(streamId, context);
+                            }
                         }
-                    } else {
-                         // QPACK decoding failed - usually it triggers H3_GENERAL_PROTOCOL_ERROR in catch block
-                         throw new IOException("QPACK decoding failed");
+                    } catch (QpackRequiredInsertCountException e) {
+                        if (qpackBlockingManager != null) {
+                            qpackBlockingManager.blockStream(streamId, e.getFrame(), e.getRequiredInsertCount());
+                        } else {
+                            throw new IOException("Stream blocked but no blocking manager available", e);
+                        }
                     }
                 } else if (frame.type() == 0x00 /* DATA */ ) {
                     // DATA frame body chunk - accumulate for response (could be streamed further).
@@ -331,7 +491,7 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
                                 // Send the response immediately - do not wait for stream FIN.
                                 logger.debug("Sending HTTP/3 response on stream {} (connection {}) immediately after HEADERS",
                                         streamId, connectionId);
-                                futures.computeIfPresent(streamId, (_, _) -> putResponse(futures.get(streamId), httpResponse));
+                                futures.computeIfPresent(streamId, (id, future) -> putResponse(id, future, httpResponse));
                                 context.setRequestState(Http3StreamContext.RequestProcessingState.RESPONSE_SENDING);
                             }
                         }
@@ -353,17 +513,20 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
                             streamId, connectionId);
                     response.closeStream(streamId, Http3Server.H3_FRAME_ERROR); // H3_MESSAGE_ERROR
                     finishStream(streamId);
-                } else if (context.getRequestState() == Http3StreamContext.RequestProcessingState.INITIAL) {
+                } else
+                    if (context.getRequestState() == Http3StreamContext.RequestProcessingState.INITIAL) {
                     logger.warn("Stream {} FIN received without a HEADERS frame (connection {}) - H3_MESSAGE_ERROR",
                             streamId, connectionId);
                     response.closeStream(streamId, Http3Server.H3_MESSAGE_ERROR); // H3_MESSAGE_ERROR
                     finishStream(streamId);
-                } else if (context.getRequestState() == Http3StreamContext.RequestProcessingState.WAITING_FOR_FIN) {
+                } else
+
+                    if (context.getRequestState() == Http3StreamContext.RequestProcessingState.WAITING_FOR_FIN) {
                     Http3Response httpResponse = requestHandler.handleRequest(context.getRequest());
                     // Send the response immediately - do not wait for stream FIN.
                     logger.debug("Sending HTTP/3 response on stream {} (connection {}) immediately after HEADERS",
                             streamId, connectionId);
-                    futures.computeIfPresent(streamId, (_, _) -> putResponse(futures.get(streamId), httpResponse));
+                    futures.computeIfPresent(streamId, (id, future) -> putResponse(id, future, httpResponse));
                     finishStream(streamId);
                 } else {
                     // Clean FIN - response was already sent; just remove stream context.
@@ -384,12 +547,51 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
         }
     }
 
-    private void finishStream(long streamId) {
-        futures.remove(streamId).thenAcceptAsync(dataOutputStream -> {
+    private boolean checkHeadersSize(long streamId, QuicConnectionControl response, long encodedSize) {
+        if (encodedSize > localMaxFieldSectionSize) {
+            logger.warn("Incoming encoded headers size {} exceeds local MAX_FIELD_SECTION_SIZE {} on stream {}",
+                    encodedSize, localMaxFieldSectionSize, streamId);
             try {
-                dataOutputStream.close();
-            } catch (IOException _) {}
-        });
+                // Close stream using RESET_STREAM and STOP_SENDING with code H3_REQUEST_CANCELLED
+                response.closeStream(streamId, Http3Server.H3_REQUEST_CANCELLED);
+                
+                // Respond with http code (431 Request Header Fields Too Large)
+                CompletableFuture<DataOutputStream> responseFuture = futures.get(streamId);
+                if (responseFuture != null) {
+                    responseFuture.thenAccept(out -> {
+                        try {
+                            Http3Response errorResponse = new Http3Response(431, "text/plain",
+                                    "Request Header Fields Too Large".getBytes(), List.of());
+                            putResponse(streamId, CompletableFuture.completedFuture(out), errorResponse)
+                                    .thenAccept(_ -> finishStream(streamId));
+                        } catch (Exception e) {
+                            logger.error("Failed to send 431 response", e);
+                        }
+                    });
+                }
+            } catch (Exception e) {
+                logger.error("Error handling header size limit", e);
+            }
+            return false;
+        }
+        return true;
+    }
+
+    private void finishStream(long streamId) {
+        if (qpackBlockingManager != null) {
+            qpackBlockingManager.cancelStream(streamId);
+        }
+        if (qpackDecoder != null) {
+            qpackDecoder.cancelStream(streamId);
+        }
+        CompletableFuture<DataOutputStream> future = futures.remove(streamId);
+        if (future != null) {
+            future.thenAcceptAsync(dataOutputStream -> {
+                try {
+                    dataOutputStream.close();
+                } catch (IOException _) {}
+            }, vExecutor);
+        }
         streams.remove(streamId);
     }
 
@@ -459,34 +661,11 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
     }
 
     /**
-     * Parses an HTTP/3 request that uses QPACK-encoded headers (RFC 9204).
-     *
-     * <p>The incoming {@code data} is expected to be the payload of an HTTP/3
-     * HEADERS frame (frame type 0x01), i.e. a QPACK header block.
-     */
-    private Http3Request parseRequestQpack(ByteBuffer data) {
-        try {
-            Map<String, String> headers = qpackDecoder.decodeStream(new ByteArrayInputStream(data.array(), data.position(), data.remaining())).stream()
-                    .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
-
-            String method = headers.getOrDefault(":method", "GET");
-            String path = headers.getOrDefault(":path", "/");
-            Long contentLength = Optional.ofNullable(headers.getOrDefault(":content-length", null)).map(Long::valueOf).orElse(null);
-            data.position(data.limit());
-            return new Http3Request(connectionId, method, path, contentLength);
-        } catch (IOException e) {
-            logger.warn("QPACK decoding failed on stream (connection {}) {}",
-                    connectionId, e.getMessage());
-            return null;
-        }
-    }
-
-    /**
      * Encodes HTTP/3 response to raw bytes.
      * Uses QPACK header compression when {@code useQpack} is enabled,
      * otherwise falls back to the simplified plain-text format.
      */
-    private CompletableFuture<DataOutputStream> putResponse(CompletableFuture<DataOutputStream> responseFuture, Http3Response response) {
+    private CompletableFuture<DataOutputStream> putResponse(long streamId, CompletableFuture<DataOutputStream> responseFuture, Http3Response response) {
         byte[] body        = response.getBody();
 
         List<Map.Entry<String, String>> headers = new ArrayList<>(List.of(
@@ -495,8 +674,26 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
                 new AbstractMap.SimpleEntry<>("content-length", String.valueOf(body.length))));
 
         headers.addAll(response.getHeaders());
+        List<Header> qHeaders = headers.stream().map(e -> new Header(e.getKey(), e.getValue())).toList();
 
-        ByteBuffer headerBlock = qpackEncoder.compressHeaders(headers).position(0);
+        // Local: if our headers exceed client's limit only log warning.
+        if (peerMaxFieldSectionSize > 0) {
+            long totalSize = 0;
+            for (Header h : qHeaders) {
+                totalSize += h.name().length() + h.value().length() + 32;
+            }
+            if (totalSize > peerMaxFieldSectionSize) {
+                logger.warn("Outgoing headers size {} exceeds peer's MAX_FIELD_SECTION_SIZE {} on stream {}",
+                        totalSize, peerMaxFieldSectionSize, streamId);
+            }
+        }
+
+        ByteBuffer headerBlock;
+        try {
+            headerBlock = qpackEncoder.encodeHeaders(streamId, qHeaders).position(0);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
 
         return responseFuture.thenApplyAsync((outputStream) -> {
             try {
@@ -507,7 +704,7 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
                 throw new RuntimeException(e);
             }
             return outputStream;
-        });
+        }, vExecutor);
     }
 
     /**
@@ -560,7 +757,7 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
 
         public int readBodyBytes = 0;
 
-        Http3StreamContext(long streamId, @Nullable Object role) {
+        Http3StreamContext(@Nullable Object role) {
             this.role = role;
         }
 
