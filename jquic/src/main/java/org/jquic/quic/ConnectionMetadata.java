@@ -339,13 +339,13 @@ public class ConnectionMetadata {
     }
 
     public static class InitialStreamLimits {
-        public Integer maxBidi = 128;  // Maximum number if bidirectional streams we are ready to accept from the start
-        public Integer maxUni = 128;  // Maximum number if unidirectional streams we are ready to accept from the start
-        public Integer maxStreamDataUni = 1048576; // Maximum data per unidirectional stream we are ready to accept from it initially
-        public Integer maxStreamDataBidiLocal = 1048576; // Maximum data per bidirectional stream (opened by us) we are ready to accept from it initially
-        public Integer maxStreamDataBidiRemote = 1048576; // Maximum data per bidirectional stream (opened by peer) we are ready to accept from it initially
-        public Integer maxData = 1048576; // Total maximum data per connection we are ready to accept from the start
-        public long maxConnections = 100; // Total number of simultaneous connections from the client
+        public Integer maxBidi = QuicProperties.INITIAL_MAX_BIDI;  // Maximum number if bidirectional streams we are ready to accept from the start
+        public Integer maxUni = QuicProperties.INITIAL_MAX_UNI;  // Maximum number if unidirectional streams we are ready to accept from the start
+        public Integer maxStreamDataUni = QuicProperties.INITIAL_MAX_STREAM_DATA_UNI; // Maximum data per unidirectional stream we are ready to accept from it initially
+        public Integer maxStreamDataBidiLocal = QuicProperties.INITIAL_MAX_STREAM_DATA_BIDI_LOCAL; // Maximum data per bidirectional stream (opened by us) we are ready to accept from it initially
+        public Integer maxStreamDataBidiRemote = QuicProperties.INITIAL_MAX_STREAM_DATA_BIDI_REMOTE; // Maximum data per bidirectional stream (opened by peer) we are ready to accept from it initially
+        public Integer maxData = QuicProperties.INITIAL_MAX_DATA; // Total maximum data per connection we are ready to accept from the start
+        public long maxConnections = QuicProperties.INITIAL_MAX_CONNECTIONS; // Total number of simultaneous connections from the client
     }
 
     /**

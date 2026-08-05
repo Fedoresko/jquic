@@ -15,6 +15,7 @@
  */
 package org.jquic.quic;
 
+import org.jquic.quic.buffers.PoolBuffer;
 import org.jquic.quic.linux.LinuxEcnSocket;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
@@ -27,6 +28,9 @@ import java.nio.ByteBuffer;
 import java.nio.channels.DatagramChannel;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
 
 import static org.jquic.quic.linux.NativeUtil.getNativeFd;
 
@@ -55,32 +59,21 @@ public class QuicDatagramChannel {
             throws IOException {
         if (socket != null) {
             InetSocketAddress socketAddress = (InetSocketAddress)target;
-            return (int) socket.send(src, buildSockAddr(socketAddress.getHostName(), socketAddress.getPort()));
+            return (int) socket.send(src, buildSockAddr(socketAddress.getAddress().getAddress(), socketAddress.getPort()));
         } else {
             return channel.send(src, target);
         }
     }
 
-    public static int[] buildSockAddr(String ip, int port) {
-        String[] parts = ip.split("\\.");
-
-        // 1. sin_family (2 bytes) + sin_port (2 bytes, big-endian)
-        short sin_family = 2; // AF_INET
-        short sin_port = Short.reverseBytes((short) port);
-        int word0 = ((sin_port & 0xFFFF) << 16) | (sin_family & 0xFFFF);
-
-        // 2. sin_addr (4 bytes, big-endian IP)
-        byte b0 = (byte) Integer.parseInt(parts[0]);
-        byte b1 = (byte) Integer.parseInt(parts[1]);
-        byte b2 = (byte) Integer.parseInt(parts[2]);
-        byte b3 = (byte) Integer.parseInt(parts[3]);
-        int word1 = ((b3 & 0xFF) << 24) | ((b2 & 0xFF) << 16) | ((b1 & 0xFF) << 8) | (b0 & 0xFF);
-
-        // 3. sin_zero padding (8 bytes of zeros = 2 int words)
-        int word2 = 0;
-        int word3 = 0;
-
-        return new int[]{ word0, word1, word2, word3 };
+    public int sendBatch(Collection<SelectorThread.PacketToSend> data) throws IOException {
+        if (socket != null) {
+            return socket.sendBatch(data);
+        } else {
+            for (SelectorThread.PacketToSend entry : data) {
+                channel.send(entry.poolBuffer().buf(), entry.socketAddress());
+            }
+            return data.size();
+        }
     }
 
     public SocketAddress receive(ByteBuffer dst, int[] outMetrics) throws IOException {
@@ -88,6 +81,55 @@ public class QuicDatagramChannel {
             return socket.receive(dst, outMetrics);
         } else {
             return channel.receive(dst);
+        }
+    }
+
+    public List<ReceivedPacket> receiveBatch(PoolBuffer[] buffers) throws IOException {
+        int maxCount = buffers.length;
+        if (socket != null) {
+            return socket.receiveBatch(buffers);
+        } else {
+            List<ReceivedPacket> results = new ArrayList<>();
+            for (PoolBuffer buffer : buffers) {
+                ByteBuffer buf = buffer.buf();
+                buf.clear();
+                int startPos = buf.position();
+                SocketAddress sender = channel.receive(buf);
+                if (sender == null) {
+                    break;
+                }
+                buf.limit(buf.position());
+                buf.position(startPos);
+                results.add(new ReceivedPacket(buffer, sender, 0));
+            }
+            return results;
+        }
+    }
+
+    public List<ReceivedPacket> receiveBatchBlocking(PoolBuffer[] buffers) throws IOException {
+        if (socket != null) {
+            return socket.receiveBatchBlocking(buffers);
+        } else {
+            List<ReceivedPacket> results = new ArrayList<>();
+            for (int i = 0; i < buffers.length; i++) {
+                ByteBuffer buf = buffers[i].buf();
+                buf.clear();
+                int startPos = buf.position();
+                SocketAddress sender;
+                if (i == 0) {
+                    sender = receiveBlocking(buf, null);
+                } else {
+                    sender = channel.receive(buf);
+                }
+
+                if (sender == null) {
+                    break;
+                }
+                buf.limit(buf.position());
+                buf.position(startPos);
+                results.add(new ReceivedPacket(buffers[i], sender, 0));
+            }
+            return results;
         }
     }
 
@@ -101,6 +143,25 @@ public class QuicDatagramChannel {
                 return channel.receive(dst);
             }
         }
+    }
+
+    public record ReceivedPacket(PoolBuffer data, SocketAddress sender, int ecnFlags) {
+    }
+
+    public static int[] buildSockAddr(byte[] ip, int port) {
+        // 1. sin_family (2 bytes) + sin_port (2 bytes, big-endian)
+        short sin_family = 2; // AF_INET
+        short sin_port = Short.reverseBytes((short) port);
+        int word0 = ((sin_port & 0xFFFF) << 16) | (sin_family & 0xFFFF);
+
+        // 2. sin_addr (4 bytes, big-endian IP)
+        int word1 = ((ip[3] & 0xFF) << 24) | ((ip[2] & 0xFF) << 16) | ((ip[1] & 0xFF) << 8) | (ip[0] & 0xFF);
+
+        // 3. sin_zero padding (8 bytes of zeros = 2 int words)
+        int word2 = 0;
+        int word3 = 0;
+
+        return new int[]{ word0, word1, word2, word3 };
     }
 }
 

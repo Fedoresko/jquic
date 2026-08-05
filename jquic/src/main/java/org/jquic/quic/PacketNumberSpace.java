@@ -126,6 +126,7 @@ public class PacketNumberSpace {
         long initialLossDelay = Math.max(
                 (long) (K_TIME_THRESHOLD * Math.max(smoothedRtt, latestRtt)),
                 K_GRANULARITY_MS);
+
         packet.lossDeadline = sentTime + initialLossDelay;
         lossHeap.insertOrUpdate(packet);
 

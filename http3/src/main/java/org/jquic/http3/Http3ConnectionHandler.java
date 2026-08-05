@@ -259,7 +259,7 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
                                      byte[] data, boolean isLastData, @Nullable Long errorCode) {
         Http3StreamContext context = streams.get(streamId);
         if (context == null) {
-            logger.warn("Received data for unknown stream {} on connection {} {}", streamId, connectionId, HexFormat.of().formatHex(data));
+            logger.warn("Received data for unknown stream {} on connection {}", streamId, connectionId);
             return;
         }
 
@@ -269,7 +269,6 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
             finishStream(streamId);
             return;
         }
-        logger.warn("Received data for stream {} on connection {} last {} data {}", streamId, connectionId, isLastData, HexFormat.of().formatHex(data));
 
         context.appendData(data);
 
@@ -522,8 +521,7 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
         try {
             Http3StreamContext.ParsedFrame frame;
             FramedStreamWrapper streamWrapper = (FramedStreamWrapper) context.getStreamWrapper();
-            while (true) {
-                if ((frame = streamWrapper.getNextFrame()) == null) break;
+            while ((frame = streamWrapper.getNextFrame()) != null) {
                 if (frame.type() == 0x01 /* HEADERS */ &&
                         context.getRequestState() == Http3StreamContext.RequestProcessingState.INITIAL) {
                     // Parse and dispatch the request immediately on first HEADERS frame.
@@ -551,9 +549,9 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
                             throw new IOException("Stream blocked but no blocking manager available", e);
                         }
                     }
-                } else if (frame.type() == 0x00 /* DATA */ ) {
+                } else if (frame.type() == 0x00 /* DATA */) {
                     // DATA frame body chunk - accumulate for response (could be streamed further).
-                    if (context.getRequest() != null &&  context.getRequestState() != Http3StreamContext.RequestProcessingState.RESPONSE_SENDING) {
+                    if (context.getRequest() != null && context.getRequestState() != Http3StreamContext.RequestProcessingState.RESPONSE_SENDING) {
                         context.getRequest().appendBody(new String(frame.payload()));
                         context.readBodyBytes += frame.payload().length;
                         if (context.getRequestState() == Http3StreamContext.RequestProcessingState.WAITING_FOR_BODY) {
@@ -663,7 +661,9 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
                 } catch (IOException _) {}
             }, vExecutor);
         }
-        streams.remove(streamId);
+        try {
+            streams.remove(streamId).close();
+        } catch (IOException _) {}
     }
 
     @Override

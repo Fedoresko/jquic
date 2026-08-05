@@ -194,6 +194,11 @@ public class QuicPacketBuilder {
     public static PoolBuffer buildVersionNegotiationPacket(BufferPool bufferPool, byte[] destinationCid, byte[] sourceCid) {
         PoolBuffer packet = bufferPool.requestWriteBuffer();
         ByteBuffer buf = packet.buf();
+        writeVersionNegotioationPaketToBuffer(destinationCid, sourceCid, buf);
+        return packet;
+    }
+
+    public static void writeVersionNegotioationPaketToBuffer(byte[] destinationCid, byte[] sourceCid, ByteBuffer buf) {
         int start = buf.position();
 
         // Header Form (1) = 1, Unused (7) random
@@ -219,10 +224,9 @@ public class QuicPacketBuilder {
 
         buf.limit(buf.position());
         buf.position(start);
-        return packet;
     }
 
-    static PoolBuffer writeStatelessResetFrame(BufferPool bufferPool, long connectionId, int incomingPacketSize, byte[] statelessResetToken) {
+    static PoolBuffer writeStatelessResetFrame(BufferPool bufferPool, int incomingPacketSize, byte[] statelessResetToken) {
         // RFC 9000: Stateless Reset should be smaller than incoming packet
         // to avoid amplification attacks, but at least 21 bytes
         int resetSize = Math.max(MIN_STATELESS_RESET_LENGTH,

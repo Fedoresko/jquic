@@ -32,11 +32,11 @@ import java.util.List;
 import java.util.Set;
 
 public class QuicEngine {
-    private static final int PORT = 4433;
+    private static final int PORT = QuicProperties.PORT;
 
     // Constant for the number of processing workers
-    public static final int SELECTOR_COUNT = 4;
-    public static final int WORKER_COUNT = 4;
+    public static final int SELECTOR_COUNT = QuicProperties.SELECTOR_COUNT;
+    public static final int WORKER_COUNT = QuicProperties.WORKER_COUNT;
 
     // Singleton stream engine for managing all connections
     private static QuicStreamEngineImpl streamEngineInternal;
@@ -100,7 +100,7 @@ public class QuicEngine {
 
         // Create shared CID-to-Selector mapping
         java.util.concurrent.ConcurrentHashMap<Long, Integer> cidToSelectorMap =
-                new java.util.concurrent.ConcurrentHashMap<Long, Integer>();
+                new java.util.concurrent.ConcurrentHashMap<>();
 
         // 1. Initialize the Master Acceptor Thread
         DatagramChannel acceptorChannel = createSocketWithReusePort();
@@ -139,7 +139,7 @@ public class QuicEngine {
         return selectorThreads;
     }
 
-    public static void stop() throws Exception {
+    public static void stop() {
         streamEngineInternal.shutdown();
         selectorThreads.forEach(Thread::interrupt);
         acceptorThread.interrupt();

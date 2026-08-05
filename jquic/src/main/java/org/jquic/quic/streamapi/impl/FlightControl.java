@@ -193,7 +193,7 @@ public class FlightControl {
                 logger.warn("Connection blocked by MAX_DATA: in-flight={}, data={}, limit={}",
                         totalInFlightBytes, dataSize, currentClientMaxData.get());
                 // Send DATA_BLOCKED frame to inform peer
-                streamManager.sendDataBlockedFrame(currentClientMaxData.get(), streamId);
+                streamManager.sendDataBlockedFrame(currentClientMaxData.get());
                 lastDataBlockedAt.set(state.getMaxStreamData() + dataSize);
             }
             return false;
@@ -301,7 +301,7 @@ public class FlightControl {
         boolean isNew = !streams.containsKey(streamId);
         StreamState state = streams.computeIfAbsent(streamId, id -> new StreamState(id, type,
                 isBidi ? clientInitialLimits.maxStreamDataBidiLocal : clientInitialLimits.maxStreamDataUni,
-                isBidi ? serverInitialLimits.maxStreamDataBidiLocal : serverInitialLimits.maxStreamDataUni));
+                isBidi ? serverInitialLimits.maxStreamDataBidiRemote : serverInitialLimits.maxStreamDataUni));
 
         if (isNew) {
             long streamIndex = streamId / 4;
@@ -334,7 +334,7 @@ public class FlightControl {
      */
     public StreamState onStreamReset(long streamId, long errorCode, long finalSize) {
         StreamState state = streams.get(streamId);
-        logger.warn("Received RESET_STREAM for setram {}", streamId);
+        logger.debug("Received RESET_STREAM for stream {} error: {}", streamId, errorCode);
         if (state == null) {
             logger.debug("Received RESET_STREAM for unknown stream {}", streamId);
             return null;

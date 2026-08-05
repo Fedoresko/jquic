@@ -48,9 +48,9 @@ public class StatThread extends Thread {
                 }
             }
 
-            log.info("### Total active connections: {} | AVG Tick Time: {}ns | AVG Retransmit Rate: {}",
+            log.warn("### Total active connections: {} | AVG Tick Time: {}ns | AVG Retransmit Rate: {}",
                     totalActiveConnections, (sumTickTimeEmaNs/threadCount), sumRetransmitRateEma/threadCount);
-            log.info("### Total buffer stats: {} read buffers | {} write buffers.", bufferStats[0], bufferStats[1]);
+            log.warn("### Total buffer stats: {} read buffers | {} write buffers.", bufferStats[0], bufferStats[1]);
 
             LockSupport.parkUntil(System.currentTimeMillis() + 1000);
         }

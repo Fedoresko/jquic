@@ -26,7 +26,6 @@ import org.slf4j.LoggerFactory;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.DatagramChannel;
-import java.util.HexFormat;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -40,14 +39,16 @@ class AcceptorThread implements Runnable {
     public static final int INITIAL_CONNECTIONS_MAP_SIZE = 1000;
     public static final int MINIMUM_INITIAL_PACKET = 1200;
 
-    private final BufferPool  bufferPool = new BufferPool();
+    private final BufferPool bufferPool = new BufferPool();
 
     private final DatagramChannel channel;
     private SelectorThread[] selectors;
     private final ConcurrentHashMap<Long, Integer> cidToSelectorMap;
     private final AtomicLong cidGenerator;
 
-    record SelectorCID (Integer selectorId, Long cid) {}
+    record SelectorCID(Integer selectorId, Long cid) {
+    }
+
     private final LruCache<ByteBuffer, SelectorCID> initialSelectorMap = new LruCache<>(INITIAL_CONNECTIONS_MAP_SIZE);
 
     public AcceptorThread(DatagramChannel channel, ConcurrentHashMap<Long, Integer> cidToSelectorMap) {
@@ -88,9 +89,6 @@ class AcceptorThread implements Runnable {
 
                     if (packetSummary.type() != QuicPacketHeader.PacketType.ONE_RTT && packetSummary.version() == QuicVersion.UNKNOWN) {
                         logger.info("[Acceptor] Unsupported QUIC version. Sending Version Negotiation.");
-                        byte[] payload = new byte[buffer.buf().remaining()];
-                        buffer.buf().duplicate().get(payload);
-                        System.out.println(HexFormat.of().formatHex(payload));
                         // Send Version Negotiation: DCID = received SCID, SCID = received DCID
 
                         if (datagramSize >= 1200) { // Minimum packet size requirement
@@ -142,12 +140,12 @@ class AcceptorThread implements Runnable {
                                 );
                             } else if (packetSummary.type() != QuicPacketHeader.PacketType.INITIAL) {
                                 skipPacket(buffer.buf());
-                                
+
                                 logger.warn("[Acceptor] Non-Initial packed with unknown DCID: {} type {} - no mapping found, sending STATELESS_RESET", dcid, packetSummary.type());
                                 int incomingPacketSize = buffer.buf().position() - start;
                                 if (incomingPacketSize > 25) { //ignore to small packets
                                     byte[] statelessResetToken = QuicCrypto.generateStatelessResetToken(dcid);
-                                    PoolBuffer resetPacket = QuicPacketBuilder.writeStatelessResetFrame(bufferPool, 0, incomingPacketSize, statelessResetToken);
+                                    PoolBuffer resetPacket = QuicPacketBuilder.writeStatelessResetFrame(bufferPool, incomingPacketSize, statelessResetToken);
                                     try {
                                         channel.send(resetPacket.buf(), sender);
                                     } catch (Exception e) {

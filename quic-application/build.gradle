@@ -16,14 +16,61 @@
 plugins {
     id 'java'
     id 'com.gradleup.shadow' version '9.3.0+'
+    id 'com.bmuschko.docker-remote-api' version '9.4.0'
 }
 
+import com.bmuschko.gradle.docker.tasks.image.DockerBuildImage
+import com.bmuschko.gradle.docker.tasks.image.DockerPushImage
+
 group = 'org.jquic'
-version = '1.0-SNAPSHOT'
+version = '1.0'
+
+def dockerRepo = project.findProperty('dockerRepo') ?: 'org.jquic'
+def dockerImageTag = project.findProperty('dockerImageTag') ?: version
 
 repositories {
     mavenCentral()
     mavenLocal()
+}
+
+tasks.register('buildSampleServerImage', DockerBuildImage) {
+    group = 'docker'
+    description = 'Builds the jquic-sample-server image.'
+    dependsOn shadowJar
+
+    inputDir = project.projectDir
+    images.add("${dockerRepo}/jquic-sample-server:${dockerImageTag}")
+    buildArgs.put('JAR_FILE', "build/libs/${tasks.shadowJar.archiveFileName.get()}")
+    buildArgs.put('BASE_IMAGE', 'debian:trixie-slim')
+    buildArgs.put('ENTRYPOINT_SCRIPT', '/app/start.sh')
+}
+
+tasks.register('buildInteropServerImage', DockerBuildImage) {
+    group = 'docker'
+    description = 'Builds the jquic-interop-server image.'
+    dependsOn shadowJar
+
+    inputDir = project.projectDir
+    images.add("${dockerRepo}/jquic-interop-server:${dockerImageTag}")
+    buildArgs.put('JAR_FILE', "build/libs/${tasks.shadowJar.archiveFileName.get()}")
+    buildArgs.put('BASE_IMAGE', 'martenseemann/quic-network-simulator-endpoint:latest')
+    buildArgs.put('ENTRYPOINT_SCRIPT', '/app/run_endpoint.sh')
+}
+
+tasks.register('pushSampleServerImage', DockerPushImage) {
+    group = 'docker'
+    description = 'Pushes the jquic-sample-server image to the repository.'
+    dependsOn 'buildSampleServerImage'
+
+    images.add("${dockerRepo}/jquic-sample-server:${dockerImageTag}")
+}
+
+tasks.register('pushInteropServerImage', DockerPushImage) {
+    group = 'docker'
+    description = 'Pushes the jquic-interop-server image to the repository.'
+    dependsOn 'buildInteropServerImage'
+
+    images.add("${dockerRepo}/jquic-interop-server:${dockerImageTag}")
 }
 
 tasks.register('runShadowJar', JavaExec) {
@@ -59,7 +106,7 @@ dependencies {
 shadowJar {
     manifest {
         attributes(
-                'Main-Class': 'org.jquic.Main' // Replace with your main class
+                'Main-Class': 'org.jquic.app.Main' // Replace with your main class
         )
     }
 }

@@ -74,7 +74,7 @@ public class TimerWheelScheduler {
             throw new IllegalArgumentException("Scheduling in the past");
         }
         if (slot - lastDrainedSlot > timerWheel.length - 1) {
-            throw new IllegalArgumentException("Not enough slots");
+            slot = lastDrainedSlot + timerWheel.length - 1;
         }
         timerWheel[(int) (slot % timerWheel.length)].add(event);
     }

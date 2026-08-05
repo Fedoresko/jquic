@@ -17,6 +17,7 @@ package org.jquic.quic.struct;
 
 import java.lang.reflect.Array;
 
+@SuppressWarnings("unchecked")
 public class TimeoutHeap<T extends TimeoutHeap.Entry> {
     private final Class<T> tClass;
     public TimeoutHeap(Class<T> tClass) {
@@ -53,7 +54,6 @@ public class TimeoutHeap<T extends TimeoutHeap.Entry> {
 
     /**
      * Retrieves and removes the head of this heap, which is the element with the smallest timeout timestamp.
-     *
      * If this heap is empty, returns null.
      *
      * @return the head of this heap, or null if this heap is empty
@@ -80,7 +80,7 @@ public class TimeoutHeap<T extends TimeoutHeap.Entry> {
         return size;
     }
 
-    public void remove(T entry) {
+    public int remove(T entry) {
         int index = entry.getTimeoutHeapIndex();
         if (index != -1 && index < size) {
             swap(index, --size);
@@ -91,6 +91,7 @@ public class TimeoutHeap<T extends TimeoutHeap.Entry> {
             }
             entry.setTimeoutHeapIndex(-1);
         }
+        return index;
     }
 
     /**

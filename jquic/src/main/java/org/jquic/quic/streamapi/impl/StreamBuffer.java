@@ -18,10 +18,11 @@ package org.jquic.quic.streamapi.impl;
 import org.jquic.quic.buffers.PoolBuffer;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
 import java.nio.channels.WritableByteChannel;
+import java.util.Map;
 import java.util.TreeMap;
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Buffers incoming and outgoing data for a single QUIC stream.
@@ -41,9 +42,6 @@ public class StreamBuffer {
     // Flow control tracking
     private long bufferedBytes = 0; // Bytes buffered but not yet delivered to application
 
-    // Outgoing data tracking
-    private final AtomicLong nextSendOffset = new AtomicLong(0);
-
     public StreamBuffer(long streamId, int streamBufferCapacity) {
         this.streamId = streamId;
         this.streamBufferCapacity = streamBufferCapacity;
@@ -54,12 +52,13 @@ public class StreamBuffer {
             poolBuffer.release();
         }
         incomingFragments.clear();
+        bufferedBytes = 0;
     }
 
     /**
      * Adds incoming STREAM data to reassembly buffer.
      * Called by worker thread after processing STREAM frame event.
-     * 
+     *
      * @param offset Byte offset in the stream
      * @param data Frame data
      * @param fin Whether this frame has the FIN flag
@@ -73,26 +72,94 @@ public class StreamBuffer {
             return false;
         }
 
-        // Store the fragment
-        if (data.buf().remaining() > 0) {
-            incomingFragments.put(offset, data);
-            bufferedBytes += data.buf().remaining();
+        if (receivedFin && offset >= finOffset) {
+            data.release();
+            return false;
         }
 
-        // Track FIN
-        if (fin) {
-            receivedFin = true;
-            finOffset = offset + data.buf().remaining();
-        }
+        processFragment(offset, data, fin);
 
         // Check if we can advance the read pointer
         return hasContiguousData();
     }
 
+    private void processFragment(long offset, PoolBuffer data, boolean fin) {
+        if (data.buf().remaining() == 0) {
+            if (fin) {
+                receivedFin = true;
+                finOffset = offset;
+            }
+            data.release();
+            return;
+        }
+
+        // 1. Trim start if it overlaps with previous fragment
+        Map.Entry<Long, PoolBuffer> prev = incomingFragments.floorEntry(offset);
+        if (prev != null) {
+            long prevEnd = prev.getKey() + prev.getValue().buf().remaining();
+            if (prevEnd > offset) {
+                int skip = (int) (prevEnd - offset);
+                if (skip >= data.buf().remaining()) {
+                    // Entirely covered by previous
+                    data.release();
+                    return;
+                }
+                data.buf().position(data.buf().position() + skip);
+                offset = prevEnd;
+            }
+        }
+
+        // 2. Check overlap with subsequent fragment(s)
+        Long next = incomingFragments.ceilingKey(offset);
+        if (next != null && next == offset) {
+            // Already handled by ceilingKey returning exact match
+            // We need to skip the part covered by 'next'
+            PoolBuffer nextBuf = incomingFragments.get(next);
+            long nextEnd = next + nextBuf.buf().remaining();
+            int skip = (int) (nextEnd - offset);
+            if (skip >= data.buf().remaining()) {
+                data.release();
+                return;
+            }
+            data.buf().position(data.buf().position() + skip);
+            processFragment(nextEnd, data, fin);
+            return;
+        }
+
+        if (next != null && offset + data.buf().remaining() > next) {
+            // Overlaps with at least one next fragment.
+            // We need to cut the portion before 'next' and process the rest recursively.
+
+            long currentPortionLen = next - offset;
+            if (currentPortionLen > 0) {
+                // Store the piece before 'next'
+                PoolBuffer firstPart = data.borrow();
+                firstPart.buf().limit(firstPart.buf().position() + (int) currentPortionLen);
+                incomingFragments.put(offset, firstPart);
+                bufferedBytes += firstPart.buf().capacity();
+            }
+
+            // Advance data to 'next'
+            int skip = (int) (next - offset);
+            data.buf().position(data.buf().position() + skip);
+
+            // Recurse to handle the remaining part of 'data' against fragments after 'next'
+            processFragment(next, data, fin);
+        } else {
+            // No more overlaps, store the rest
+            if (fin) {
+                receivedFin = true;
+                finOffset = offset + data.buf().remaining();
+            }
+            incomingFragments.put(offset, data);
+            bufferedBytes += data.buf().capacity();
+        }
+    }
+
     /**
      * Reads available contiguous data from the buffer.
      * Called by worker thread to deliver data to handler.
-     * 
+     *
      * @return Available data starting from the next expected offset, or null if no data available
      */
     public StreamData readAvailableData() throws IOException {
@@ -115,7 +182,7 @@ public class StreamBuffer {
             PoolBuffer fragment = incomingFragments.remove(firstOffset);
 
             // Decrease buffered bytes as we remove fragment
-            bufferedBytes -= fragment.buf().remaining();
+            bufferedBytes -= fragment.buf().capacity();
 
             // Handle overlapping or duplicate data
             if (firstOffset + fragment.buf().remaining() <= nextExpectedOffset) {
@@ -125,8 +192,11 @@ public class StreamBuffer {
 
             // Write the new portion
             int startIndex = (int) Math.max(0, nextExpectedOffset - firstOffset);
-            channel.write(fragment.buf().duplicate().position(fragment.buf().position() + startIndex));
-            nextExpectedOffset = firstOffset + fragment.buf().remaining();
+            ByteBuffer buf = fragment.buf().duplicate();
+            buf.position(buf.position() + startIndex);
+            int written = buf.remaining();
+            channel.write(buf);
+            nextExpectedOffset += written;
 
             fragment.release();
         }
@@ -157,14 +227,6 @@ public class StreamBuffer {
             return false;
         }
         return incomingFragments.firstKey() <= nextExpectedOffset;
-    }
-
-    /**
-     * Gets and increments the next send offset for outgoing data.
-     * Called when application sends data on this stream.
-     */
-    public long allocateSendOffset(int dataLength) {
-        return nextSendOffset.getAndAdd(dataLength);
     }
 
     public long getStreamId() {

@@ -1,6 +1,6 @@
 <configuration>
     <!-- Регистрируем кастомный тег %mdcColor -->
-    <conversionRule conversionWord="mdcColor" converterClass="org.jquic.MdcColorConverter" />
+    <conversionRule conversionWord="mdcColor" converterClass="org.jquic.app.MdcColorConverter" />
 
     <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>

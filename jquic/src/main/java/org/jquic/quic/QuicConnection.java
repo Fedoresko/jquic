@@ -69,7 +69,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
     }
 
     // RFC 9000 Section 10.1: Idle Timeout
-    private static final long DEFAULT_IDLE_TIMEOUT_MS = 30_000; // 30 seconds
+    private static final long DEFAULT_IDLE_TIMEOUT_MS = QuicProperties.DEFAULT_IDLE_TIMEOUT_MS; // 30 seconds
     private static final long MAX_IDLE_TIMEOUT_MS = 600_000; // 10 minutes
 
     private final long connectionId;
@@ -157,7 +157,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
             return false;
         }
 
-        sendApplicationPacket(frame, false);
+        sendApplicationPacket(frame);
         return true;
     }
 
@@ -693,8 +693,6 @@ public class QuicConnection implements TimeoutHeap.Entry {
                 long offset = (hasOffset) ? QuicVarint.read(plaintext.buf()) : 0;
                 long length = (hasLength) ? QuicVarint.read(plaintext.buf()) : plaintext.buf().remaining();
 
-                logger.info("Got Stream frame CID {} frame type {} stream id {}, offset {}, length {}", connectionId, frameType, streamId, offset, length);
-
                 if (connectionStreamManager != null) {
                     PoolBuffer borrowed = plaintext.borrow();
                     borrowed.buf().limit(borrowed.buf().position() + (int) length);
@@ -1088,7 +1086,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
         QuicCrypto.applyHelloRetryRequestToTranscript(connectionMetadata, hrrFrame.buf());
 
         logger.debug("Sending HelloRetryRequest Initial packet");
-        sendInitialPacket(hrrFrame, false);
+        sendInitialPacket(hrrFrame);
     }
 
     private void sendPacket(PoolBuffer payload, PacketNumberSpace.PacketPhase phase, boolean retrasmit) {
@@ -1147,25 +1145,25 @@ public class QuicConnection implements TimeoutHeap.Entry {
         outboundQueue.add(new OutboundPacket(retrasmit ? PacketSource.RETRANSMISSION : PacketSource.NEW, completePacket));
     }
 
-    private void sendInitialPacket(PoolBuffer payload, boolean retrasmit) {
+    private void sendInitialPacket(PoolBuffer payload) {
         if (state.get() == INITIAL)
-            sendPacket(payload, PacketNumberSpace.PacketPhase.INITIAL, retrasmit);
+            sendPacket(payload, PacketNumberSpace.PacketPhase.INITIAL, false);
         else {
             logger.error("!!!Send initial packet in {} state", state.get());
             payload.release();
         }
     }
-    private void sendHandshakePacket(PoolBuffer payload, boolean retrasmit) {
+    private void sendHandshakePacket(PoolBuffer payload) {
         if (state.get() == HANDSHAKE)
-            sendPacket(payload, PacketNumberSpace.PacketPhase.HANDSHAKE, retrasmit);
+            sendPacket(payload, PacketNumberSpace.PacketPhase.HANDSHAKE, false);
         else {
             logger.error("!!!Send handshake packet in {} state", state.get());
             payload.release();
         }
     }
-    private void sendApplicationPacket(PoolBuffer payload, boolean retrasmit) {
+    private void sendApplicationPacket(PoolBuffer payload) {
         if (state.get() == ESTABLISHED)
-            sendPacket(payload, PacketNumberSpace.PacketPhase.APPLICATION, retrasmit);
+            sendPacket(payload, PacketNumberSpace.PacketPhase.APPLICATION, false);
         else {
             logger.error("!!!Send application packet in {} state", state.get());
             payload.release();
@@ -1196,7 +1194,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
 
         PoolBuffer chunk;
         while ((chunk = outs.pollReadyChunk()) != null) {
-            sendInitialPacket(chunk, false);
+            sendInitialPacket(chunk);
             logger.debug("Sending ServerHello Initial packet");
         }
         outs.close();
@@ -1244,7 +1242,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
 
         PoolBuffer chunk;
         while ((chunk = out.pollReadyChunk()) != null) {
-            sendHandshakePacket(chunk, false);
+            sendHandshakePacket(chunk);
         }
         out.close();
     }
@@ -1271,7 +1269,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
         frame.buf().position(start);
 
         logger.debug("Sending HANDSHAKE_DONE frame in 1-RTT packet");
-        sendApplicationPacket(frame, false);
+        sendApplicationPacket(frame);
     }
 
     private void sendInitialAck() {
@@ -1363,7 +1361,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
 
         // Re-wrap lost packets with NEW packet numbers and encryption
         if (!lostPackets.isEmpty()) {
-            logger.warn("Detected {} lost packets, retransmitting with NEW packet numbers", lostPackets.size());
+            logger.warn("Detected {} lost packets in connection {}, retransmitting with NEW packet numbers", connectionId, lostPackets.size());
 
             for (Map.Entry<Long, PacketNumberSpace.SentPacket> entry : lostPackets.entrySet()) {
                 long originalPn = entry.getKey();
@@ -1409,11 +1407,11 @@ public class QuicConnection implements TimeoutHeap.Entry {
         }
 
         if (frameType == 0x1c) {
-            logger.warn("CONNECTION_CLOSE (QUIC): error_code={}, frame_type={}, reason=\"{}\"",
-                    errorCode, triggeringFrameType, reason);
+            logger.warn("CONNECTION_CLOSE cid {} (QUIC): error_code={}, frame_type={}, reason=\"{}\"",
+                    connectionId, errorCode, triggeringFrameType, reason);
         } else {
-            logger.warn("CONNECTION_CLOSE (Application): error_code={}, reason=\"{}\"",
-                    errorCode, reason);
+            logger.warn("CONNECTION_CLOSE cid {} (Application): error_code={}, reason=\"{}\"",
+                    connectionId, errorCode, reason);
         }
     }
 
@@ -1426,8 +1424,8 @@ public class QuicConnection implements TimeoutHeap.Entry {
      */
     private void sendStatelessReset(int incomingPacketSize) {
         try {
-            PoolBuffer frame = QuicPacketBuilder.writeStatelessResetFrame(getBufferPool(), connectionId, incomingPacketSize, statelessResetToken);
-            sendInitialPacket(frame, false);
+            PoolBuffer frame = QuicPacketBuilder.writeStatelessResetFrame(getBufferPool(), incomingPacketSize, statelessResetToken);
+            sendInitialPacket(frame);
             logger.info("Sent Stateless Reset ({} bytes)", frame.buf().remaining());
         } catch (Exception e) {
             logger.error("Failed to send Stateless Reset", e);

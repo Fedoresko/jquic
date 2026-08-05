@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.jquic;
+package org.jquic.app;
 
 import org.jquic.http3.Http3Request;
 import org.jquic.http3.Http3Response;
@@ -71,13 +71,20 @@ public class Main {
             );
         } catch (Exception e) {
             try {
-                channel.close();
+                if (channel != null) {
+                    channel.close();
+                }
             } catch (IOException _) {}
-            arena.close();
         }
     }
 
-    static void main() throws Exception {
+    static void main(String[] args) throws Exception {
+        for (String arg : args) {
+            if (arg.startsWith("--") && arg.contains("=")) {
+                String[] parts = arg.substring(2).split("=", 2);
+                System.setProperty(parts[0], parts[1]);
+            }
+        }
         logger.info("Starting QUIC/HTTP3 server...");
 
         // 1. Boot the QUIC engine (acceptor + selector threads, eBPF map setup)

@@ -1,7 +1,8 @@
-package org.jquic;
+package org.jquic.app;
 
 import com.sun.net.httpserver.*;
 import org.jquic.quic.KeystoreManager;
+import org.jquic.quic.QuicProperties;
 
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
@@ -37,14 +38,13 @@ import java.util.Objects;
  * <p>Built on top of one-nio's {@link HttpServer} for minimal overhead.
  */
 public class BootstrapHttpServer {
-    private static final int PORT = 443;
     private final HttpsServer server;
 
     public BootstrapHttpServer(KeystoreManager keystoreManager) throws Exception {
 
         SSLContext sslContext = buildSslContext(keystoreManager);
 
-        server = HttpsServer.create(new InetSocketAddress(PORT), 0);
+        server = HttpsServer.create(new InetSocketAddress(QuicProperties.BOOTSTRAP_PORT), 0);
         server.setHttpsConfigurator(new HttpsConfigurator(sslContext) {
             @Override
             public void configure(HttpsParameters params) {
@@ -63,12 +63,12 @@ public class BootstrapHttpServer {
 
         server.createContext("/bootstrap", new RootHandler());
         server.createContext("/hello", new BadHandler());
-
+        server.createContext("/monitoring", new MonitoringHandler());
     }
 
     public void start() {
         server.setExecutor(null); // Creates a default executor
-        System.out.println("HTTPS Server started on port " + PORT);
+        System.out.println("HTTPS Server started on port " + QuicProperties.BOOTSTRAP_PORT);
         server.start();
     }
 
@@ -110,7 +110,7 @@ public class BootstrapHttpServer {
 
             String body = String.format(
                     "{\"protocol\":\"h3\",\"host\":\"0.0.0.0\",\"port\":%d,\"timestamp\":\"%s\"}",
-                    PORT, Instant.now()
+                    QuicProperties.PORT, Instant.now()
             );
 
             exchange.getResponseHeaders().add("Access-Control-Allow-Origin","*");
@@ -137,10 +137,10 @@ public class BootstrapHttpServer {
 
             String body = "U-u-uPS!";
 
+            exchange.getResponseHeaders().set("Content-Type", "text/html; charset=utf-8");
             exchange.getResponseHeaders().add("Access-Control-Allow-Origin","*");
-            exchange.getResponseHeaders().add("Content-Type","application/html; charset=utf-8");
 
-            exchange.sendResponseHeaders(401, body.length());
+            exchange.sendResponseHeaders(200, body.length());
             try (OutputStream os = exchange.getResponseBody()) {
                 os.write(body.getBytes());
             }

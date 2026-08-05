@@ -19,21 +19,34 @@ package org.jquic.quic;
  * Configuration for QUIC server, including TLS keystore settings.
  */
 public class QuicServerConfig {
+    private final String keystoreType;
     private final String keystorePath;
     private final char[] keystorePassword;
     private final String keyAlias;
+    private final String certPath;
+    private final String keyPath;
 
     /**
      * Creates server configuration with keystore settings.
      * 
+     * @param keystoreType Type of keystore ("PKCS12" or "PEM")
      * @param keystorePath Path to PKCS12 keystore file
      * @param keystorePassword Password for the keystore
      * @param keyAlias Alias of the private key entry in the keystore
+     * @param certPath Path to certificate file (.crt)
+     * @param keyPath Path to private key file (.key)
      */
-    public QuicServerConfig(String keystorePath, String keystorePassword, String keyAlias) {
+    public QuicServerConfig(String keystoreType, String keystorePath, String keystorePassword, String keyAlias, String certPath, String keyPath) {
+        this.keystoreType = keystoreType;
         this.keystorePath = keystorePath;
-        this.keystorePassword = keystorePassword.toCharArray();
+        this.keystorePassword = keystorePassword != null ? keystorePassword.toCharArray() : null;
         this.keyAlias = keyAlias;
+        this.certPath = certPath;
+        this.keyPath = keyPath;
+    }
+
+    public String getKeystoreType() {
+        return keystoreType;
     }
 
     public String getKeystorePath() {
@@ -48,15 +61,26 @@ public class QuicServerConfig {
         return keyAlias;
     }
 
+    public String getCertPath() {
+        return certPath;
+    }
+
+    public String getKeyPath() {
+        return keyPath;
+    }
+
     /**
-     * Creates a default configuration for testing.
-     * Points to a local keystore with default credentials.
+     * Creates a default configuration.
+     * Values are loaded from QuicProperties.
      */
     public static QuicServerConfig createDefault() {
         return new QuicServerConfig(
-            "server.p12", 
-            "changeit", 
-            "server-alias"
+            QuicProperties.KEYSTORE_TYPE,
+            QuicProperties.KEYSTORE_PATH,
+            QuicProperties.KEYSTORE_PASSWORD,
+            QuicProperties.KEY_ALIAS,
+            QuicProperties.CERT_PATH,
+            QuicProperties.KEY_PATH
         );
     }
 }

@@ -55,7 +55,6 @@ public class StreamManager implements ConnectionStreamManager {
     private final QuicConnection connection;
     private final QuicApplicationProtocolConnectionHandler handler;
     private final ApplicationWorker streamWorker;
-    private final CongestionControl congestionControl;
     private final FlightControl flightControl;
 
     // Stream management
@@ -74,7 +73,6 @@ public class StreamManager implements ConnectionStreamManager {
                          ApplicationWorker streamWorker, MessagePassingQueue<TriStateQueue<ApplicationData>> wakeQueue) {
         this.connection = connection;
         this.streamWorker = streamWorker;
-        this.congestionControl = protocol.getCongestionControl();
         flightControl = new FlightControl(connection.connectionMetadata.serverInitialLimits,
                 connection.connectionMetadata.clientMetadata.initialStreamLimits, this);
         this.wakeQueue = wakeQueue;
@@ -197,8 +195,14 @@ public class StreamManager implements ConnectionStreamManager {
         }
 
         private void handleFrame(StreamFrameData frame) throws IOException {
+            if (connection.getState() != QuicConnection.State.ESTABLISHED) {
+                logger.warn("Connection is in wrong state " + connection.getState());
+                frame.data.release();
+                return;
+            }
+
             long streamId = frame.streamId;
-            long offset = frame.offset;
+            int offset = (int)frame.offset;
             PoolBuffer data = frame.data;
             boolean hasFin = frame.fin;
 
@@ -207,6 +211,7 @@ public class StreamManager implements ConnectionStreamManager {
 
             if (state == null || !state.getState().canReceive()) {
                 logger.warn("Received STREAM frame on stream {} in state {}", streamId, state == null ? "REMOVED" : state.getState());
+                data.release();
                 return;
             }
 
@@ -240,6 +245,7 @@ public class StreamManager implements ConnectionStreamManager {
             } else {
                 logger.warn("Connection {} stream {} has reached MAX_STREAM_DATA", getConnectionId(), streamId);
                 connection.closeConnection(QuicTransportError.FLOW_CONTROL_ERROR, "MAX_STREAM_DATA limit reached");
+                //TODO: lsquic get this for some reason under load.
             }
         }
 
@@ -251,10 +257,11 @@ public class StreamManager implements ConnectionStreamManager {
 
             StreamState state = flightControl.onStreamReset(streamId, errorCode, frame.finalSize);
 
-            streamOutputs.remove(streamId).close();
-
             // Deliver any buffered data with error code
-            frameProcessor.deliverStreamData(state, errorCode);
+            if (state != null) {
+                frameProcessor.deliverStreamData(state, errorCode);
+            }
+            streamOutputs.remove(streamId).close();
             streamBuffers.remove(streamId).free();
         }
 
@@ -329,18 +336,13 @@ public class StreamManager implements ConnectionStreamManager {
 
     private @NonNull ChunkedOutputStreamWithAmendments createOutputStream(StreamState state) {
         long streamId = state.getStreamId();
-        final StreamBuffer streamBuffer = streamBuffers.get(streamId);
         ChunkedOutputStreamWithAmendments out = ChunkedOutputStreamWithAmendments.createNonWrapping(connection.getBufferPool(),
                 (int) connection.connectionMetadata.clientMetadata.maxUdpPayloadSize - GCM_TAG_LENGTH - QuicFrameBuilder.MAX_SHORT_HEADER_LENGTH,
                 GCM_TAG_LENGTH + QuicFrameBuilder.MAX_SHORT_HEADER_LENGTH,
-                (buf, _, fin) -> {
-                    int dataSize = buf.remaining();
-                    long offset = streamBuffer.allocateSendOffset(dataSize);
-                    return (streamId == DATAGRAM_FRAMES) ?
-                            StreamFrameWriter.encodeDatagramFrame(buf.duplicate(), true)
-                            : StreamFrameWriter.encodeStreamFrame(
-                            streamId, offset, buf.duplicate(), fin);
-                }
+                (buf, offset, fin) -> (streamId == DATAGRAM_FRAMES) ?
+                        StreamFrameWriter.encodeDatagramFrame(buf.duplicate(), true)
+                        : StreamFrameWriter.encodeStreamFrame(
+                        streamId, offset, buf.duplicate(), fin)
         );
         out.setChunkConsumer(buf -> appendOutgoingData(state, buf));
         return out;
@@ -372,8 +374,6 @@ public class StreamManager implements ConnectionStreamManager {
                 throw new IOException("Connection is " + connection.getState());
             }
         }
-
-        logger.debug("Connection {} stream {} has data {}b to send", connection.getConnectionId(), streamId, dataSize);
 
         try {
             trySendData(state.getSendQueue(), streamId, data);
@@ -408,7 +408,8 @@ public class StreamManager implements ConnectionStreamManager {
         if (state == null) return;
 
         if (connection.getState() != QuicConnection.State.ESTABLISHED) {
-            throw new QuicStreamException("Connection is in wrong state " + connection.getState());
+            logger.info("Connection is in wrong state " + connection.getState());
+            return;
         }
         if (!streamBuffers.containsKey(streamId)) {
             throw new QuicStreamException("Stream " + streamId + " does not exist");
@@ -479,7 +480,7 @@ public class StreamManager implements ConnectionStreamManager {
     /**
      * Sends DATA_BLOCKED frame to inform peer we're blocked at connection level.
      */
-    void sendDataBlockedFrame(long limit, long streamId) {
+    void sendDataBlockedFrame(long limit) {
         PoolBuffer frame = StreamFrameWriter.encodeDataBlockedFrame(connection.getBufferPool(), limit);
         try {
             trySendData(serviceQueue, SERVICE_DATA, frame);

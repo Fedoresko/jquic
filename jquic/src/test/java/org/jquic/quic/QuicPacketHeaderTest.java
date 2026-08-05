@@ -20,9 +20,11 @@ import org.jquic.quic.buffers.PoolBuffer;
 import org.jquic.quic.crypto.NativeCrypto;
 import org.jquic.quic.crypto.QuicCrypto;
 import org.junit.jupiter.api.Test;
+
 import javax.crypto.Cipher;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.ByteBuffer;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 public class QuicPacketHeaderTest {
@@ -67,8 +69,7 @@ public class QuicPacketHeaderTest {
     public void testParseHandshakeHeaderNoProtection() {
         byte[] dcid = new byte[] {(byte) 0x11, (byte) 0x22, (byte) 0x33, (byte) 0x44};
         byte[] scid = new byte[] {(byte) 0x55, (byte) 0x66, (byte) 0x77, (byte) 0x88};
-        byte pnLen = 1; 
-        byte flags = (byte) (0xC0 | (0x02 << 4) | ((pnLen - 1) & 0x03)); // Long header, Handshake, pnLen=1
+        byte flags = (byte) (0xC0 | (0x02 << 4)); // Long header, Handshake, pnLen=1
         int version = 1;
         long payloadLen = 50;
         long pn = 500;
@@ -174,8 +175,7 @@ public class QuicPacketHeaderTest {
 
         // Test wrapping - next window
         largestPn = 200;
-        pnNbits = 8; // pnHalfWin = 128, pnWin = 256
-        truncatedPn = 50; 
+        truncatedPn = 50;
         // expectedPn = 201
         // candidatePn = (201 & ~0xFF) | 50 = 0 | 50 = 50.
         // candidatePn (50) <= 201 - 128 (73) is true.
@@ -184,8 +184,7 @@ public class QuicPacketHeaderTest {
 
         // Test wrapping - previous window
         largestPn = 300;
-        pnNbits = 8; // pnWin = 256, pnHalfWin = 128
-        truncatedPn = 250; 
+        truncatedPn = 250;
         // expectedPn = 301
         // candidatePn = (301 & ~0xFF) | 250 = 256 | 250 = 506.
         // candidatePn (506) > 301 + 128 (429) is true.
@@ -588,7 +587,7 @@ public class QuicPacketHeaderTest {
 
         // 4. Retry
         buf.clear();
-        flags = (byte) (0x80 | 0x40 | 0x00); // Long, Fixed, Retry (V2)
+        flags = (byte) (0x80 | 0x40); // Long, Fixed, Retry (V2)
         buf.put(flags);
         buf.putInt(QuicVersion.QUIC_VERSION_2.val);
         buf.put((byte) dcid.length).put(dcid);

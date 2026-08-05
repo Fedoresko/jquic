@@ -499,9 +499,7 @@ class FlightControlTest {
             } catch (QuicStreamException _) {}
         }
         
-        assertThrows(QuicStreamException.class, () -> {
-            flightControl.openOutgoingStream(41, QuicConnectionControl.StreamType.Bidirectional);
-        });
+        assertThrows(QuicStreamException.class, () -> flightControl.openOutgoingStream(41, QuicConnectionControl.StreamType.Bidirectional));
         
         // Peer increases limit
         flightControl.onMaxStreams(true, 20);
@@ -572,7 +570,7 @@ class FlightControlTest {
     }
 
     @Test
-    void testFlightControlFlowControlRFC() throws QuicStreamException {
+    void testFlightControlFlowControlRFC() {
         // Setup with different limits in transport parameters
         long tpMaxData = 8000;
         long tpMaxStreamDataBidiLocal = 2000;
@@ -599,25 +597,26 @@ class FlightControlTest {
 
         FlightControl fc = new FlightControl(serverLimits, clientLimits, streamManager);
 
-        // --- RFC 9000 Compliance check ---
+        // RFC 9000 Compliance check ---
         // RFC 9000 Section 4.5: initial_max_stream_data_bidi_remote 
         // applies to bidirectional streams initiated by the peer.
         // Peer-initiated Bidi stream ID 0.
         fc.incomingStream(0); 
 
-        // Current FlightControl bug: it uses serverInitialLimits.maxStreamDataBidiRemote (5000) for sending
-        // instead of clientInitialLimits.maxStreamDataBidiRemote (3000).
-        // It also uses clientInitialLimits.maxStreamDataBidiLocal (2000) for receiving
-        // instead of serverInitialLimits.maxStreamDataBidiRemote (5000).
+        // Peer-initiated Bidi:
+        // Sending limit should be peer's max_stream_data_bidi_local (2000)
+        // Receiving limit should be our max_stream_data_bidi_remote (5000)
         
-        // These assertions reflect the current (buggy) behavior to keep tests green
+        // These assertions reflect the correct behavior
         StreamState state = fc.incomingStream(0);
-        assertTrue(fc.canSend(state, 5000), "Bug: Uses our advertised remote limit for sending");
-        assertFalse(fc.isReceiveCapReached(state, 0, 2000), "Bug: Uses peer's local limit for our receiving");
+        assertTrue(fc.canSend(state, 2000), "Uses peer's local limit for sending");
+        assertFalse(fc.canSend(state, 2001), "Uses peer's local limit for sending");
+        assertFalse(fc.isReceiveCapReached(state, 0, 5000), "Uses our advertised remote limit for our receiving");
+        assertTrue(fc.isReceiveCapReached(state, 0, 5001), "Uses our advertised remote limit for our receiving");
     }
 
     @Test
-    void testStreamLimitEnforcementRFC() throws QuicStreamException {
+    void testStreamLimitEnforcementRFC() {
         ConnectionMetadata.InitialStreamLimits serverLimits = new ConnectionMetadata.InitialStreamLimits();
         serverLimits.maxBidi = 2; // We allow 2 bidi streams from peer
         serverLimits.maxUni = 2;  // We allow 2 uni streams from peer
@@ -640,7 +639,7 @@ class FlightControlTest {
     }
 
     @Test
-    void testStreamIdClassificationAndLimits() throws QuicStreamException {
+    void testStreamIdClassificationAndLimits() {
         ConnectionMetadata.InitialStreamLimits serverLimits = new ConnectionMetadata.InitialStreamLimits();
         serverLimits.maxBidi = 2;
         serverLimits.maxUni = 2;
@@ -708,7 +707,7 @@ class FlightControlTest {
         // Stream 1 still has 1000 bytes capacity (10000 - 9000).
         // But connection is full (10000 - 10000).
         assertFalse(fc.canSend(state1, 1)); 
-        verify(streamManager, atLeastOnce()).sendDataBlockedFrame(anyLong(), anyLong());
+        verify(streamManager, atLeastOnce()).sendDataBlockedFrame(anyLong());
     }
 }
 
