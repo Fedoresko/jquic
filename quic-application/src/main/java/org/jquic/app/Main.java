@@ -15,6 +15,7 @@
  */
 package org.jquic.app;
 
+import org.jquic.hqinterop.HqInteropProtocol;
 import org.jquic.http3.Http3Request;
 import org.jquic.http3.Http3Response;
 import org.jquic.http3.Http3Server;
@@ -24,6 +25,7 @@ import org.jquic.quic.QuicServerConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.File;
 import java.io.IOException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -93,6 +95,9 @@ public class Main {
         // 2. Build and start the HTTP/3 server with test request handler
         Http3Server http3Server = new Http3Server(Main::handleRequest);
         http3Server.start();
+ 
+        // 2.1 Register hq-interop protocol for interop testing
+        QuicEngine.getStreamEngine().registerProtocol(new HqInteropProtocol(Main::handleHqRequest));
 
         // 3. Start the HTTPS/1.1 bootstrap server on TCP 4433
         KeystoreManager keystoreManager = new KeystoreManager(QuicServerConfig.createDefault());
@@ -126,15 +131,44 @@ public class Main {
      */
     private static Http3Response handleRequest(Http3Request request) {
         logger.debug("Handling {} {}", request.getMethod(), request.getPath());
-
+ 
         return switch (request.getPath()) {
-            case "/health" -> handleHealth(request);
-            case "/hello"  -> handleHello(request);
+            case "/health" -> handleHealth();
+            case "/hello"  -> handleHello();
             case "/echo"   -> handleEcho(request);
-            case "/bootstrap" -> handleBootstrap(request);
+            case "/bootstrap" -> handleBootstrap();
             case "/bmloadw" -> handleJpg(request);
             default -> handleResource(request);
         };
+    }
+
+    private static byte[] handleHqRequest(String path) {
+        logger.info("Handling hq-interop request for path: {}", path);
+        byte[] data = getResourceData(path);
+        if (data == null) {
+            return "Not Found".getBytes(StandardCharsets.UTF_8);
+        }
+        return data;
+    }
+
+    private static byte[] getResourceData(String path) {
+        MemorySegment segment = resources.get(path);
+        if (segment == null) {
+            File f = new File("/www" + path);
+            if (f.exists()) {
+                try (FileChannel fc = FileChannel.open(f.toPath(), StandardOpenOption.READ)) {
+                    MemorySegment fsegment = fc.map(FileChannel.MapMode.READ_ONLY, 0, fc.size(), arena);
+                    resources.put(path, fsegment);
+                    segment = fsegment;
+                } catch (IOException e) {
+                    logger.error("Can't open file {}", path, e);
+                    return null;
+                }
+            } else {
+                return null;
+            }
+        }
+        return segment.toArray(ValueLayout.OfByte.JAVA_BYTE);
     }
 
     private static Http3Response handleJpg(Http3Request request) {
@@ -179,15 +213,15 @@ public class Main {
                 return new Http3Response(500, "text/plain; charset=utf-8", "Internal Server Error".getBytes(StandardCharsets.UTF_8), List.of());
             }
         } else if (requestMethod.equals("GET")) {
-            MemorySegment segment = resources.get(path);
-            if (segment == null) {
+            byte[] data = getResourceData(path);
+            if (data == null) {
                 return new Http3Response(404, "text/plain; charset=utf-8", "Not Found".getBytes(StandardCharsets.UTF_8), List.of());
             }
 
             logger.warn("Resource {} has been successfully retrieved", path);
 
             return new Http3Response(200, "application/octet-stream",
-                    segment.toArray(ValueLayout.OfByte.JAVA_BYTE),
+                    data,
                     List.of(new AbstractMap.SimpleEntry<>("access-control-allow-origin", "*")));
         } else {
             return new Http3Response(405, "text/plain; charset=utf-8", "Method Not Allowed".getBytes(StandardCharsets.UTF_8),
@@ -195,7 +229,7 @@ public class Main {
         }
     }
 
-    private static Http3Response handleBootstrap(Http3Request request) {
+    private static Http3Response handleBootstrap() {
         return Http3Response.json(
                 String.format("{\"protocol\":\"h3\",\"host\":\"0.0.0.0\",\"port\":%d,\"timestamp\":\"%s\"}",
                 4433, Instant.now()),
@@ -207,12 +241,12 @@ public class Main {
     }
 
     /** GET /health - simple liveness probe */
-    private static Http3Response handleHealth(Http3Request request) {
+    private static Http3Response handleHealth() {
         return Http3Response.ok("OK", List.of());
     }
 
     /** GET /hello - friendly greeting */
-    private static Http3Response handleHello(Http3Request request) {
+    private static Http3Response handleHello() {
         String body = "Hello from QUIC/HTTP3 server! Server time: " + Instant.now();
         return Http3Response.ok(body,
                 List.of(

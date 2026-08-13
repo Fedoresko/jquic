@@ -721,16 +721,16 @@ public class QuicCrypto {
         // -- ALPN extension (0x0010, RFC 7301) ------------------------------------
         // Only include if a protocol was negotiated.
         output.write((byte) 0x00);
-        output.write((byte) 0x10);  // extension type: ALPN
-        int totalLen = QuicEngine.getStreamEngine().getProtocols()
-                .stream().map(QuicApplicationProtocol::getProtocolName)
-                .mapToInt(String::length).sum();
-        totalLen += QuicEngine.getStreamEngine().getProtocols().size();
-        output.writeShort((short) (totalLen + 2));  // extension data length
-        output.writeShort((short) totalLen);  // ProtocolNameList length
-        for (QuicApplicationProtocol protocol : QuicEngine.getStreamEngine().getProtocols()) {
-            output.write((byte) protocol.getProtocolName().length());
-            output.write(protocol.getProtocolName().getBytes());
+        Optional<QuicApplicationProtocol> protocol = QuicEngine.getStreamEngine().getProtocols().stream()
+                .filter(p -> p.getProtocolName().equals(metadata.clientMetadata.alpn)).findFirst();
+
+        if (protocol.isPresent()) {
+            output.write((byte) 0x10);  // extension type: ALPN
+            int totalLen = protocol.get().getProtocolName().length() + 1;
+            output.writeShort((short) (totalLen + 2));  // extension data length
+            output.writeShort((short) totalLen);  // ProtocolNameList length
+            output.write((byte) protocol.get().getProtocolName().length());
+            output.write(protocol.get().getProtocolName().getBytes());
         }
 
         // -- QUIC transport parameters extension (0x0039, RFC 9001 В§8.2) ----------

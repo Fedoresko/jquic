@@ -1,5 +1,5 @@
 ARG BASE_IMAGE=martenseemann/quic-network-simulator-endpoint:latest
-ARG JAR_FILE=build/libs/quic-application-1.0-SNAPSHOT-all.jar
+ARG JAR_FILE=build/libs/quic-application-1.0-all.jar
 ARG ENTRYPOINT_SCRIPT=/app/start.sh
 
 # --- Stage 1: Temporary Workspace (Will be completely discarded) ---
@@ -74,5 +74,6 @@ COPY ./src/main/docker/start.sh /app/start.sh
 COPY ./src/main/docker/run_endpoint.sh /app/run_endpoint.sh
 RUN chmod 755 /app/start.sh /app/run_endpoint.sh
 
-# Set the execution entry point
-ENTRYPOINT ["/app/start.sh"]
+ARG ENTRYPOINT_SCRIPT
+ENV FINAL_ENTRYPOINT=$ENTRYPOINT_SCRIPT
+ENTRYPOINT $FINAL_ENTRYPOINT

@@ -98,6 +98,8 @@ public class StreamManager implements ConnectionStreamManager {
             if (ackedFrameType >= 0x08 && ackedFrameType <= 0x0f) {
                 boolean hasLength = (ackedFrameType & 0x02) != 0;
                 long streamId = QuicVarint.read(payload);
+                boolean hasOffset = (ackedFrameType & 0x04) != 0;
+                if (hasOffset) QuicVarint.read(payload);
                 long length = (hasLength) ? QuicVarint.read(payload) : payload.remaining();
 
                 streamWorker.enqueueAck(this, streamId, length);

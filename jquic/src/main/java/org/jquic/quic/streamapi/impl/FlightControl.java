@@ -465,7 +465,7 @@ public class FlightControl {
 
         state.addSentBytes(dataSize); // Also updates stream in-flight
         totalInFlightBytes.addAndGet(dataSize);
-        logger.debug("Add sent {} bytes for stream {} now it has {} and total sent {}", dataSize, state.getStreamId(), state.getSentBytes(), totalInFlightBytes);
+        logger.debug("Add sent {} bytes for stream {} now it has {} and total in-flight {}", dataSize, state.getStreamId(), state.getSentBytes(), totalInFlightBytes);
     }
 
     /**

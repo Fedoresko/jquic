@@ -53,7 +53,7 @@ public class SelectorThread extends Thread {
     private final AppDataPriorityQueue appDataPriorityQueue = new AppDataPriorityQueue();
     private final ConcurrentHashMap<Long, Integer> cidToSelectorMap;
     private final Map<Long, QuicConnection> activeConnections;
-    private final Map<byte[], QuicConnection> initializingConnections = new HashMap<>();
+    private final Map<ByteBuffer, QuicConnection> initializingConnections = new HashMap<>();
 
     private final BufferPool bufferPool = new BufferPool();
     private final TimerWheelScheduler timerWheelScheduler = new TimerWheelScheduler(System.nanoTime());
@@ -363,7 +363,7 @@ public class SelectorThread extends Thread {
 
                 if (connection == null) {
                     logger.warn("Selector-{}: No connection found for CID: {}, discarding datagram", threadId, cid);
-                    evictConnection(cid);
+                    cidToSelectorMap.remove(cid);
                     break;
                 }
 
@@ -437,7 +437,7 @@ public class SelectorThread extends Thread {
 
             assignConnectionToSelector(connection.getConnectionId());
 
-            byte[] dcidKey = task.packetSummary.dcid();
+            ByteBuffer dcidKey = ByteBuffer.wrap(task.packetSummary.dcid());
             initializingConnections.put(dcidKey, connection);
 
             processDatagram(now, task.packet, task.sender, "initial", 0);

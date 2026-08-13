@@ -25,7 +25,7 @@ import com.bmuschko.gradle.docker.tasks.image.DockerPushImage
 group = 'org.jquic'
 version = '1.0'
 
-def dockerRepo = project.findProperty('dockerRepo') ?: 'org.jquic'
+def dockerRepo = project.findProperty('dockerRepo') ?: 'fedoresko'
 def dockerImageTag = project.findProperty('dockerImageTag') ?: version
 
 repositories {
@@ -33,13 +33,16 @@ repositories {
     mavenLocal()
 }
 
+def sampleServerImageName = "${dockerRepo}/jquic-sample-server:${dockerImageTag}"
+def interopServerImageName = "${dockerRepo}/jquic-interop-server:${dockerImageTag}"
+
 tasks.register('buildSampleServerImage', DockerBuildImage) {
     group = 'docker'
     description = 'Builds the jquic-sample-server image.'
     dependsOn shadowJar
 
     inputDir = project.projectDir
-    images.add("${dockerRepo}/jquic-sample-server:${dockerImageTag}")
+    images.add(sampleServerImageName)
     buildArgs.put('JAR_FILE', "build/libs/${tasks.shadowJar.archiveFileName.get()}")
     buildArgs.put('BASE_IMAGE', 'debian:trixie-slim')
     buildArgs.put('ENTRYPOINT_SCRIPT', '/app/start.sh')
@@ -51,7 +54,7 @@ tasks.register('buildInteropServerImage', DockerBuildImage) {
     dependsOn shadowJar
 
     inputDir = project.projectDir
-    images.add("${dockerRepo}/jquic-interop-server:${dockerImageTag}")
+    images.add(interopServerImageName)
     buildArgs.put('JAR_FILE', "build/libs/${tasks.shadowJar.archiveFileName.get()}")
     buildArgs.put('BASE_IMAGE', 'martenseemann/quic-network-simulator-endpoint:latest')
     buildArgs.put('ENTRYPOINT_SCRIPT', '/app/run_endpoint.sh')
@@ -62,7 +65,7 @@ tasks.register('pushSampleServerImage', DockerPushImage) {
     description = 'Pushes the jquic-sample-server image to the repository.'
     dependsOn 'buildSampleServerImage'
 
-    images.add("${dockerRepo}/jquic-sample-server:${dockerImageTag}")
+    images.add(sampleServerImageName)
 }
 
 tasks.register('pushInteropServerImage', DockerPushImage) {
@@ -70,7 +73,7 @@ tasks.register('pushInteropServerImage', DockerPushImage) {
     description = 'Pushes the jquic-interop-server image to the repository.'
     dependsOn 'buildInteropServerImage'
 
-    images.add("${dockerRepo}/jquic-interop-server:${dockerImageTag}")
+    images.add(interopServerImageName)
 }
 
 tasks.register('runShadowJar', JavaExec) {
@@ -97,6 +100,7 @@ tasks.register('runShadowJar', JavaExec) {
 dependencies {
     implementation 'ch.qos.logback:logback-classic:1.5.38'
     implementation project(':http3')
+    implementation project(':hq-interop')
 
     testImplementation platform('org.junit:junit-bom:5.10.0')
     testImplementation 'org.junit.jupiter:junit-jupiter'

@@ -285,9 +285,9 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
                         handleDecoderStream(streamId, response, data, isLastData, context);
                 case Http3ClientStreamRole.GREASE -> {
                     logger.debug("Grease stream {} data received ({} bytes) - discarding", streamId, data.length);
-                    handleEnding(streamId, data, isLastData, context);
+                    handleEnding(streamId, isLastData, context);
                 }
-                case Http3ClientStreamRole.UNKNOWN -> handleEnding(streamId, data, isLastData, context);
+                case Http3ClientStreamRole.UNKNOWN -> handleEnding(streamId, isLastData, context);
                 default -> throw new IllegalStateException("Unexpected value: " + role);
             }
         }
@@ -334,7 +334,7 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
         return true;
     }
 
-    private void handleEnding(long streamId, byte[] data, boolean isLastData, Http3StreamContext context) {
+    private void handleEnding(long streamId, boolean isLastData, Http3StreamContext context) {
         if (isLastData) finishStream(streamId);
         try {
             context.readAllBytes();
@@ -369,7 +369,7 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
             }
         }
 
-        handleEnding(streamId, data, isLastData, context);
+        handleEnding(streamId, isLastData, context);
     }
 
     private void handleEncoderStream(long streamId, @NonNull QuicConnectionControl response, byte[] data, boolean isLastData, Http3StreamContext context) {
@@ -402,7 +402,7 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
 
         // RFC 9204 §4.2: QPACK streams do not use HTTP/3 framing.
         // Just discard the raw bytes for now.
-        handleEnding(streamId, data, isLastData, context);
+        handleEnding(streamId, isLastData, context);
     }
 
     private void handleControlStream(long streamId, @NonNull QuicConnectionControl response, byte[] data, boolean isLastData, Http3StreamContext context) {
@@ -436,6 +436,7 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
                     }
                     Map<Long, Long> settings = parseSettingsPayload(frame.payload());
                     handleSettings(settings);
+                    firstFrames = false;
                 } else {
                     if (frame.type() == 0x04 /* SETTINGS */) {
                         // RFC 9114 §7.2.4: Only one SETTINGS frame is allowed.
