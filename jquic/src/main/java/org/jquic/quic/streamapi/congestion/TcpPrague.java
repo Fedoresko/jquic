@@ -15,6 +15,7 @@
  */
 package org.jquic.quic.streamapi.congestion;
 
+import org.jquic.quic.linux.ECT;
 import org.jquic.quic.streamapi.CongestionControl;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -162,6 +163,11 @@ public class TcpPrague implements CongestionControl {
 
     double getAlpha() {
         return alpha;
+    }
+
+    @Override
+    public ECT getEctMarking() {
+        return ECT.ECT_1;
     }
 }
 

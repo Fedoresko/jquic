@@ -16,6 +16,7 @@
 package org.jquic.quic;
 
 import org.jquic.quic.buffers.PoolBuffer;
+import org.jquic.quic.linux.ECT;
 import org.jquic.quic.linux.LinuxEcnSocket;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
@@ -55,11 +56,11 @@ public class QuicDatagramChannel {
         }
     }
 
-    public int send(ByteBuffer src, SocketAddress target)
+    public int send(ByteBuffer src, SocketAddress target, ECT ectMarking)
             throws IOException {
         if (socket != null) {
             InetSocketAddress socketAddress = (InetSocketAddress)target;
-            return (int) socket.send(src, buildSockAddr(socketAddress.getAddress().getAddress(), socketAddress.getPort()));
+            return (int) socket.send(src, buildSockAddr(socketAddress.getAddress().getAddress(), socketAddress.getPort()), ectMarking);
         } else {
             return channel.send(src, target);
         }

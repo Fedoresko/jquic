@@ -16,6 +16,7 @@
 package org.jquic.quic;
 
 import org.jquic.quic.buffers.PoolBuffer;
+import org.jquic.quic.linux.ECT;
 
-public record OutboundPacket(PacketSource packetSource, PoolBuffer data) {
+public record OutboundPacket(PacketSource packetSource, PoolBuffer data, ECT ectMarking) {
 }

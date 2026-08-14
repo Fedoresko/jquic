@@ -18,6 +18,7 @@ package org.jquic.quic;
 import org.jquic.quic.buffers.BufferPool;
 import org.jquic.quic.buffers.PoolBuffer;
 import org.jquic.quic.buffers.RootPoolBuffer;
+import org.jquic.quic.linux.ECT;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -63,7 +64,7 @@ class QuicDatagramChannelTest {
         ByteBuffer sendBuf = ByteBuffer.wrap(message.getBytes());
         SocketAddress serverAddr = serverChannel.getLocalAddress();
 
-        quicClientChannel.send(sendBuf, serverAddr);
+        quicClientChannel.send(sendBuf, serverAddr, ECT.NONE);
 
         ByteBuffer recvBuf = ByteBuffer.allocate(1024);
         int[] metrics = new int[1];
@@ -81,7 +82,7 @@ class QuicDatagramChannelTest {
         SocketAddress serverAddr = serverChannel.getLocalAddress();
 
         for (int i = 0; i < count; i++) {
-            data.add(new SelectorThread.PacketToSend(serverAddr, new RootPoolBuffer(ByteBuffer.wrap(("Message " + i).getBytes()), mock(BufferPool.class),false).borrow()));
+            data.add(new SelectorThread.PacketToSend(serverAddr, new RootPoolBuffer(ByteBuffer.wrap(("Message " + i).getBytes()), mock(BufferPool.class),false).borrow(), ECT.NONE));
         }
 
         int sent = quicClientChannel.sendBatch(data);

@@ -22,6 +22,7 @@ import org.jctools.queues.SpscLinkedQueue;
 import org.jquic.quic.buffers.BufferPool;
 import org.jquic.quic.buffers.PoolBuffer;
 import org.jquic.quic.linux.BpfRouting;
+import org.jquic.quic.linux.ECT;
 import org.jquic.quic.streamapi.impl.ApplicationData;
 import org.jquic.quic.struct.*;
 import org.slf4j.Logger;
@@ -76,7 +77,7 @@ public class SelectorThread extends Thread {
         return bufferPool;
     }
 
-    public record PacketToSend(SocketAddress socketAddress, PoolBuffer poolBuffer) {}
+    public record PacketToSend(SocketAddress socketAddress, PoolBuffer poolBuffer, ECT ectMarking) {}
 
     /**
      * Encapsulates a packet with its sender address for forwarding between threads.
@@ -283,7 +284,7 @@ public class SelectorThread extends Thread {
     private void pollConnectionDataAndSend(QuicConnection conn) {
         OutboundPacket outbound;
         while ((outbound = conn.pollOutbound()) != null) {
-            packetsToSendPerConnection.add(new PacketToSend(conn.getRemoteAddress(), outbound.data()));
+            packetsToSendPerConnection.add(new PacketToSend(conn.getRemoteAddress(), outbound.data(), outbound.ectMarking()));
             switch (outbound.packetSource()) {
                 case NEW -> sentPackets++;
                 case RETRANSMISSION -> retransmittedPackets++;
@@ -333,7 +334,7 @@ public class SelectorThread extends Thread {
                     if (datagram.buf().remaining() >= 1200) { // Minimum packet size requirement
                         PoolBuffer vnPacket = QuicPacketBuilder.buildVersionNegotiationPacket(bufferPool, packetSummary.scid(), packetSummary.dcid());
                         try {
-                            channel.send(vnPacket.buf(), sender);
+                            channel.send(vnPacket.buf(), sender, ECT.NONE);
                         } catch (Exception e) {
                             logger.error("Failed to send Version Negotiation packet", e);
                         }
@@ -380,11 +381,11 @@ public class SelectorThread extends Thread {
                     switch (packetSummary.type()) {
                         case INITIAL -> {
                             logger.debug("Selector-{}: Processing Initial packet for CID: {}", threadId, cid);
-                            connection.processInitialAndRespond(datagram);
+                            connection.processInitialAndRespond(datagram, ecnFlags);
                         }
                         case HANDSHAKE ->  { // Handshake packet (0b10)
                             logger.debug("Selector-{}: Processing Handshake packet for CID: {}", threadId, cid);
-                            connection.processHandshakePacket(datagram);
+                            connection.processHandshakePacket(datagram, ecnFlags);
                         }
                         case ONE_RTT -> {
                             logger.debug("Selector-{}: Processing 1-RTT packet for CID: {} from: {}", threadId, cid, sender);

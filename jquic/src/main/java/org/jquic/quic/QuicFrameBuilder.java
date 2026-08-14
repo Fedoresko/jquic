@@ -115,20 +115,6 @@ public class QuicFrameBuilder {
         writeAckFrameWithRanges(largestAcknowledged, ackDelay, ackRanges, out);
     }
 
-//    /**
-//     * Creates a CRYPTO frame with the given data.
-//     */
-//    public static ByteBuffer createCryptoFrame(long offset, ByteBuffer data) {
-//        // CRYPTO frame: type(varint) | offset(varint) | length(varint) | data
-//        ByteBuffer frame = ByteBuffer.allocate(CRYPTO_FRAME_MAX_HEADER_LENGTH + data.remaining());
-//        frame.put((byte) 0x06); // CRYPTO frame type
-//        QuicVarint.write(frame, offset);
-//        QuicVarint.write(frame, data.remaining());
-//        frame.put(data);
-//        frame.flip();
-//        return frame;
-//    }
-
     public static void prependPingFrame(ByteBuffer data) {
         data.position(data.position() - 1);
         data.put((byte) 0x01);

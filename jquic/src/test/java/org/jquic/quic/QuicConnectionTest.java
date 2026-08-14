@@ -181,7 +181,7 @@ class QuicConnectionTest {
 
         // Step 1: Process Initial packet (ClientHello)
         PoolBuffer initialPacket = createMockInitialPacket();
-        connection.processInitialAndRespond(initialPacket);
+        connection.processInitialAndRespond(initialPacket, 0);
         List<ByteBuffer> initialResponses = getOutboundPackets(connection);
 
         assertFalse(initialResponses.isEmpty(), "Initial response should be generated");
@@ -192,7 +192,7 @@ class QuicConnectionTest {
 
         // Step 2: Process Handshake packet (client Finished)
         ByteBuffer handshakePacket = createMockHandshakePacket();
-        connection.processHandshakePacket(new RootPoolBuffer(handshakePacket, pool, false));
+        connection.processHandshakePacket(new RootPoolBuffer(handshakePacket, pool, false), 0);
         List<ByteBuffer> handshakeResponses = getOutboundPackets(connection);
 
         assertNotNull(handshakeResponses, "Handshake response should be generated");
@@ -219,7 +219,7 @@ class QuicConnectionTest {
 
         // Process Initial packet with invalid ClientHello
         PoolBuffer initialPacket = createMockInitialPacket();
-        connection.processInitialAndRespond(initialPacket);
+        connection.processInitialAndRespond(initialPacket, 0);
         List<ByteBuffer> responses = getOutboundPackets(connection);
 
         // Verify CONNECTION_CLOSE was sent
@@ -236,7 +236,7 @@ class QuicConnectionTest {
         // Don't setup metadata - connection will reject due to wrong state
 
         ByteBuffer handshakePacket = createMockHandshakePacket();
-        connection.processHandshakePacket(new RootPoolBuffer(handshakePacket, pool, false));
+        connection.processHandshakePacket(new RootPoolBuffer(handshakePacket, pool, false), 0);
         List<ByteBuffer> responses = getOutboundPackets(connection);
 
         assertTrue(responses.isEmpty(), "Handshake packet should be rejected in INITIAL state");
@@ -260,7 +260,7 @@ class QuicConnectionTest {
         // Process Handshake packet with invalid Finished message
         ByteBuffer handshakePacket = createMockHandshakePacket();
         getOutboundPackets(connection);
-        connection.processHandshakePacket(new RootPoolBuffer(handshakePacket, pool, false));
+        connection.processHandshakePacket(new RootPoolBuffer(handshakePacket, pool, false), 0);
         List<ByteBuffer> responses = getOutboundPackets(connection);
 
         // Verify packet was silently discarded
@@ -718,7 +718,7 @@ class QuicConnectionTest {
         // This should trigger retransmission of packet 0 (more than 3 below largest acked)
         ByteBuffer handshakePacket = createMockHandshakePacketWithAck(3, new long[]{2, 3}, (byte) initialSpace.allocatePacketNumber());
 
-        connection.processHandshakePacket(new RootPoolBuffer(handshakePacket, pool, false));
+        connection.processHandshakePacket(new RootPoolBuffer(handshakePacket, pool, false), 0);
         List<ByteBuffer> responses = getOutboundPackets(connection);
 
 
@@ -806,7 +806,7 @@ class QuicConnectionTest {
         ByteBuffer handshakePacket = createMockHandshakePacketWithAck(4, new long[]{2, 3, 4}, (byte) initialSpace.allocatePacketNumber());
 
         // Process the ACK - should trigger retransmission of packet 0 with NEW packet number
-        connection.processHandshakePacket(new RootPoolBuffer(handshakePacket, pool, false));
+        connection.processHandshakePacket(new RootPoolBuffer(handshakePacket, pool, false), 0);
         List<ByteBuffer> responses = getOutboundPackets(connection);
 
         // Verify retransmissions were generated

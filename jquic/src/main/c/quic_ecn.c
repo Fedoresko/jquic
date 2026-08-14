@@ -145,11 +145,110 @@ int32_t send_batch_fast(int32_t fd, void** data_ptrs, int32_t* lengths, void** s
 
     if (res < 0) {
         int error_code = errno;
-        fprintf(stderr, "Fatal error on system call: %s (code %d)\n",
-                strerror(error_code), error_code);
+        if (error_code != EAGAIN && error_code != EWOULDBLOCK) {
+            fprintf(stderr, "Fatal error on system call: %s (code %d)\n",
+                    strerror(error_code), error_code);
+        }
     }
 
     return res;
+}
+
+int32_t send_batch_ecn(int32_t fd, void** data_ptrs, int32_t* lengths, void** sockaddr_ptrs, int32_t* ecn_flags, int32_t count) {
+    if (count <= 0 || count > 128) return 0;
+
+    struct mmsghdr msg_vec[128];
+    struct iovec io_vec[128];
+    char cmsg_bufs[128][CMSG_SPACE(sizeof(int))];
+
+    for (int32_t i = 0; i < count; i++) {
+        io_vec[i].iov_base = data_ptrs[i];
+        io_vec[i].iov_len = lengths[i];
+
+        memset(&msg_vec[i], 0, sizeof(struct mmsghdr));
+        msg_vec[i].msg_hdr.msg_name = sockaddr_ptrs[i];
+        // Note: Java code should pass correct sockaddr_storage or similar
+        // For simplicity and matching buildSockAddr, we assume 16 bytes for now if it's AF_INET
+        // but better use the actual length if known. Java buildSockAddr uses 16 bytes.
+        struct sockaddr *sa = (struct sockaddr *)sockaddr_ptrs[i];
+        msg_vec[i].msg_hdr.msg_namelen = (sa->sa_family == AF_INET6) ? sizeof(struct sockaddr_in6) : sizeof(struct sockaddr_in);
+        msg_vec[i].msg_hdr.msg_iov = &io_vec[i];
+        msg_vec[i].msg_hdr.msg_iovlen = 1;
+
+        if (ecn_flags[i] != 0) {
+            msg_vec[i].msg_hdr.msg_control = cmsg_bufs[i];
+            msg_vec[i].msg_hdr.msg_controllen = CMSG_SPACE(sizeof(int));
+            struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg_vec[i].msg_hdr);
+            
+            int ecn_val = 0;
+            if (ecn_flags[i] == 1) ecn_val = 0x03;      // CE
+            else if (ecn_flags[i] == 2) ecn_val = 0x01; // ECT(1)
+            else if (ecn_flags[i] == 4) ecn_val = 0x02; // ECT(0)
+
+            if (sa->sa_family == AF_INET6) {
+                cmsg->cmsg_level = IPPROTO_IPV6;
+                cmsg->cmsg_type = IPV6_TCLASS;
+            } else {
+                cmsg->cmsg_level = IPPROTO_IP;
+                cmsg->cmsg_type = IP_TOS;
+            }
+            cmsg->cmsg_len = CMSG_LEN(sizeof(int));
+            *(int *)CMSG_DATA(cmsg) = ecn_val;
+        }
+    }
+
+    int32_t res = sendmmsg(fd, msg_vec, count, 0);
+    if (res < 0) {
+        int error_code = errno;
+        if (error_code != EAGAIN && error_code != EWOULDBLOCK) {
+            fprintf(stderr, "Fatal error on send_batch_ecn: %s (code %d)\n",
+                    strerror(error_code), error_code);
+        }
+    }
+    return res;
+}
+
+int32_t send_ecn(int32_t fd, void* data_ptr, int32_t length, void* sockaddr_ptr, int32_t ecn_flag) {
+    struct iovec iov = { .iov_base = data_ptr, .iov_len = length };
+    struct msghdr msg = {0};
+    msg.msg_name = sockaddr_ptr;
+    
+    struct sockaddr *sa = (struct sockaddr *)sockaddr_ptr;
+    msg.msg_namelen = (sa->sa_family == AF_INET6) ? sizeof(struct sockaddr_in6) : sizeof(struct sockaddr_in);
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+
+    char cmsg_buf[CMSG_SPACE(sizeof(int))];
+    if (ecn_flag != 0) {
+        msg.msg_control = cmsg_buf;
+        msg.msg_controllen = sizeof(cmsg_buf);
+        struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
+
+        int ecn_val = 0;
+        if (ecn_flag == 1) ecn_val = 0x03;      // CE
+        else if (ecn_flag == 2) ecn_val = 0x01; // ECT(1)
+        else if (ecn_flag == 4) ecn_val = 0x02; // ECT(0)
+
+        if (sa->sa_family == AF_INET6) {
+            cmsg->cmsg_level = IPPROTO_IPV6;
+            cmsg->cmsg_type = IPV6_TCLASS;
+        } else {
+            cmsg->cmsg_level = IPPROTO_IP;
+            cmsg->cmsg_type = IP_TOS;
+        }
+        cmsg->cmsg_len = CMSG_LEN(sizeof(int));
+        *(int *)CMSG_DATA(cmsg) = ecn_val;
+    }
+
+    ssize_t res = sendmsg(fd, &msg, 0);
+    if (res < 0) {
+        int error_code = errno;
+        if (error_code != EAGAIN && error_code != EWOULDBLOCK) {
+            fprintf(stderr, "Fatal error on send_ecn: %s (code %d)\n",
+                    strerror(error_code), error_code);
+        }
+    }
+    return (int32_t)res;
 }
 
 // Structure matching the layout required to return packet information to Java

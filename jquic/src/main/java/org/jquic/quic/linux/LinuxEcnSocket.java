@@ -41,6 +41,8 @@ public class LinuxEcnSocket implements AutoCloseable {
     private static final MethodHandle quic_receive_batch_ecn;
     private static final MethodHandle quic_receive_batch_ecn_blocking;
     private static final MethodHandle send_batch_fast;
+    private static final MethodHandle send_batch_ecn;
+    private static final MethodHandle send_ecn;
     private static final MethodHandle send_to;
     private static final Logger log = LoggerFactory.getLogger(LinuxEcnSocket.class);
 
@@ -50,6 +52,8 @@ public class LinuxEcnSocket implements AutoCloseable {
         MethodHandle mh_batch = null;
         MethodHandle mh_batch_blocking = null;
         MethodHandle mh_send_batch = null;
+        MethodHandle mh_send_batch_ecn = null;
+        MethodHandle mh_send_ecn = null;
         MethodHandle mh3 = null;
         try {
             NativeUtil.loadLib("libquic_ecn");
@@ -69,7 +73,8 @@ public class LinuxEcnSocket implements AutoCloseable {
                     ValueLayout.JAVA_INT,
                     ValueLayout.JAVA_INT,
                     ValueLayout.ADDRESS,
-                    ValueLayout.JAVA_INT
+                    ValueLayout.JAVA_INT,
+                    ValueLayout.ADDRESS
             );
             MemorySegment symbolBlocking = lookup.find("quic_receive_ecn_blocking").orElseThrow();
             mh2 = Linker.nativeLinker().downcallHandle(symbolBlocking, blockingDescriptor);
@@ -105,6 +110,33 @@ public class LinuxEcnSocket implements AutoCloseable {
                     Linker.Option.critical(true)
             );
 
+            mh_send_batch_ecn = Linker.nativeLinker().downcallHandle(
+                    lookup.find("send_batch_ecn").orElseThrow(),
+                    FunctionDescriptor.of(
+                            ValueLayout.JAVA_INT,
+                            ValueLayout.JAVA_INT,
+                            ValueLayout.ADDRESS, // data_ptrs
+                            ValueLayout.ADDRESS, // lengths
+                            ValueLayout.ADDRESS, // sockaddr_ptrs
+                            ValueLayout.ADDRESS, // ecn_flags
+                            ValueLayout.JAVA_INT
+                    ),
+                    Linker.Option.critical(true)
+            );
+
+            mh_send_ecn = Linker.nativeLinker().downcallHandle(
+                    lookup.find("send_ecn").orElseThrow(),
+                    FunctionDescriptor.of(
+                            ValueLayout.JAVA_INT,
+                            ValueLayout.JAVA_INT,
+                            ValueLayout.ADDRESS, // data_ptr
+                            ValueLayout.JAVA_INT, // length
+                            ValueLayout.ADDRESS, // sockaddr_ptr
+                            ValueLayout.JAVA_INT  // ecn_flag
+                    ),
+                    Linker.Option.critical(true)
+            );
+
             FunctionDescriptor descForSendTo = FunctionDescriptor.of(
                     ValueLayout.JAVA_LONG,     // Return value: ssize_t
                     ValueLayout.JAVA_INT,      // sockfd
@@ -127,6 +159,8 @@ public class LinuxEcnSocket implements AutoCloseable {
         quic_receive_batch_ecn = mh_batch;
         quic_receive_batch_ecn_blocking = mh_batch_blocking;
         send_batch_fast = mh_send_batch;
+        send_batch_ecn = mh_send_batch_ecn;
+        send_ecn = mh_send_ecn;
         send_to = mh3;
     }
 
@@ -144,6 +178,7 @@ public class LinuxEcnSocket implements AutoCloseable {
     private final MemorySegment dataPtrsRcv = socketArena.allocate(ValueLayout.ADDRESS, 64);
     private final MemorySegment dataPtrs = socketArena.allocate(ValueLayout.ADDRESS, 128);
     private final MemorySegment lengthsSegment = socketArena.allocate(ValueLayout.JAVA_INT, 128);
+    private final MemorySegment ecnFlagsSegment = socketArena.allocate(ValueLayout.JAVA_INT, 128);
     private final MemorySegment sockaddrPtrs = socketArena.allocate(ValueLayout.ADDRESS, 128);
 
 
@@ -289,7 +324,7 @@ public class LinuxEcnSocket implements AutoCloseable {
         }
     }
 
-    public long send(ByteBuffer buffer, int[] sockaddr) throws IOException {
+    public long send(ByteBuffer buffer, int[] sockaddr, ECT ectMarking) throws IOException {
         // Wrap heap arrays as zero-length MemorySegments to feed the JNI/Panama interface
         // The JVM handles pinning under the hood via critical(true)
         try {
@@ -298,7 +333,14 @@ public class LinuxEcnSocket implements AutoCloseable {
                     : MemorySegment.ofArray(buffer.array()).asSlice(buffer.arrayOffset() + buffer.position(), buffer.remaining());
 
             MemorySegment addrSegment = MemorySegment.ofArray(sockaddr);
-            return (long) send_to.invokeExact(fd, bufSegment, (long) buffer.remaining(), 0, addrSegment, 16);
+
+            int ecn_flag = switch (ectMarking) {
+                case NONE -> 0;
+                case ECT_0 -> 4; // 1 << 2
+                case ECT_1 -> 2; // 1 << 1
+            };
+
+            return (int) send_ecn.invokeExact(fd, bufSegment, (int) buffer.remaining(), addrSegment, ecn_flag);
         } catch (Throwable t) {
             throw new IOException(t);
         }
@@ -308,6 +350,7 @@ public class LinuxEcnSocket implements AutoCloseable {
         try {
             int size = data.size();
             int i = 0;
+            boolean anyEcn = false;
             for (SelectorThread.PacketToSend entry : data) {
                 ByteBuffer buf = entry.poolBuffer().buf();
                 MemorySegment bufSeg = buf.isDirect()
@@ -316,12 +359,24 @@ public class LinuxEcnSocket implements AutoCloseable {
                 dataPtrs.setAtIndex(ValueLayout.ADDRESS, i, bufSeg);
                 lengthsSegment.setAtIndex(ValueLayout.JAVA_INT, i, buf.remaining());
 
+                int ecn_flag = switch (entry.ectMarking()) {
+                    case NONE -> 0;
+                    case ECT_0 -> 4; // 1 << 2
+                    case ECT_1 -> 2; // 1 << 1
+                };
+                ecnFlagsSegment.setAtIndex(ValueLayout.JAVA_INT, i, ecn_flag);
+                if (ecn_flag != 0) anyEcn = true;
+
                 InetSocketAddress isa = (InetSocketAddress) entry.socketAddress();
                 buildSockAddr(isa.getAddress().getAddress(), isa.getPort(), i);
                 sockaddrPtrs.setAtIndex(ValueLayout.ADDRESS, i, batchAddrs.asSlice(i * 16L, 16));
                 i++;
             }
-            return (int) send_batch_fast.invokeExact(fd, dataPtrs, lengthsSegment, sockaddrPtrs, size);
+            if (anyEcn) {
+                return (int) send_batch_ecn.invokeExact(fd, dataPtrs, lengthsSegment, sockaddrPtrs, ecnFlagsSegment, size);
+            } else {
+                return (int) send_batch_fast.invokeExact(fd, dataPtrs, lengthsSegment, sockaddrPtrs, size);
+            }
         } catch (Throwable t) {
             throw new IOException(t);
         }

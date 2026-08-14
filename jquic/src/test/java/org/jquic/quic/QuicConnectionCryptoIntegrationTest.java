@@ -138,7 +138,7 @@ class QuicConnectionCryptoIntegrationTest {
         );
 
         QuicConnection connection = new QuicConnection(TEST_CONNECTION_ID, QuicVersion.QUIC_VERSION_1, TEST_ADDRESS, new SpscLinkedQueue<>(), selectorMock);
-        connection.processInitialAndRespond(initialPacket);
+        connection.processInitialAndRespond(initialPacket, 0);
         List<ByteBuffer> responses = getOutboundPackets(connection);
 
         // Decryption succeeded and ClientHello was processed -> HANDSHAKE
@@ -190,7 +190,7 @@ class QuicConnectionCryptoIntegrationTest {
         } catch (Exception e) {}
 
         try {
-            connection.processInitialAndRespond(initialPacket);
+            connection.processInitialAndRespond(initialPacket, 0);
             List<ByteBuffer> responses = getOutboundPackets(connection);
 
             // Should be rejected due to invalid GCM tag (AEADBadTagException)
@@ -326,7 +326,7 @@ class QuicConnectionCryptoIntegrationTest {
         PoolBuffer initialPacket = QuicPacketBuilder.buildInitialPacket(QuicVersion.QUIC_VERSION_1, pool,
                 TEST_CID, TEST_CID_BUF, 0, 0, cryptoFrame, new NativeCrypto(initKeys[0]));
 
-        connection.processInitialAndRespond(initialPacket);
+        connection.processInitialAndRespond(initialPacket, 0);
 
         // Server should advance to HANDSHAKE state
         assertEquals(QuicConnection.State.HANDSHAKE, connection.getState(),
@@ -359,7 +359,7 @@ class QuicConnectionCryptoIntegrationTest {
         PoolBuffer handshakePacket = QuicPacketBuilder.buildHandshakePacket(QuicVersion.QUIC_VERSION_1, pool,
                 TEST_CID, TEST_CID_BUF, 0, 0, finishedCryptoFrame, meta.clientHandshakeCrypto);
 
-        connection.processHandshakePacket(handshakePacket);
+        connection.processHandshakePacket(handshakePacket, 0);
 
         assertEquals(QuicConnection.State.ESTABLISHED, connection.getState(),
             "Server state should be ESTABLISHED after client Finished");
@@ -419,7 +419,7 @@ class QuicConnectionCryptoIntegrationTest {
         QuicConnection connection = new QuicConnection(TEST_CONNECTION_ID, QuicVersion.QUIC_VERSION_1, TEST_ADDRESS, new SpscLinkedQueue<>(), selectorMock);
         PoolBuffer pb = new BorrowedPoolBuffer(mock(RootPoolBuffer.class), truncatedPacket);
         try {
-            connection.processInitialAndRespond(pb);
+            connection.processInitialAndRespond(pb, 0);
             List<ByteBuffer> responses = getOutboundPackets(connection);
 
             assertTrue(responses.isEmpty(), "Should reject truncated packet");

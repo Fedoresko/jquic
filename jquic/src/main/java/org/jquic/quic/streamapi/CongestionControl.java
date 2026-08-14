@@ -15,6 +15,8 @@
  */
 package org.jquic.quic.streamapi;
 
+import org.jquic.quic.linux.ECT;
+
 public interface CongestionControl {
     /**
      * Make a decision to delay packet sending.
@@ -48,5 +50,10 @@ public interface CongestionControl {
      * @return size in milliseconds
      */
     int timeWindowMs();
+
+    /**
+     * Marking that algorithm implies: ECT(0) is default, ECT(1) for algorithms like TcpPrague
+     */
+    default ECT getEctMarking() { return ECT.ECT_0; }
 }
 

@@ -22,6 +22,7 @@ import org.jquic.quic.buffers.PoolBuffer;
 import org.jquic.quic.buffers.TranscryptHashSupport;
 import org.jquic.quic.crypto.NativeCrypto;
 import org.jquic.quic.crypto.QuicCrypto;
+import org.jquic.quic.linux.ECT;
 import org.jquic.quic.streamapi.CongestionControl;
 import org.jquic.quic.streamapi.ConnectionStreamManager;
 import org.jquic.quic.streamapi.QuicApplicationProtocol;
@@ -384,7 +385,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
         return applicationSpace;
     }
 
-    private PoolBuffer processInitialPacket(PoolBuffer packet) {
+    private PoolBuffer processInitialPacket(PoolBuffer packet, int ecnFlags) {
         // RFC 9001 Section 5.2: Initial keys are derived deterministically from the DCID.
         // They carry no per-connection secret, so there is no need to store them as fields.
         int packetLen = packet.buf().remaining();
@@ -412,7 +413,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
             return null;
         }
 
-        initialSpace.onPacketReceived(currentTimestamp, header.packetNumber, 0);
+        initialSpace.onPacketReceived(currentTimestamp, header.packetNumber, ecnFlags);
 
         int remaining = packet.buf().remaining();
         try {
@@ -459,7 +460,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
      * This completes the QUIC handshake (RFC 9000 Section 7).
      * The packet buffer position is advanced as data is read.
      */
-    void processHandshakePacket(PoolBuffer packet) {
+    void processHandshakePacket(PoolBuffer packet, int ecnFlags) {
         logger.debug("Processing Handshake packet for CID: {} in state: {}", connectionId, state);
 
         // RFC 9000: Handshake packets are only valid in HANDSHAKE state
@@ -498,7 +499,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
         }
 
         // Track received packet in Handshake space
-        handshakeSpace.onPacketReceived(currentTimestamp, header.packetNumber, 0);
+        handshakeSpace.onPacketReceived(currentTimestamp, header.packetNumber, ecnFlags);
 
         boolean needAck = false;
 
@@ -861,7 +862,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
 
         // Generate ACK packet if needed
         if (needsAck) {
-            send1RttAck(ecnFlags);
+            send1RttAck();
         }
     }
 
@@ -876,8 +877,9 @@ public class QuicConnection implements TimeoutHeap.Entry {
      * 4. Server responds: Handshake + 1-RTT (Certificate/Finished + HANDSHAKE_DONE)
      *
      * @param datagram The received datagram buffer containing Initial packet
+     * @param ecnFlags
      */
-    void processInitialAndRespond(PoolBuffer datagram) {
+    void processInitialAndRespond(PoolBuffer datagram, int ecnFlags) {
         if (state.get() == State.CLOSING || state.get() == State.CLOSED) {
             logger.warn("Connection is closing, no incoming packets processed");
             datagram.buf().position(datagram.buf().limit());
@@ -887,7 +889,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
         logger.debug("Processing Initial packet for CID: {} in state: {}", connectionId, state);
 
         // Step 1: Process Initial packet
-        PoolBuffer frames = processInitialPacket(datagram);
+        PoolBuffer frames = processInitialPacket(datagram, ecnFlags);
 
         boolean needAck = false;
 
@@ -1142,7 +1144,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
         // Track sent packet: store UNENCRYPTED payload for retransmission
         space.onPacketSent(currentTimestamp, packetNumber, payload, true);
 
-        outboundQueue.add(new OutboundPacket(retrasmit ? PacketSource.RETRANSMISSION : PacketSource.NEW, completePacket));
+        outboundQueue.add(new OutboundPacket(retrasmit ? PacketSource.RETRANSMISSION : PacketSource.NEW, completePacket, (congestionControl != null) ? congestionControl.getEctMarking() : ECT.ECT_0));
     }
 
     private void sendInitialPacket(PoolBuffer payload) {
@@ -1274,23 +1276,19 @@ public class QuicConnection implements TimeoutHeap.Entry {
 
     private void sendInitialAck() {
         PoolBuffer buffer = getBufferPool().requestWriteBuffer();
-        QuicFrameBuilder.writeAckFrame(initialSpace, currentTimestamp, buffer.buf());
+        QuicFrameBuilder.writeAckEcnFrame(initialSpace, currentTimestamp, buffer.buf());
         logger.debug("Sending ACK Initial packet");
         sendPacket(buffer, PacketNumberSpace.PacketPhase.INITIAL, false);
     }
     private void sendHandshakeAck() {
         PoolBuffer buffer = getBufferPool().requestWriteBuffer();
-        QuicFrameBuilder.writeAckFrame(handshakeSpace, currentTimestamp, buffer.buf());
+        QuicFrameBuilder.writeAckEcnFrame(handshakeSpace, currentTimestamp, buffer.buf());
         logger.debug("Sending Handshake ACK");
         sendPacket(buffer, PacketNumberSpace.PacketPhase.HANDSHAKE, false);
     }
-    private void send1RttAck(int ecnFlags) {
+    private void send1RttAck() {
         PoolBuffer buffer = getBufferPool().requestWriteBuffer();
-        if  (ecnFlags == 0) {
-            QuicFrameBuilder.writeAckFrame(applicationSpace, currentTimestamp, buffer.buf());
-        } else {
-            QuicFrameBuilder.writeAckEcnFrame(applicationSpace, currentTimestamp, buffer.buf());
-        }
+        QuicFrameBuilder.writeAckEcnFrame(applicationSpace, currentTimestamp, buffer.buf());
         logger.debug("Sending 1-RTT ACK");
         sendPacket(buffer, PacketNumberSpace.PacketPhase.APPLICATION, false);
     }
