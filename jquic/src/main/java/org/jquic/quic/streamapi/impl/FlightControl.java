@@ -45,7 +45,7 @@ public class FlightControl {
     private final int maxBidirectionalStreams;
     private final int maxUnidirectionalStreams;
     // Connection-level flow control - receiving side
-    private long totalMaxOffsetsSum = 0;
+    public long totalMaxOffsetsSum = 0;
     private final AtomicLong totalBufferedBytes = new AtomicLong(0); // Total bytes currently stored in all stream buffers
     // Connection-level flow control - sending side (in-flight bytes)
     private final AtomicLong totalInFlightBytes = new AtomicLong(0);
@@ -91,14 +91,13 @@ public class FlightControl {
 
     /**
      * Counterparty has acknowledged a stream packet, needed for counting total unacked data.
-     * @param ackTotalLength - acked payload size
      */
-    public void bytesAcked(long streamId, Long ackTotalLength) {
+    public void bytesAcked(long streamId, Long offset, Long length) {
         StreamState state = streams.get(streamId);
         if (state != null) {
-            state.onBytesAcknowledged(ackTotalLength);
+            long ackTotalLength = state.onBytesAcknowledged(offset, length);
+            totalInFlightBytes.addAndGet(-ackTotalLength);
         }
-        totalInFlightBytes.addAndGet(-ackTotalLength);
     }
 
     /**
@@ -106,15 +105,15 @@ public class FlightControl {
      * This method should update local stream byte counts and send max_data / max_stream_data frames.
      * @param freedBytes - size of payload
      */
-    public void byfferedBytesFreed(long streamId, long freedBytes) {
+    public void bufferedBytesFreed(long streamId, long freedBytes) {
         totalBufferedBytes.addAndGet(-freedBytes);
         StreamState streamState = streams.get(streamId);
         streamState.setBufferedBytes(streamState.getBufferedBytes() - freedBytes);
         updateMaxDataIfNeeded();
-        upadteStreamMaxDataIfNeeded(streamId, streamState);
+        updateStreamMaxDataIfNeeded(streamId, streamState);
     }
 
-    private void upadteStreamMaxDataIfNeeded(long streamId, StreamState streamState) {
+    private void updateStreamMaxDataIfNeeded(long streamId, StreamState streamState) {
         long received = streamState.getMaxOffset();
         long limit = streamState.getRemoteMaxStreamData();
         long freeQueue = StreamManager.STREAM_BUFFER_CAPACITY - streamState.getBufferedBytes();
@@ -181,8 +180,8 @@ public class FlightControl {
         long streamId = state.getStreamId();
         if (!state.canSendBytes(dataSize)) {
             if (state.lastDataBlockedAt.get() < state.getMaxStreamData() + dataSize) {
-                logger.warn("Stream {} blocked by MAX_STREAM_DATA: sent={}, data={}, limit={}",
-                        streamId, state.getSentBytes(), dataSize, state.getMaxStreamData());
+                logger.warn("Stream {} blocked by MAX_STREAM_DATA: maxSentOffset={}, data={}, limit={}",
+                        streamId, state.getMaxSentOffset(), dataSize, state.getMaxStreamData());
                 streamManager.sendStreamDataBlockedFrame(streamId, state.getMaxStreamData());
                 state.lastDataBlockedAt.set(state.getMaxStreamData() + dataSize);
             }
@@ -397,7 +396,7 @@ public class FlightControl {
         }
 
         // Send RESET_STREAM in response
-        streamManager.sendResetStreamFrame(streamId, errorCode, state.getSentBytes());
+        streamManager.sendResetStreamFrame(streamId, errorCode, state.getMaxSentOffset());
 
         if (state.getState() == CLOSED && prevState != CLOSED) {
             decrementActiveStreamCount(streamId);
@@ -458,14 +457,14 @@ public class FlightControl {
 
     /**
      * Stream data sent into a stream. Used to update byte counts.
-     * @param dataSize - payload size
+     * @param offset - new offset
      */
-    public void addSentBytes(StreamState state, int dataSize) {
+    public void updateMaxSentOffset(StreamState state, long offset) {
         if (state == null) return;
 
-        state.addSentBytes(dataSize); // Also updates stream in-flight
-        totalInFlightBytes.addAndGet(dataSize);
-        logger.debug("Add sent {} bytes for stream {} now it has {} and total in-flight {}", dataSize, state.getStreamId(), state.getSentBytes(), totalInFlightBytes);
+        long grow = state.updateMaxSentOffset(offset); // Also updates stream in-flight
+        totalInFlightBytes.addAndGet(grow);
+        logger.debug("Updated max offset by {} bytes for stream {} now it has {} offset and total in-flight {}", grow, state.getStreamId(), state.getMaxSentOffset(), totalInFlightBytes);
     }
 
     /**
@@ -479,7 +478,7 @@ public class FlightControl {
 
         if (streamType == Bidirectional) {
             streamState.setState(StreamState.State.RESET_SENT);
-            streamManager.sendResetStreamFrame(streamId, errorCode, streamState.getSentBytes());
+            streamManager.sendResetStreamFrame(streamId, errorCode, streamState.getMaxSentOffset());
             streamManager.sendStopSendingFrame(streamId, errorCode);
         }
         else {
@@ -487,7 +486,7 @@ public class FlightControl {
                 streamManager.sendStopSendingFrame(streamId, errorCode);
             } else {
                 streamState.setState(StreamState.State.RESET_SENT);
-                streamManager.sendResetStreamFrame(streamId, errorCode, streamState.getSentBytes());
+                streamManager.sendResetStreamFrame(streamId, errorCode, streamState.getMaxSentOffset());
             }
         }
     }

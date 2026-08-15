@@ -185,7 +185,7 @@ public class PacketNumberSpace {
      * @param ceCounter    ECN contingency event counter
      */
     public void onAckReceived(long timestampMs, long largestAcked, List<AckRange> ackRanges, long ackDelay, AckCallback ackCallback, long ceCounter) {
-        logger.info("{}: ACK received for largest: {}, ranges: {}", phase, largestAcked, ackRanges.size());
+        logger.debug("{}: ACK received for largest: {}, ranges: {}", phase, largestAcked, ackRanges.size());
 
         if (serverCeCounter == -1) {
             serverCeCounter = ceCounter;

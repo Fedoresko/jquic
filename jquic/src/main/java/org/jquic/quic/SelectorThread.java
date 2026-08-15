@@ -169,7 +169,7 @@ public class SelectorThread extends Thread {
                         channel.receiveBatchBlocking(readBuffers) :
                         channel.receiveBatch(readBuffers);
 
-                if (!batch.isEmpty()) logger.debug("Selector-{}: Received {} datagrams in batch", threadId, batch.size());
+                if (!batch.isEmpty()) logger.info("Selector-{}: Received {} datagrams in batch", threadId, batch.size());
 
                 for (QuicDatagramChannel.ReceivedPacket packet : batch) {
                     if (packet.sender() != null) {
@@ -179,7 +179,7 @@ public class SelectorThread extends Thread {
                     packet.data().release();
                 }
 
-                if (receivedPackets != recievedPacketsAtStart) logger.trace("Selector-{}: Processed {} packets from batch", threadId, (receivedPackets - recievedPacketsAtStart));
+                if (receivedPackets != recievedPacketsAtStart) logger.info("Selector-{}: Processed {} packets from batch", threadId, (receivedPackets - recievedPacketsAtStart));
 
                 long revPBeforeFwd = receivedPackets;
                 // Process forwarded packets
@@ -188,7 +188,7 @@ public class SelectorThread extends Thread {
                     processDatagram(now, forwarded.buffer, forwarded.sender, "forwarded", 0);
                     hadWork = true;
                 }
-                if (receivedPackets != revPBeforeFwd) logger.trace("Selector-{}: Processed {} packets from forward", threadId, (receivedPackets - revPBeforeFwd));
+                if (receivedPackets != revPBeforeFwd) logger.info("Selector-{}: Processed {} packets from forward", threadId, (receivedPackets - revPBeforeFwd));
 
                 long revPBeforeHandshake = receivedPackets;
                 // It looks we are not handling new connections if too busy...
@@ -197,7 +197,7 @@ public class SelectorThread extends Thread {
                     processHandshakeTask(now, nowNs, handshakeTask);
                     hadWork = true;
                 }
-                if (receivedPackets != revPBeforeHandshake)  logger.trace("Selector-{}: Processed {} packets from Handshake", threadId, (receivedPackets - revPBeforeHandshake));
+                if (receivedPackets != revPBeforeHandshake)  logger.info("Selector-{}: Processed {} packets from Handshake", threadId, (receivedPackets - revPBeforeHandshake));
 
                 ArrayList<TimerWheelScheduler.ScheduledEvent> recordsToProcess = timerWheelScheduler.getNewRecords(nowNs);
 
@@ -212,7 +212,7 @@ public class SelectorThread extends Thread {
                 applicationWakeQueue.drain(rec -> appDataPriorityQueue.add(rec, nowNs));
 
                 int i = currentSendQueueSize;
-                if (currentSendQueueSize != 0) logger.trace("Selector-{}: Have {} response packets before taking application pkts", threadId, currentSendQueueSize);
+                if (currentSendQueueSize != 0) logger.info("Selector-{}: Have {} response packets before taking application pkts", threadId, currentSendQueueSize);
 
                 while (appDataPriorityQueue.nextTimestamp() < nowNs && i < MAX_SEND_BATCH) {
                     ApplicationData data = appDataPriorityQueue.poll(nowNs);
@@ -252,20 +252,19 @@ public class SelectorThread extends Thread {
     }
 
     private void sendAllCollectedPackets() throws IOException {
-        LinkedList<PacketToSend> entries = packetsToSendPerConnection;
-        if (!entries.isEmpty()) logger.trace("Selector-{}: Senging {} response packets", threadId, entries.size());
+        if (!packetsToSendPerConnection.isEmpty()) logger.info("Selector-{}: Senging {} response packets", threadId, packetsToSendPerConnection.size());
         try {
+            List<PacketToSend> entries = packetsToSendPerConnection.subList(0, Math.min(packetsToSendPerConnection.size(), MAX_SEND_BATCH));
             while (!entries.isEmpty()) {
                 int res = channel.sendBatch(entries);
                 if (res < 0) {
                     throw new IOException("Error enqueueing application packets code: " + res);
                 }
-                for (int j = 0; j < res; j++) {
-                    entries.poll();
-                }
+                entries = entries.subList(res, entries.size());
                 sentPackets += res;
             }
         } finally {
+            packetsToSendPerConnection.forEach(p->p.poolBuffer().release());
             packetsToSendPerConnection = new LinkedList<>();
         }
     }
@@ -284,6 +283,13 @@ public class SelectorThread extends Thread {
     private void pollConnectionDataAndSend(QuicConnection conn) {
         OutboundPacket outbound;
         while ((outbound = conn.pollOutbound()) != null) {
+//            try {
+//                channel.send(outbound.data().buf(), conn.getRemoteAddress(), outbound.ectMarking());
+//            } catch (IOException e) {
+//                logger.error("Selector-{}: Error while sending outbound packets", threadId, e);
+//            } finally {
+//                outbound.data().release();
+//            }
             packetsToSendPerConnection.add(new PacketToSend(conn.getRemoteAddress(), outbound.data(), outbound.ectMarking()));
             switch (outbound.packetSource()) {
                 case NEW -> sentPackets++;
@@ -401,7 +407,7 @@ public class SelectorThread extends Thread {
 
                     // Drain any packets the connection produced internally (e.g. early-1RTT
                     // replay triggered by the ESTABLISHED transition, or sendFrame() calls).
-                    logger.info("Selector-{}: Connection CID: {} sending {} response packets.", threadId, cid, connection.outboundQueueSize());
+                    logger.debug("Selector-{}: Connection CID: {} sending {} response packets.", threadId, cid, connection.outboundQueueSize());
 
                     pollConnectionDataAndSend(connection);
                 } catch (Exception e) {
@@ -553,7 +559,7 @@ public class SelectorThread extends Thread {
      public static void skipPacket(ByteBuffer datagram) {
         try {
             byte flags = datagram.get();
-            boolean isLongHeader = (flags & MAX_SEND_BATCH) != 0;
+            boolean isLongHeader = (flags & 0x80) != 0;
 
             if (!isLongHeader) {
                 // Short header has no length field - consume the rest of the datagram

@@ -174,7 +174,7 @@ public class LinuxEcnSocket implements AutoCloseable {
     // 4-7: remoteAddress (16 bytes)
     private final MemorySegment nativeMetadata = socketArena.allocate(ValueLayout.JAVA_INT, 8);
     private final MemorySegment batchMetadata = socketArena.allocate(ValueLayout.JAVA_INT, 10 * 64);
-    private final MemorySegment batchAddrs = socketArena.allocate(JAVA_BYTE, 16 * 128);
+    private final MemorySegment batchAddrs = socketArena.allocate(JAVA_BYTE, 28 * 128);
     private final MemorySegment dataPtrsRcv = socketArena.allocate(ValueLayout.ADDRESS, 64);
     private final MemorySegment dataPtrs = socketArena.allocate(ValueLayout.ADDRESS, 128);
     private final MemorySegment lengthsSegment = socketArena.allocate(ValueLayout.JAVA_INT, 128);
@@ -190,24 +190,43 @@ public class LinuxEcnSocket implements AutoCloseable {
     }
 
     /**
-     * Build sockaddr_in struct in native mem
+     * Build sockaddr struct in native mem
      * @param ip - ip in network byte order
      * @param port - port (standard byte order)
      */
-    public void buildSockAddr(byte[] ip, int port, int idx) {
-        int pos = idx * 16;
+    public void writeSockAddr(MemorySegment segment, byte[] ip, int port, int idx) {
+        int pos = idx * 28;
 
-        // Byte 0-1: sin_family (AF_INET = 2). Native Linux host order.
-        batchAddrs.set(JAVA_SHORT, pos, (short) 2);
+        if (ip.length == 4) {
+            // Byte 0-1: sin_family (AF_INET = 2). Native Linux host order.
+            segment.set(JAVA_SHORT, pos, (short) 2);
 
-        // Byte 2-3: sin_port. Explicitly Big Endian (Network byte order).
-        batchAddrs.set(JAVA_SHORT, pos + 2, Short.reverseBytes( (short) port));
+            // Byte 2-3: sin_port. Explicitly Big Endian (Network byte order).
+            segment.set(JAVA_SHORT, pos + 2, Short.reverseBytes((short) port));
 
-        // Byte 4-7: sin_addr.
-        batchAddrs.set(JAVA_BYTE, pos + 4, ip[0]);
-        batchAddrs.set(JAVA_BYTE, pos + 5, ip[1]);
-        batchAddrs.set(JAVA_BYTE, pos + 6, ip[2]);
-        batchAddrs.set(JAVA_BYTE, pos + 7, ip[3]);
+            // Byte 4-7: sin_addr.
+            segment.set(JAVA_BYTE, pos + 4, ip[0]);
+            segment.set(JAVA_BYTE, pos + 5, ip[1]);
+            segment.set(JAVA_BYTE, pos + 6, ip[2]);
+            segment.set(JAVA_BYTE, pos + 7, ip[3]);
+        } else if (ip.length == 16) {
+            // Byte 0-1: sin6_family (AF_INET6 = 10). Native Linux host order.
+            segment.set(JAVA_SHORT, pos, (short) 10);
+
+            // Byte 2-3: sin6_port. Explicitly Big Endian (Network byte order).
+            segment.set(JAVA_SHORT, pos + 2, Short.reverseBytes((short) port));
+
+            // Byte 4-7: sin6_flowinfo.
+            segment.set(ValueLayout.JAVA_INT, pos + 4, 0);
+
+            // Byte 8-23: sin6_addr.
+            for (int i = 0; i < 16; i++) {
+                segment.set(JAVA_BYTE, pos + 8 + i, ip[i]);
+            }
+
+            // Byte 24-27: sin6_scope_id.
+            segment.set(ValueLayout.JAVA_INT, pos + 24, 0);
+        }
     }
 
     public List<QuicDatagramChannel.ReceivedPacket> receiveBatchBlocking(PoolBuffer[] buffers) throws IOException {
@@ -228,6 +247,7 @@ public class LinuxEcnSocket implements AutoCloseable {
                         ? MemorySegment.ofBuffer(buf)
                         : MemorySegment.ofArray(buf.array()).asSlice(buf.arrayOffset() + buf.position(), buf.remaining());
                 dataPtrsRcv.setAtIndex(ValueLayout.ADDRESS, i, seg);
+
                 maxLen = Math.max(maxLen, buf.remaining());
             }
 
@@ -258,7 +278,7 @@ public class LinuxEcnSocket implements AutoCloseable {
                 InetAddress address = InetAddress.getByAddress(ipBytes);
                 SocketAddress sender = new InetSocketAddress(address, port);
 
-                log.info("Packet {} in batch pos: {} len: {} addr: {} port: {}", i, buf.position(), bytesRead, address, port);
+                log.debug("Packet {} in batch pos: {} len: {} addr: {} port: {}", i, buf.position(), bytesRead, address, port);
 
                 results.add(new QuicDatagramChannel.ReceivedPacket(pb, sender, ecnFlags));
             }
@@ -324,7 +344,7 @@ public class LinuxEcnSocket implements AutoCloseable {
         }
     }
 
-    public long send(ByteBuffer buffer, int[] sockaddr, ECT ectMarking) throws IOException {
+    public long send(ByteBuffer buffer, InetSocketAddress sockaddr, ECT ectMarking) throws IOException {
         // Wrap heap arrays as zero-length MemorySegments to feed the JNI/Panama interface
         // The JVM handles pinning under the hood via critical(true)
         try {
@@ -332,7 +352,8 @@ public class LinuxEcnSocket implements AutoCloseable {
                     ? MemorySegment.ofBuffer(buffer)
                     : MemorySegment.ofArray(buffer.array()).asSlice(buffer.arrayOffset() + buffer.position(), buffer.remaining());
 
-            MemorySegment addrSegment = MemorySegment.ofArray(sockaddr);
+            MemorySegment addrSegment = MemorySegment.ofArray(new byte[28]);
+            writeSockAddr(addrSegment, sockaddr.getAddress().getAddress(), sockaddr.getPort(), 0);
 
             int ecn_flag = switch (ectMarking) {
                 case NONE -> 0;
@@ -368,8 +389,8 @@ public class LinuxEcnSocket implements AutoCloseable {
                 if (ecn_flag != 0) anyEcn = true;
 
                 InetSocketAddress isa = (InetSocketAddress) entry.socketAddress();
-                buildSockAddr(isa.getAddress().getAddress(), isa.getPort(), i);
-                sockaddrPtrs.setAtIndex(ValueLayout.ADDRESS, i, batchAddrs.asSlice(i * 16L, 16));
+                writeSockAddr(batchAddrs, isa.getAddress().getAddress(), isa.getPort(), i);
+                sockaddrPtrs.setAtIndex(ValueLayout.ADDRESS, i, batchAddrs.asSlice(i * 28L, 28));
                 i++;
             }
             if (anyEcn) {

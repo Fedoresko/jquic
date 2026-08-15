@@ -59,8 +59,7 @@ public class QuicDatagramChannel {
     public int send(ByteBuffer src, SocketAddress target, ECT ectMarking)
             throws IOException {
         if (socket != null) {
-            InetSocketAddress socketAddress = (InetSocketAddress)target;
-            return (int) socket.send(src, buildSockAddr(socketAddress.getAddress().getAddress(), socketAddress.getPort()), ectMarking);
+            return (int) socket.send(src, (InetSocketAddress)target, ectMarking);
         } else {
             return channel.send(src, target);
         }
@@ -86,7 +85,6 @@ public class QuicDatagramChannel {
     }
 
     public List<ReceivedPacket> receiveBatch(PoolBuffer[] buffers) throws IOException {
-        int maxCount = buffers.length;
         if (socket != null) {
             return socket.receiveBatch(buffers);
         } else {
@@ -147,22 +145,6 @@ public class QuicDatagramChannel {
     }
 
     public record ReceivedPacket(PoolBuffer data, SocketAddress sender, int ecnFlags) {
-    }
-
-    public static int[] buildSockAddr(byte[] ip, int port) {
-        // 1. sin_family (2 bytes) + sin_port (2 bytes, big-endian)
-        short sin_family = 2; // AF_INET
-        short sin_port = Short.reverseBytes((short) port);
-        int word0 = ((sin_port & 0xFFFF) << 16) | (sin_family & 0xFFFF);
-
-        // 2. sin_addr (4 bytes, big-endian IP)
-        int word1 = ((ip[3] & 0xFF) << 24) | ((ip[2] & 0xFF) << 16) | ((ip[1] & 0xFF) << 8) | (ip[0] & 0xFF);
-
-        // 3. sin_zero padding (8 bytes of zeros = 2 int words)
-        int word2 = 0;
-        int word3 = 0;
-
-        return new int[]{ word0, word1, word2, word3 };
     }
 }
 

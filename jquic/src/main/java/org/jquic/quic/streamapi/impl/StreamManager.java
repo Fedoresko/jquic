@@ -93,23 +93,30 @@ public class StreamManager implements ConnectionStreamManager {
     public void onPacketAcknowledged(long packetNumber, PacketNumberSpace.SentPacket packet) {
         ByteBuffer payload = packet.getUnencryptedPayload().buf().duplicate();
         if (payload.hasRemaining()) {
-            byte ackedFrameType = payload.get();
+            SreamFrameDetails frameDetails = parseStreamFrameDetails(payload);
             // Check if this is a STREAM frame (0x08-0x0f)
-            if (ackedFrameType >= 0x08 && ackedFrameType <= 0x0f) {
-                boolean hasLength = (ackedFrameType & 0x02) != 0;
-                long streamId = QuicVarint.read(payload);
-                boolean hasOffset = (ackedFrameType & 0x04) != 0;
-                if (hasOffset) QuicVarint.read(payload);
-                long length = (hasLength) ? QuicVarint.read(payload) : payload.remaining();
-
-                streamWorker.enqueueAck(this, streamId, length);
-                payload.position(Math.min(payload.limit(), payload.position() + (int) length));
+            if (frameDetails.frameType >= 0x08 && frameDetails.frameType <= 0x0f) {
+                payload.position(Math.min(payload.limit(), payload.position() + (int) frameDetails.length()));
+                streamWorker.enqueueAck(this, frameDetails.streamId(), frameDetails.offset(), frameDetails.length());
             }
-            if (ackedFrameType == FRAME_TYPE_RESET_STREAM) {
-                long streamId = QuicVarint.read(payload);
-                streamWorker.enqueueFrame(this, new StreamResetFrameAck(streamId));
+            if (frameDetails.frameType == FRAME_TYPE_RESET_STREAM) {
+                streamWorker.enqueueFrame(this, new StreamResetFrameAck(frameDetails.streamId));
             }
         }
+    }
+
+    private static @NonNull SreamFrameDetails parseStreamFrameDetails(ByteBuffer payload) {
+        byte frameType = payload.get();
+        boolean hasLength = (frameType & 0x02) != 0;
+        long streamId = QuicVarint.read(payload);
+        boolean hasOffset = (frameType & 0x04) != 0;
+        long offset = 0;
+        if (hasOffset) offset = QuicVarint.read(payload);
+        long length = (hasLength) ? QuicVarint.read(payload) : payload.remaining();
+        return new SreamFrameDetails(frameType, streamId, length, offset);
+    }
+
+    private record SreamFrameDetails(byte frameType, long streamId, long length, long offset) {
     }
 
     /**
@@ -191,9 +198,9 @@ public class StreamManager implements ConnectionStreamManager {
          * Called from Worker thread.
          * Process acknowledged stream bytes.
          */
-        public void processAck(long streamId, Long ackTotalLength) {
+        public void processAck(long streamId, Long offset, Long length) {
             // Update stream flow control
-            flightControl.bytesAcked(streamId, ackTotalLength);
+            flightControl.bytesAcked(streamId, offset, length);
         }
 
         private void handleFrame(StreamFrameData frame) throws IOException {
@@ -309,7 +316,7 @@ public class StreamManager implements ConnectionStreamManager {
                 long bufferedBytesAfter = buffer.getBufferedBytes();
                 long freedBytes = bufferedBytesBefore - bufferedBytesAfter;
                 // Update totalBufferedBytes when data is freed from buffer
-                flightControl.byfferedBytesFreed(streamId, freedBytes);
+                flightControl.bufferedBytesFreed(streamId, freedBytes);
 
                 handler.onStreamDataReceived(streamId, new QuicStreamResponseImpl(state), data.getData(), data.isLast(), errorCode);
 
@@ -377,13 +384,18 @@ public class StreamManager implements ConnectionStreamManager {
             }
         }
 
+        SreamFrameDetails details = parseStreamFrameDetails(data.buf().duplicate());
+
         try {
             trySendData(state.getSendQueue(), streamId, data);
         } catch (TimeoutException t) {
             throw new IOException("Timeout writing data into connection");
         }
 
-        flightControl.addSentBytes(state, dataSize);
+        flightControl.updateMaxSentOffset(state, details.offset + details.length);
+
+        logger.info("Stream #{} maxSreamData {} remoteMaxStreamData {}, maxSentOffset {}, bufferesBytes {}, maxOffset {}", streamId, state.getMaxStreamData(), state.getRemoteMaxStreamData(), state.getMaxSentOffset(), state.getBufferedBytes(), state.getMaxOffset());
+        logger.info("Total CID#{} buffered {}, in-flight {}, totalMaxOffsetsSum {}", getConnectionId(), flightControl.getBytesBuffered(), flightControl.getTotalInFlightBytes(), flightControl.totalMaxOffsetsSum);
     }
 
     private void trySendData(TriStateQueue<ApplicationData> queue, long streamId, PoolBuffer data) throws TimeoutException {

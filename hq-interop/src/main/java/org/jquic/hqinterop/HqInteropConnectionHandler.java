@@ -76,17 +76,19 @@ public class HqInteropConnectionHandler implements QuicApplicationProtocolConnec
             logger.warn("No output stream for bidirectional stream {}", streamId);
             return;
         }
- 
-        try {
-            byte[] responseBytes = requestHandler.handleGet(path);
-            outputStream.write(responseBytes);
-            // In HTTP/0.9 over QUIC, the server MUST send FIN after the response.
-            // In this API, closing the DataOutputStream might send FIN.
-            outputStream.close();
-            logger.debug("Sent response and closed stream {}", streamId);
-        } catch (IOException e) {
-            logger.error("Error sending hq-interop response on stream {}", streamId, e);
-        }
+
+        Thread.startVirtualThread(() -> {
+            try {
+                byte[] responseBytes = requestHandler.handleGet(path);
+                outputStream.write(responseBytes);
+                // In HTTP/0.9 over QUIC, the server MUST send FIN after the response.
+                // In this API, closing the DataOutputStream might send FIN.
+                outputStream.close();
+                logger.debug("Sent response and closed stream {}", streamId);
+            } catch (IOException e) {
+                logger.error("Error sending hq-interop response on stream {}", streamId, e);
+            }
+        });
     }
  
     private void closeStreamSilently(long streamId) {

@@ -53,9 +53,9 @@ public class ApplicationWorker extends StreamWorker {
         }
     }
 
-    public void enqueueAck(StreamManager manager, long streamId, long ackTotalLength) {
+    public void enqueueAck(StreamManager manager, long streamId, long offset, long length) {
         // Transfer ownership of the ByteBuffer to the worker thread via the queue
-        ackQueue.relaxedOffer(new AckTask(manager, streamId, ackTotalLength));
+        ackQueue.relaxedOffer(new AckTask(manager, streamId, offset, length));
 
         if (isParked) {
             parkCounter++;
@@ -69,7 +69,7 @@ public class ApplicationWorker extends StreamWorker {
     @Override
     protected boolean doWork() {
         boolean didWork = ackQueue.drain( ackTask -> {
-            ackTask.manager.frameProcessor.processAck(ackTask.sreamId, ackTask.totalAckedLength);
+            ackTask.manager.frameProcessor.processAck(ackTask.sreamId, ackTask.offset, ackTask.length);
         }) > 0;
 
         didWork |= frameQueue.drain(currentFrameTask -> {
@@ -100,12 +100,14 @@ public class ApplicationWorker extends StreamWorker {
     public static class AckTask {
         public final StreamManager manager;
         long sreamId;
-        long totalAckedLength;
+        long offset;
+        long length;
 
-        public AckTask(StreamManager manager, long sreamId, long totalAckedLength) {
+        public AckTask(StreamManager manager, long sreamId, long offset, long length) {
             this.manager = manager;
             this.sreamId = sreamId;
-            this.totalAckedLength = totalAckedLength;
+            this.offset = offset;
+            this.length = length;
         }
     }
 }

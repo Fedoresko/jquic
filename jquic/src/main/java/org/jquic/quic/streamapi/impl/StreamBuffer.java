@@ -136,7 +136,7 @@ public class StreamBuffer {
                 PoolBuffer firstPart = data.borrow();
                 firstPart.buf().limit(firstPart.buf().position() + (int) currentPortionLen);
                 incomingFragments.put(offset, firstPart);
-                bufferedBytes += firstPart.buf().capacity();
+                bufferedBytes += firstPart.buf().remaining();
             }
 
             // Advance data to 'next'
@@ -152,7 +152,7 @@ public class StreamBuffer {
                 finOffset = offset + data.buf().remaining();
             }
             incomingFragments.put(offset, data);
-            bufferedBytes += data.buf().capacity();
+            bufferedBytes += data.buf().remaining();
         }
     }
 
@@ -182,7 +182,7 @@ public class StreamBuffer {
             PoolBuffer fragment = incomingFragments.remove(firstOffset);
 
             // Decrease buffered bytes as we remove fragment
-            bufferedBytes -= fragment.buf().capacity();
+            bufferedBytes -= fragment.buf().remaining();
 
             // Handle overlapping or duplicate data
             if (firstOffset + fragment.buf().remaining() <= nextExpectedOffset) {

@@ -325,23 +325,6 @@ class PacketNumberSpaceTest {
     }
 
     @Test
-    void testWriteAckFrameWithDelay() {
-        PacketNumberSpace space = new PacketNumberSpace(PacketNumberSpace.PacketPhase.APPLICATION);
-        long timestamp = 1000;
-        space.onPacketReceived(timestamp, 5, 0);
-
-        ByteBuffer buffer = ByteBuffer.allocate(64);
-        QuicFrameBuilder.writeAckFrame(space, timestamp + 8, buffer);
-
-        // Type
-        assertEquals(0x02, buffer.get());
-        // Largest Acked
-        assertEquals(5, QuicVarint.read(buffer));
-        // Ack Delay: (8 * 1000) >> 3 = 1000
-        assertEquals(1000, QuicVarint.read(buffer));
-    }
-
-    @Test
     void testBytesAckedInLastRtt() {
         PacketNumberSpace space = new PacketNumberSpace(PacketNumberSpace.PacketPhase.INITIAL);
         space.setTimeWindowMs(100);

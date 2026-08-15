@@ -16,14 +16,21 @@
 package org.jquic.quic.streamapi.impl;
 
 import org.jquic.quic.streamapi.QuicConnectionControl;
+import org.jquic.quic.struct.SortedIntervals;
 import org.jquic.quic.struct.TriStateQueue;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Tracks the state and metadata of a single QUIC stream.
  */
 public class StreamState {
+    private static final Logger log = LoggerFactory.getLogger(StreamState.class);
+
     public long getBufferedBytes() {
         return bufferedBytes;
     }
@@ -65,11 +72,15 @@ public class StreamState {
     // Flow control
     private final AtomicLong maxStreamData; // Maximum data we can send (peer's limit)
     private long remoteMaxStreamData; // Maximum data remote can send (our limit)
-    private final AtomicLong sentBytes;     // Total bytes sent (cumulative)
+    private volatile long maxSentOffset;     // Total bytes sent (cumulative)
     private long maxOffset;           // Total bytes received (cumulative)
     private long inFlightBytes;       // Bytes sent but not yet acknowledged
     private long bufferedBytes;       // Bytes in receive buffer
     AtomicLong lastDataBlockedAt  = new AtomicLong(0);
+    Map<Long, Long> ackedIntervals = new HashMap<>();
+    private long maxAckedOffset = 0;
+    private long sumAckedLen = 0;
+
 
     public StreamState(long streamId, QuicConnectionControl.StreamType streamType,
                       long initialMaxStreamDataToSend, long initialMaxStreamToReceive) {
@@ -78,7 +89,7 @@ public class StreamState {
         this.state = State.OPEN;
         this.maxStreamData = new AtomicLong(initialMaxStreamDataToSend);
         this.remoteMaxStreamData = initialMaxStreamToReceive;
-        this.sentBytes = new AtomicLong(0);
+        this.maxSentOffset = 0;
         this.maxOffset = 0;
         this.inFlightBytes = 0;
         this.setBufferedBytes(0);
@@ -116,13 +127,18 @@ public class StreamState {
         this.remoteMaxStreamData = remoteMaxStreamData;
     }
 
-    public long getSentBytes() {
-        return sentBytes.get();
+    public long getMaxSentOffset() {
+        return maxSentOffset;
     }
 
-    public void addSentBytes(long bytes) {
-        this.sentBytes.addAndGet(bytes);
-        this.inFlightBytes += bytes;
+    public long updateMaxSentOffset(long offset) {
+        long prevOffset = maxSentOffset;
+        if (offset > prevOffset) {
+            maxSentOffset = offset;
+            this.inFlightBytes += offset - prevOffset;
+            return offset - prevOffset;
+        }
+        return 0;
     }
 
     public long getMaxOffset() {
@@ -135,13 +151,21 @@ public class StreamState {
         return maxOffset - prevOffset;
     }
 
-    public void onBytesAcknowledged(long bytes) {
-        this.inFlightBytes = Math.max(0, this.inFlightBytes - bytes);
+    public long onBytesAcknowledged(long offset, long length) {
+        if (maxAckedOffset < offset + length) maxAckedOffset = offset + length;
+        if (!ackedIntervals.containsKey(offset)) {
+            ackedIntervals.put(offset, offset + length);
+            sumAckedLen += length;
+            inFlightBytes -= length;
+            return length;
+        }
+        log.info("Acknowledged offset {}, length {}, maxAckOffset {}, sumAckedBytes {}", offset, length, maxAckedOffset, sumAckedLen);
+        return 0;
     }
 
     public boolean canSendBytes(long bytes) {
         // Check if we can send 'bytes' without exceeding peer's limit
-        return (sentBytes.get() + bytes) <= maxStreamData.get();
+        return (maxSentOffset + bytes) <= maxStreamData.get();
     }
 }
 

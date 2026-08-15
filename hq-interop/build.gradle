@@ -53,6 +53,13 @@ dependencies {
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            from components.java // Publishes the main jar and its dependencies
+        }
+    }
+}
 
 test {
     useJUnitPlatform()

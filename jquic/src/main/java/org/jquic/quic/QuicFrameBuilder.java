@@ -28,28 +28,6 @@ public class QuicFrameBuilder {
     public static final int MAX_SHORT_HEADER_LENGTH = 25;
     public static final int MAX_LONG_HEADER_LENGTH = 35; //No token
 
-    /**
-     * Creates an ACK frame with multiple ranges (RFC 9000 Section 19.3).
-     * Format: type(0x02) | largest_ack(varint) | ack_delay(varint) | ack_range_count(varint) |
-     * first_ack_range(varint) | [gap(varint) | ack_range(varint)]*
-     */
-    public static void writeAckFrameWithRanges(long largestAcknowledged, long ackDelay, SortedIntervals ranges, ByteBuffer out) {
-        int start = out.position();
-
-        out.put((byte) 0x02); // ACK frame type
-        QuicVarint.write(out, largestAcknowledged);
-        QuicVarint.write(out, ackDelay);
-
-        writeAckRanges(ranges, out);
-
-        while (out.position() < 20) {
-            out.put((byte) 0x00); //PADDING
-        }
-
-        out.limit(out.position());
-        out.position(start);
-    }
-
     private static void writeAckRanges(SortedIntervals ranges, ByteBuffer out) {
         if (ranges.isEmpty()) {
             QuicVarint.write(out, 0); // No ranges
@@ -105,14 +83,6 @@ public class QuicFrameBuilder {
 
         out.limit(out.position());
         out.position(start);
-    }
-
-    public static void writeAckFrame(PacketNumberSpace space, long currentTimestampMs, ByteBuffer out) {
-        SortedIntervals ackRanges = space.getAckRanges();
-
-        long largestAcknowledged = space.getLargestReceivedPacketNumber();
-        long ackDelay = space.getAckDelay(currentTimestampMs);
-        writeAckFrameWithRanges(largestAcknowledged, ackDelay, ackRanges, out);
     }
 
     public static void prependPingFrame(ByteBuffer data) {

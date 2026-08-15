@@ -1,13 +1,13 @@
 package org.jquic.hqinterop;
- 
+
 import org.jquic.quic.streamapi.CongestionControl;
 import org.jquic.quic.streamapi.QuicApplicationProtocol;
 import org.jquic.quic.streamapi.QuicApplicationProtocolConnectionHandler;
-import org.jquic.quic.streamapi.congestion.BBRv3;
+import org.jquic.quic.streamapi.congestion.TcpPrague;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
- 
+
 import java.util.function.Function;
  
 public class HqInteropProtocol implements QuicApplicationProtocol {
@@ -65,5 +65,10 @@ public class HqInteropProtocol implements QuicApplicationProtocol {
         } else {
             logger.info("hq-interop connection {} closed", connectionId);
         }
+    }
+
+    @Override
+    public CongestionControl getCongestionControl() {
+        return new TcpPrague();
     }
 }

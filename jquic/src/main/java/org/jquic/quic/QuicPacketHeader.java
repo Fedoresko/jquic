@@ -332,7 +332,7 @@ public class QuicPacketHeader {
                 unmaskedFlags ^= (byte) (mask.get(0) & 0x1F); // Unmask lower 5 bits
             }
 
-            log.info("Masked flags {}, unmasked flags {}", protectedFlags, unmaskedFlags);
+            log.debug("Masked flags {}, unmasked flags {}", protectedFlags, unmaskedFlags);
 
             packet.duplicate().position(startPosition).put(unmaskedFlags);
 

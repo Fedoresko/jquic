@@ -131,7 +131,7 @@ class FlightControlTest {
         verify(streamManager, never()).sendMaxStreamDataFrame(anyLong(), anyLong());
 
         // Now free bytes to trigger update
-        flightControl.byfferedBytesFreed(streamId, 100);
+        flightControl.bufferedBytesFreed(streamId, 100);
         
         verify(streamManager).sendMaxStreamDataFrame(eq(streamId), eq(100L + 50000L));
     }
@@ -163,10 +163,10 @@ class FlightControlTest {
         long streamId = 0;
         StreamState state = flightControl.incomingStream(streamId);
         
-        flightControl.addSentBytes(state, 500);
+        flightControl.updateMaxSentOffset(state, 500);
         // totalInFlightBytes = 500
         
-        flightControl.bytesAcked(streamId, 200L);
+        flightControl.bytesAcked(streamId, 0L, 200L);
         // totalInFlightBytes = 300
         // send Bytes sill 500
         
@@ -192,7 +192,7 @@ class FlightControlTest {
         verify(streamManager, never()).sendMaxDataFrame(anyLong());
 
         // Now free 2500 bytes. totalBufferedBytes = 500.
-        flightControl.byfferedBytesFreed(streamId, 2500);
+        flightControl.bufferedBytesFreed(streamId, 2500);
         
         // updateMaxDataIfNeeded check:
         // currentMaxData - totalReceivedBytes = 5000 - 3000 = 2000.
@@ -560,7 +560,7 @@ class FlightControlTest {
         flightControl.addReceivedBytes(state, 0, 3000);
         
         // Trigger updateMaxDataIfNeeded (usually called by bufferedBytesFreed)
-        flightControl.byfferedBytesFreed(0, 3000); 
+        flightControl.bufferedBytesFreed(0, 3000);
         
         // If independent, MAX_DATA should be sent with value:
         // newMaxData = maxDataCap - totalBufferedBytes + totalReceivedBytes
@@ -691,7 +691,7 @@ class FlightControlTest {
         StreamState state1 = fc.openOutgoingStream(1, QuicConnectionControl.StreamType.Bidirectional);
         
         // 1. hit stream limit
-        fc.addSentBytes(state1, 9000);
+        fc.updateMaxSentOffset(state1, 9000);
         assertTrue(fc.canSend(state1, 1000));
         assertFalse(fc.canSend(state1, 1001));
         verify(streamManager, atLeastOnce()).sendStreamDataBlockedFrame(eq(1L), anyLong());
@@ -702,7 +702,7 @@ class FlightControlTest {
         
         // Open another outgoing Bidi stream ID 5.
         StreamState state5 = fc.openOutgoingStream(5, QuicConnectionControl.StreamType.Bidirectional);
-        fc.addSentBytes(state5, 1000); // Total in flight = 10000.
+        fc.updateMaxSentOffset(state5, 1000); // Total in flight = 10000.
         
         // Stream 1 still has 1000 bytes capacity (10000 - 9000).
         // But connection is full (10000 - 10000).

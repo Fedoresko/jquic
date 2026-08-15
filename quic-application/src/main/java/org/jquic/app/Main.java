@@ -144,7 +144,7 @@ public class Main {
 
     private static byte[] handleHqRequest(String path) {
         logger.info("Handling hq-interop request for path: {}", path);
-        byte[] data = getResourceData(path);
+        byte[] data = path.startsWith("/bmloadw") ? mappedSegment.toArray(ValueLayout.OfByte.JAVA_BYTE) : getResourceData(path);
         if (data == null) {
             return "Not Found".getBytes(StandardCharsets.UTF_8);
         }

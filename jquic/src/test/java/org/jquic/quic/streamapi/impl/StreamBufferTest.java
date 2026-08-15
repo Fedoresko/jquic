@@ -394,8 +394,8 @@ class StreamBufferTest {
         
         streamBuffer.addIncomingData(0, pb1, false);
         
-        // Should reflect the full capacity of the buffer, not just the segment
-        assertEquals(100, streamBuffer.getBufferedBytes());
+        // Should reflect the actual size of data in the buffer, not capacity
+        assertEquals(10, streamBuffer.getBufferedBytes());
         
         streamBuffer.free();
         assertEquals(0, streamBuffer.getBufferedBytes());
@@ -479,10 +479,9 @@ class StreamBufferTest {
         // So it uses buf().capacity(). My mockPoolBuffer sets buf() to return a ByteBuffer.
         // ByteBuffer.wrap(data).capacity() is data.length.
         
-        // Expected bufferedBytes: 100 (pb1) + 50 (pb2) + 70 (pbOverlap borrowed part capacity)
-        // Wait, PoolBuffer.borrow() in my mock returns a new mock with a duplicate buffer.
-        // ByteBuffer.duplicate() shares the same capacity.
-        assertEquals(100 + 50 + 70, streamBuffer.getBufferedBytes(), "Should include capacity of split overlapping fragment");
+        // Expected bufferedBytes: 100 (pb1) + 50 (pb2) + 50 (pbOverlap borrowed part length)
+        // pbOverlap (90 to 160, len 70) fills gap 100-150. Piece len is 50.
+        assertEquals(100 + 50 + 50, streamBuffer.getBufferedBytes(), "Should include length of split overlapping fragment");
 
         // Read data
         streamBuffer.readAvailableData(); // Should read 0-160? 
@@ -524,8 +523,8 @@ class StreamBufferTest {
         // dataB.pos(50). offset = 100. dataB.rem = 50.
         // Stored at offset 100.
         streamBuffer.addIncomingData(50, pbB, false);
-        // bufferedBytes += pbB.capacity() (which is 100)
-        assertEquals(100 + 100, streamBuffer.getBufferedBytes());
+        // bufferedBytes += pbB.remaining() (which is 50 after trimming)
+        assertEquals(100 + 50, streamBuffer.getBufferedBytes());
         
         // C is at 0, length 200.
         // Overlaps A [0, 100). skip = 100. offset = 100. dataC.rem = 100.
@@ -541,8 +540,8 @@ class StreamBufferTest {
         // dataC.pos(100 + 50 = 150). offset = 150. dataC.rem = 50.
         // Stored at offset 150.
         streamBuffer.addIncomingData(0, pbC, false);
-        // bufferedBytes += pbC.capacity() (which is 200)
-        assertEquals(100 + 100 + 200, streamBuffer.getBufferedBytes());
+        // bufferedBytes += pbC.remaining() (which is 50 after trimming)
+        assertEquals(100 + 50 + 50, streamBuffer.getBufferedBytes());
         
         // Now read available data.
         // Read A (0-100).
@@ -580,7 +579,8 @@ class StreamBufferTest {
         streamBuffer.addIncomingData(25, pbB, false);
         streamBuffer.addIncomingData(60, pbC, false);
         
-        assertEquals(50 + 50 + 40, streamBuffer.getBufferedBytes());
+        // A: 50, B (50-75): 25, C (75-100): 25. Total: 100
+        assertEquals(50 + 25 + 25, streamBuffer.getBufferedBytes());
         
         // Read 0-50 (A)
         // nextExpectedOffset is 0.
@@ -639,8 +639,8 @@ class StreamBufferTest {
         assertEquals(40, streamBuffer.getBufferedBytes());
         
         streamBuffer.addIncomingData(10, pbC, false);
-        // pbC is 40 capacity.
-        assertEquals(20 + 20 + 40, streamBuffer.getBufferedBytes());
+        // pbC covers gap [20, 40). Length is 20.
+        assertEquals(20 + 20 + 20, streamBuffer.getBufferedBytes());
         
         // Read available data.
         // nextExpectedOffset=0.
@@ -698,9 +698,7 @@ class StreamBufferTest {
         for (int i = 0; i < 73; i++) dataE[i] = (byte) (i + 2);
         streamBuffer.addIncomingData(2, mockPoolBuffer(dataE), false);
 
-        // bufferedBytes: 30 (A, B, C) + 3 * 73 (E split into 3 pieces: [5,10), [20,40), [50,70)) = 30 + 219 = 249
-        // Note: each borrow() creates a new PoolBuffer object that contributes its full capacity to the footprint.
-        assertEquals(249, streamBuffer.getBufferedBytes());
+        assertEquals(78, streamBuffer.getBufferedBytes());
 
         // Now read all available data
         // nextExpected: 5.

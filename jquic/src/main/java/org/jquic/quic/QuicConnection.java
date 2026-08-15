@@ -214,7 +214,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
      */
     void updateTimeout() {
         this.timeoutTimestamp = currentTimestamp + idleTimeoutMs;
-        logger.info("Connection {} tiemout updated to {}", connectionId, timeoutTimestamp);
+        logger.debug("Connection {} tiemout updated to {}", connectionId, timeoutTimestamp);
     }
 
     /**
@@ -507,7 +507,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
             byte frameType = frames.buf().get();
 
             if (frameType == 0x02 || frameType == 0x03) { // ACK or ACK_ECN
-                logger.info("Received Handshake ACK for CID: {}", connectionId);
+                logger.debug("Received Handshake ACK for CID: {}", connectionId);
                 processAckFrame(frames.buf(), initialSpace, frameType); // ACK for Initial packets
                 updateTimeout();
             } else if (frameType == 0x00) { // PADDING
@@ -515,7 +515,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
             } else if (frameType == 0x01) { //PING
                 needAck = true;
                 updateTimeout();
-                logger.info("Received Handshake PING for CID {} ", connectionId);
+                logger.debug("Received Handshake PING for CID {} ", connectionId);
             } else if (frameType == 0x06) { // CRYPTO frame (contains client Finished)
                 needAck = true;
                 updateTimeout();
@@ -675,7 +675,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
             byte frameType = plaintext.buf().get();
 
             if (frameType == 0x02 || frameType == 0x03) { // ACK or ACK_ECN
-                logger.info("Received 1-RTT ACK for CID: {}", connectionId);
+                logger.debug("Received 1-RTT ACK for CID: {}", connectionId);
                 processAckFrame(plaintext.buf(), applicationSpace, frameType);
             } else if (frameType == 0x1c || frameType == 0x1d) { // CONNECTION_CLOSE
                 String closeType = frameType == 0x1c ? "QUIC" : "Application";
@@ -710,7 +710,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
                 long streamId  = QuicVarint.read(plaintext.buf());
                 long errorCode = QuicVarint.read(plaintext.buf());
                 long finalSize = QuicVarint.read(plaintext.buf());
-                logger.warn("Received RESET_STREAM CID={} streamId={} errorCode={} finalSize={}",
+                logger.info("Received RESET_STREAM CID={} streamId={} errorCode={} finalSize={}",
                         connectionId, streamId, errorCode, finalSize);
                 if (connectionStreamManager != null) {
                     connectionStreamManager.onProtocolFrame(new ResetStreamFrameData(streamId, errorCode, finalSize));
@@ -719,7 +719,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
             } else if (frameType == FRAME_TYPE_STOP_SENDING) { // STOP_SENDING
                 long streamId  = QuicVarint.read(plaintext.buf());
                 long errorCode = QuicVarint.read(plaintext.buf());
-                logger.warn("Received STOP_SENDING CID={} streamId={} errorCode={}",
+                logger.info("Received STOP_SENDING CID={} streamId={} errorCode={}",
                         connectionId, streamId, errorCode);
                 if (connectionStreamManager != null) {
                     connectionStreamManager.onProtocolFrame(new StopSendingFrameData(streamId, errorCode));
@@ -728,20 +728,20 @@ public class QuicConnection implements TimeoutHeap.Entry {
             } else if (frameType == FRAME_TYPE_MAX_STREAM_DATA) { //MAX_STREAM_DATA
                 long streamId = QuicVarint.read(plaintext.buf());
                 long maxStramData = QuicVarint.read(plaintext.buf());
-                logger.warn("Received MAX_STREAM_DATA {} {}", streamId, maxStramData);
+                logger.info("Received MAX_STREAM_DATA {} {}", streamId, maxStramData);
                 if (connectionStreamManager != null) {
                     connectionStreamManager.onProtocolFrame(new MaxStreamDataFrameData(streamId, maxStramData));
                 }
             } else if (frameType == FRAME_TYPE_MAX_STREAMS_BIDI) { //MAX_STREAMS (Bidirectional)
                 long maxStreams = QuicVarint.read(plaintext.buf());
-                logger.warn("Received MAX_STREAMS (bidirectional) CID={} max={}", connectionId, maxStreams);
+                logger.info("Received MAX_STREAMS (bidirectional) CID={} max={}", connectionId, maxStreams);
                 if (connectionStreamManager != null) {
                     connectionStreamManager.onProtocolFrame(new MaxStreamsFrameData(maxStreams, true));
                 }
                 needsAck = true;
             } else if (frameType == FRAME_TYPE_MAX_STREAMS_UNI) { //MAX_STREAMS (Unidirectional)
                 long maxStreams = QuicVarint.read(plaintext.buf());
-                logger.warn("Received MAX_STREAMS (unidirectional) CID={} max={}", connectionId, maxStreams);
+                logger.info("Received MAX_STREAMS (unidirectional) CID={} max={}", connectionId, maxStreams);
                 if (connectionStreamManager != null) {
                     connectionStreamManager.onProtocolFrame(new MaxStreamsFrameData(maxStreams, false));
                 }
@@ -780,18 +780,18 @@ public class QuicConnection implements TimeoutHeap.Entry {
                 long tokenLength = QuicVarint.read(plaintext.buf());
                 int tokenDataLen = (int) Math.min(tokenLength, plaintext.buf().remaining());
                 plaintext.buf().position(plaintext.buf().position() + tokenDataLen);
-                logger.warn("Received NEW_TOKEN CID={} tokenLength={}", connectionId, tokenLength);
+                logger.info("Received NEW_TOKEN CID={} tokenLength={}", connectionId, tokenLength);
                 needsAck = true;
             } else if (frameType == 0x10) { // MAX_DATA
                 // RFC 9000 Section 19.9: maximum_data(varint)
                 long maxData = QuicVarint.read(plaintext.buf());
-                logger.warn("Received MAX_DATA CID={} maxData={}", connectionId, maxData);
+                logger.info("Received MAX_DATA CID={} maxData={}", connectionId, maxData);
                 connectionStreamManager.onProtocolFrame(new MaxDataFrameData(maxData));
                 needsAck = true;
             } else if (frameType == FRAME_TYPE_DATA_BLOCKED) { // DATA_BLOCKED
                 // RFC 9000 Section 19.12: maximum_data(varint)
                 long dataLimit = QuicVarint.read(plaintext.buf());
-                logger.warn("Received DATA_BLOCKED CID={} dataLimit={}", connectionId, dataLimit);
+                logger.info("Received DATA_BLOCKED CID={} dataLimit={}", connectionId, dataLimit);
                 needsAck = true;
             } else if (frameType == 0x18) { // NEW_CONNECTION_ID
                 // RFC 9000 Section 19.15: sequence_number(varint) + retire_prior_to(varint) +
@@ -801,26 +801,26 @@ public class QuicConnection implements TimeoutHeap.Entry {
                 int cidLen          = plaintext.buf().get() & 0xFF;
                 plaintext.buf().position(plaintext.buf().position() + cidLen); // skip connection_id
                 plaintext.buf().position(plaintext.buf().position() + 16);     // skip stateless_reset_token
-                logger.debug("Connection migration initiated but NOT SUPPORTED! CID={} seqNum={} retirePriorTo={}",
+                logger.info("Connection migration initiated but NOT SUPPORTED! CID={} seqNum={} retirePriorTo={}",
                         connectionId, seqNum, retirePriorTo);
                 needsAck = true;
             } else if (frameType == 0x19) { // RETIRE_CONNECTION_ID
                 // RFC 9000 Section 19.16: sequence_number(varint)
                 long seqNum = QuicVarint.read(plaintext.buf());
-                logger.warn("Received RETIRE_CONNECTION_ID CID={} seqNum={}", connectionId, seqNum);
+                logger.info("Received RETIRE_CONNECTION_ID CID={} seqNum={}", connectionId, seqNum);
                 needsAck = true;
             } else if (frameType == 0x1a) { // PATH_CHALLENGE
                 // RFC 9000 Section 19.17: data(8 bytes)
                 plaintext.buf().position(plaintext.buf().position() + 8);
-                logger.warn("Received PATH_CHALLENGE CID={}", connectionId);
+                logger.info("Received PATH_CHALLENGE CID={}", connectionId);
                 needsAck = true;
             } else if (frameType == 0x1b) { // PATH_RESPONSE
                 // RFC 9000 Section 19.18: data(8 bytes)
                 plaintext.buf().position(plaintext.buf().position() + 8);
-                logger.warn("Received PATH_RESPONSE CID={}", connectionId);
+                logger.info("Received PATH_RESPONSE CID={}", connectionId);
                 needsAck = true;
             } else if (frameType == 0x1e) { // HANDSHAKE_DONE
-                logger.warn("Received HANDSHAKE_DONE from client (unexpected)");
+                logger.info("Received HANDSHAKE_DONE from client (unexpected)");
                 needsAck = true;
             } else if (frameType == 0x30 || frameType == 0x31) { // DATAGRAM
                 // RFC 9221: optional length(varint) + data(*)
@@ -897,12 +897,12 @@ public class QuicConnection implements TimeoutHeap.Entry {
             byte frameType = frames.buf().get();
 
             if (frameType == 0x02 || frameType == 0x03) { // ACK or ACK_ECN
-                logger.info("Received Initial ACK for CID: {}", connectionId);
+                logger.debug("Received Initial ACK for CID: {}", connectionId);
                 processAckFrame(frames.buf(), initialSpace, frameType); // ACK for Initial packets
             } else if (frameType == 0x00) { // PADDING
                 // Skip padding
             } else if (frameType == 0x01) { // PING
-                logger.info("Received Initial PING for CID: {}", connectionId);
+                logger.debug("Received Initial PING for CID: {}", connectionId);
                 needAck = true;
                 updateTimeout();
             } else if (frameType == 0x06) { // CRYPTO
@@ -1322,9 +1322,9 @@ public class QuicConnection implements TimeoutHeap.Entry {
             long rangeLength = QuicVarint.read(buffer) & 0x7FFF;
 
             if (i < 256) {
-                long rangeSmallest = currentSmallest - gap - 2;
-                long rangeLargest = rangeSmallest + rangeLength;
-                if (rangeSmallest < 0 || rangeSmallest >= rangeLargest || rangeLargest > 65535) {
+                long rangeLargest = currentSmallest - gap - 2;
+                long rangeSmallest = rangeLargest - rangeLength;
+                if (rangeSmallest < 0 || rangeLargest > 65535) {
                     continue;
                 }
 
