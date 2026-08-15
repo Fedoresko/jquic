@@ -18,7 +18,6 @@ package org.jquic.quic.crypto;
 import org.jquic.boringssl.EVP_AEAD_CTX;
 import org.jquic.boringssl.EVP_CIPHER_CTX;
 import org.jquic.boringssl.err_h;
-import org.jquic.boringssl.evp_h;
 import org.jspecify.annotations.NonNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,36 +39,52 @@ public class NativeCrypto implements AutoCloseable {
     private final MemorySegment aeadCtx = EVP_AEAD_CTX.allocate(arena);
     private final MemorySegment retLen = arena.allocate(ValueLayout.JAVA_LONG);
     private final MemorySegment ecbCtx = EVP_CIPHER_CTX.allocate(arena);
+    private final MemorySegment zeroIn = arena.allocate(16);
+    private final MemorySegment errorBuffer = arena.allocate(256);
+    private final MemorySegment sealOutLen = arena.allocate(ValueLayout.JAVA_LONG);
+    private final MemorySegment openOutLen = arena.allocate(ValueLayout.JAVA_LONG);
 
     private final QuicCrypto.PacketProtectionKeysWithHP keys;
+    private final QuicCrypto.CipherMode mode;
 
     /**
      * Set ecnription keys used for the all further encription calls.
+     *
      * @param keys - encryption key parameters
+     * @param mode
      * @throws QuicCrypto.CryptoException - exception if crypto problems
      */
-    public NativeCrypto(QuicCrypto.PacketProtectionKeysWithHP keys) throws QuicCrypto.CryptoException {
+    public NativeCrypto(QuicCrypto.PacketProtectionKeysWithHP keys, QuicCrypto.CipherMode mode) throws QuicCrypto.CryptoException {
         this.keys = keys;
+        this.mode = mode;
 
         if (keys.headerProtection() != null) {
-            EVP_CIPHER_CTX_init(ecbCtx);
-            try {
-                if (EVP_EncryptInit_ex(ecbCtx, EVP_aes_128_ecb(), MemorySegment.NULL,
-                        MemorySegment.ofBuffer(keys.headerProtection()), MemorySegment.NULL) != 1) {
-                    logErrorAndThrow("Failed to init AES / ECB");
-                }
+            if (mode == QuicCrypto.CipherMode.TLS_AES_128_GCM_SHA256_ID || mode == QuicCrypto.CipherMode.TLS_AES_256_GCM_SHA384_ID) {
+                EVP_CIPHER_CTX_init(ecbCtx);
+                try {
+                    MemorySegment cipher = mode == QuicCrypto.CipherMode.TLS_AES_128_GCM_SHA256_ID ? EVP_aes_128_ecb() : EVP_aes_256_ecb();
+                    if (EVP_EncryptInit_ex(ecbCtx, cipher, MemorySegment.NULL,
+                            MemorySegment.ofBuffer(keys.headerProtection()), MemorySegment.NULL) != 1) {
+                        logErrorAndThrow("Failed to init AES / ECB");
+                    }
 
-                if (EVP_CIPHER_CTX_set_padding(ecbCtx, 0) != 1) {
-                    logErrorAndThrow("Failed to set padding AES / ECB");
+                    if (EVP_CIPHER_CTX_set_padding(ecbCtx, 0) != 1) {
+                        logErrorAndThrow("Failed to set padding AES / ECB");
+                    }
+                } catch (Exception e) {
+                    EVP_CIPHER_CTX_cleanup(ecbCtx);
+                    throw e;
                 }
-            } catch (Exception e) {
-                EVP_CIPHER_CTX_cleanup(ecbCtx);
-                throw e;
             }
         }
 
         if (keys.key() != null) {
-            MemorySegment aead_engine = evp_h.EVP_aead_aes_128_gcm();
+            MemorySegment aead_engine = switch (mode) {
+                case TLS_AES_128_GCM_SHA256_ID -> EVP_aead_aes_128_gcm();
+                case TLS_AES_256_GCM_SHA384_ID -> EVP_aead_aes_256_gcm();
+                case TLS_CHACHA20_POLY1305_SHA256 -> EVP_aead_chacha20_poly1305();
+                default -> throw new QuicCrypto.CryptoException("Unsupported cipher mode: " + mode);
+            };
             if (EVP_AEAD_CTX_init(aeadCtx, aead_engine, MemorySegment.ofBuffer(keys.key()),
                     keys.key().remaining(), EVP_AEAD_DEFAULT_TAG_LENGTH(), MemorySegment.NULL) != 1) {
 
@@ -131,20 +146,33 @@ public class NativeCrypto implements AutoCloseable {
     }
 
     /**
-     * Encpript using plain AES/ECB cipher over the 128-bit current key.
+     * Encpript using plain AES/ECB cipher over the 128-bit current key or ChaCha20 block function.
      * @param plaintext - plaintext
      * @throws QuicCrypto.CryptoException if encryption fails
      */
     public void encryptEcbInPlace(ByteBuffer plaintext) throws QuicCrypto.CryptoException {
-        if (EVP_EncryptUpdate(ecbCtx, MemorySegment.ofBuffer(plaintext), retLen,
-                MemorySegment.ofBuffer(plaintext), plaintext.remaining()) != 1) {
-            logErrorAndThrow("Failed to encrypt AES / ECB");
+        if (mode == QuicCrypto.CipherMode.TLS_AES_128_GCM_SHA256_ID || mode == QuicCrypto.CipherMode.TLS_AES_256_GCM_SHA384_ID) {
+            if (EVP_EncryptUpdate(ecbCtx, MemorySegment.ofBuffer(plaintext), retLen,
+                    MemorySegment.ofBuffer(plaintext), plaintext.remaining()) != 1) {
+                logErrorAndThrow("Failed to encrypt AES / ECB");
+            }
+        } else if (mode == QuicCrypto.CipherMode.TLS_CHACHA20_POLY1305_SHA256) {
+            // RFC 9001 5.4.4: The block function takes a 256-bit key and a 16-byte sample.
+            // The first 4 bytes of the sample are used as a block counter and the next 12 bytes are used as a nonce.
+            // CRYPTO_chacha_20(uint8_t *out, const uint8_t *in, size_t in_len, const uint8_t key[32], const uint8_t nonce[12], uint32_t counter)
+            MemorySegment sample = MemorySegment.ofBuffer(plaintext);
+            MemorySegment hpKey = MemorySegment.ofBuffer(keys.headerProtection());
+            MemorySegment nonce = sample.asSlice(4, 12);
+            int counter = sample.get(ValueLayout.JAVA_INT.withOrder(java.nio.ByteOrder.LITTLE_ENDIAN), 0);
+
+            // We need a 16-byte zero input to get the keystream block
+            org.jquic.boringssl.chacha_h.CRYPTO_chacha_20(sample, zeroIn, 16, hpKey, nonce, counter);
         }
     }
 
     private void decryptAeadInPlace(ByteBuffer encrypted, MemorySegment associatedData, ByteBuffer nonce) throws QuicCrypto.CryptoException {
         int ret = EVP_AEAD_CTX_open(aeadCtx,
-                MemorySegment.ofBuffer(encrypted), retLen, encrypted.remaining(),
+                MemorySegment.ofBuffer(encrypted), openOutLen, encrypted.remaining(),
                 MemorySegment.ofBuffer(nonce.rewind()), GCM_NONCE_LENGTH,
                 MemorySegment.ofBuffer(encrypted), encrypted.remaining(),
                 associatedData, associatedData.byteSize());
@@ -152,18 +180,18 @@ public class NativeCrypto implements AutoCloseable {
         if (ret != 1) {
             logErrorAndThrow("Failed to open EVP_AEAD_CTX(" + ret + ") ");
         }
-        encrypted.limit(encrypted.position() + (int) retLen.get(ValueLayout.JAVA_LONG, 0));
+        encrypted.limit(encrypted.position() + (int) openOutLen.get(ValueLayout.JAVA_LONG, 0));
     }
 
     private void encryptAeadInPlace(ByteBuffer plaintext, MemorySegment associatedData, ByteBuffer nonce) throws QuicCrypto.CryptoException {
         if (EVP_AEAD_CTX_seal(aeadCtx,
-                MemorySegment.ofBuffer(plaintext), retLen, plaintext.remaining() + QuicCrypto.GCM_TAG_LENGTH,
+                MemorySegment.ofBuffer(plaintext), sealOutLen, plaintext.remaining() + QuicCrypto.GCM_TAG_LENGTH,
                 MemorySegment.ofBuffer(nonce.rewind()), GCM_NONCE_LENGTH,
                 MemorySegment.ofBuffer(plaintext), plaintext.remaining(),
                 associatedData, associatedData.byteSize()) != 1) {
             logErrorAndThrow("Failed to seal EVP_AEAD_CTX");
         }
-        plaintext.limit(plaintext.position() + (int) retLen.get(ValueLayout.JAVA_LONG, 0));
+        plaintext.limit(plaintext.position() + (int) sealOutLen.get(ValueLayout.JAVA_LONG, 0));
     }
 
 
@@ -177,18 +205,15 @@ public class NativeCrypto implements AutoCloseable {
         return nonce;
     }
 
-    private static void logSslError(String error) {
+    private void logSslError(String error) {
         int errorCode = err_h.ERR_get_error();
         if (errorCode > 0) {
-            try (Arena arena = Arena.ofConfined()) {
-                MemorySegment errorBuffer = arena.allocate(256);
-                err_h.ERR_error_string_n(errorCode, errorBuffer, errorBuffer.byteSize());
-                logger.error(error + " code: {}, {}", errorCode, errorBuffer.getString(0, StandardCharsets.US_ASCII));
-            }
+            err_h.ERR_error_string_n(errorCode, errorBuffer, errorBuffer.byteSize());
+            logger.error(error + " code: {}, {}", errorCode, errorBuffer.getString(0, StandardCharsets.US_ASCII));
         }
     }
 
-    private static void logErrorAndThrow(String error) throws QuicCrypto.CryptoException {
+    private void logErrorAndThrow(String error) throws QuicCrypto.CryptoException {
         logSslError(error);
         throw new QuicCrypto.CryptoException(error);
     }

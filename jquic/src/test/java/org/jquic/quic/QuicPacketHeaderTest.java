@@ -252,7 +252,7 @@ public class QuicPacketHeaderTest {
 
         ByteBuffer hpSeg = ByteBuffer.allocateDirect(hpKey.length).put(hpKey).flip();
         // Now parse it
-        QuicPacketHeader header = QuicPacketHeader.parse(buf, new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(null, null, hpSeg)), largestPn);
+        QuicPacketHeader header = QuicPacketHeader.parse(buf, new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(null, null, hpSeg), QuicCrypto.CipherMode.TLS_AES_128_GCM_SHA256_ID), largestPn);
 
         assertNotNull(header);
         assertEquals(pn, header.packetNumber);

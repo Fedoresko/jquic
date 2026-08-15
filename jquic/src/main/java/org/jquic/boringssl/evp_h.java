@@ -98,6 +98,16 @@ public class evp_h {
         public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
     }
 
+    private static class EVP_aead_aes_256_gcm {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+                evp_h.C_POINTER    );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("EVP_aead_aes_256_gcm");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+
     /**
      * {@snippet lang=c :
      * const EVP_AEAD *EVP_aead_aes_128_gcm()
@@ -117,6 +127,52 @@ public class evp_h {
         }
     }
 
+    /**
+     * {@snippet lang=c :
+     * const EVP_AEAD *EVP_aead_aes_256_gcm()
+     * }
+     */
+    public static MemorySegment EVP_aead_aes_256_gcm() {
+        var mh$ = EVP_aead_aes_256_gcm.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("EVP_aead_aes_256_gcm");
+            }
+            return (MemorySegment)mh$.invokeExact();
+        } catch (Error | RuntimeException ex) {
+            throw ex;
+        } catch (Throwable ex$) {
+            throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class EVP_aead_chacha20_poly1305 {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+                evp_h.C_POINTER    );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("EVP_aead_chacha20_poly1305");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * {@snippet lang=c :
+     * const EVP_AEAD *EVP_aead_chacha20_poly1305()
+     * }
+     */
+    public static MemorySegment EVP_aead_chacha20_poly1305() {
+        var mh$ = EVP_aead_chacha20_poly1305.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("EVP_aead_chacha20_poly1305");
+            }
+            return (MemorySegment)mh$.invokeExact();
+        } catch (Error | RuntimeException ex) {
+            throw ex;
+        } catch (Throwable ex$) {
+            throw new AssertionError("should not reach here", ex$);
+        }
+    }
 
 
     private static class EVP_AEAD_CTX_init {
@@ -282,6 +338,35 @@ public class evp_h {
         try {
             if (TRACE_DOWNCALLS) {
                 traceDowncall("EVP_aes_128_ecb");
+            }
+            return (MemorySegment)mh$.invokeExact();
+        } catch (Error | RuntimeException ex) {
+            throw ex;
+        } catch (Throwable ex$) {
+            throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+
+    private static class EVP_aes_256_ecb {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+                evp_h.C_POINTER    );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("EVP_aes_256_ecb");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * {@snippet lang=c :
+     * const EVP_CIPHER *EVP_aes_256_ecb()
+     * }
+     */
+    public static MemorySegment EVP_aes_256_ecb() {
+        var mh$ = EVP_aes_256_ecb.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("EVP_aes_256_ecb");
             }
             return (MemorySegment)mh$.invokeExact();
         } catch (Error | RuntimeException ex) {

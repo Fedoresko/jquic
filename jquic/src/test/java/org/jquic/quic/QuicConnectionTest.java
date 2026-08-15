@@ -148,7 +148,7 @@ class QuicConnectionTest {
         mockMetadata.serverApplicationCrypto = nCryptoMock;
         mockMetadata.clientMetadata = new ConnectionMetadata.ClientMetadataNegotiated("h3", 1000, List.of(),
                 Map.of(), 1200, 1000, 0, 0,
-                0, 0, 0, List.of(), 3, List.of());
+                0, 0, 0, List.of(), 3, List.of(), QuicCrypto.CipherMode.TLS_AES_128_GCM_SHA256_ID);
         mockMetadata.handshakeSecretBytes = new byte[32];
         mockMetadata.selectedSignatureScheme = 0x0403;
         mockMetadata.serverHandshakeTrafficSecret = new byte[32];

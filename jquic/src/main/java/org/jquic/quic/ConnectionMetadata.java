@@ -137,15 +137,15 @@ public class ConnectionMetadata {
 
             // Derive client keys
             byte[] clientInitialSecret = QuicCrypto.hkdfExpandLabel(initialSecret, "client in", new byte[0], 32);
-            SecretKey clientKey = QuicCrypto.deriveKey(quicVersion, clientInitialSecret);
+            SecretKey clientKey = QuicCrypto.deriveKey(quicVersion, clientInitialSecret, QuicCrypto.CipherMode.TLS_AES_128_GCM_SHA256_ID);
             byte[] clientIv = QuicCrypto.deriveIv(quicVersion, clientInitialSecret);
-            byte[] clientHp = QuicCrypto.deriveHp(quicVersion, clientInitialSecret);
+            byte[] clientHp = QuicCrypto.deriveHp(quicVersion, clientInitialSecret, QuicCrypto.CipherMode.TLS_AES_128_GCM_SHA256_ID);
 
             // Derive server keys
             byte[] serverInitialSecret = QuicCrypto.hkdfExpandLabel(initialSecret, "server in", new byte[0], 32);
-            SecretKey serverKey = QuicCrypto.deriveKey(quicVersion, serverInitialSecret);
+            SecretKey serverKey = QuicCrypto.deriveKey(quicVersion, serverInitialSecret, QuicCrypto.CipherMode.TLS_AES_128_GCM_SHA256_ID);
             byte[] serverIv = QuicCrypto.deriveIv(quicVersion, serverInitialSecret);
-            byte[] serverHp = QuicCrypto.deriveHp(quicVersion, serverInitialSecret);
+            byte[] serverHp = QuicCrypto.deriveHp(quicVersion, serverInitialSecret, QuicCrypto.CipherMode.TLS_AES_128_GCM_SHA256_ID);
 
 
             ByteBuffer clientKeySeg = wrapDirect(clientKey.getEncoded());
@@ -176,8 +176,8 @@ public class ConnectionMetadata {
         this.serverHandshakeTrafficSecret = serverHandshakeTrafficSecret;
         this.clientHandshakeTrafficSecret = clientHandshakeTrafficSecret;
 
-        byte[] serverHp = QuicCrypto.deriveHp(quicVersion, serverHandshakeTrafficSecret);
-        SecretKey serverKey = QuicCrypto.deriveKey(quicVersion, serverHandshakeTrafficSecret);
+        byte[] serverHp = QuicCrypto.deriveHp(quicVersion, serverHandshakeTrafficSecret, clientMetadata.selectedCipherSuite);
+        SecretKey serverKey = QuicCrypto.deriveKey(quicVersion, serverHandshakeTrafficSecret, clientMetadata.selectedCipherSuite);
         ByteBuffer serverKeySeg = wrapDirect(serverKey.getEncoded());
         ByteBuffer serverHpKeySeg = wrapDirect(serverHp);
 
@@ -189,11 +189,11 @@ public class ConnectionMetadata {
         logger.info("Server IV {}", HexFormat.of().formatHex(iv));
 
         serverHandshakeCrypto = new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(serverKeySeg,
-                iv, serverHpKeySeg));
+                iv, serverHpKeySeg), clientMetadata.selectedCipherSuite);
 
-        byte[] clientHp = QuicCrypto.deriveHp(quicVersion, clientHandshakeTrafficSecret);
+        byte[] clientHp = QuicCrypto.deriveHp(quicVersion, clientHandshakeTrafficSecret, clientMetadata.selectedCipherSuite);
         ByteBuffer clientHpKeySeg = wrapDirect(clientHp);
-        SecretKey clientKey = QuicCrypto.deriveKey(quicVersion, clientHandshakeTrafficSecret);
+        SecretKey clientKey = QuicCrypto.deriveKey(quicVersion, clientHandshakeTrafficSecret, clientMetadata.selectedCipherSuite);
         ByteBuffer clientKeySeg = wrapDirect(clientKey.getEncoded());
         byte[] iv1 = QuicCrypto.deriveIv(quicVersion, clientHandshakeTrafficSecret);
 
@@ -202,7 +202,7 @@ public class ConnectionMetadata {
         logger.info("Client IV {}", HexFormat.of().formatHex(iv1));
 
         clientHandshakeCrypto = new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(clientKeySeg,
-                iv1, clientHpKeySeg));
+                iv1, clientHpKeySeg), clientMetadata.selectedCipherSuite);
     }
 
     /**
@@ -231,10 +231,10 @@ public class ConnectionMetadata {
             serverApplicationTrafficSecret = QuicCrypto.hkdfExpandLabel(
                     masterSecret, "s ap traffic", context, 32);
 
-            SecretKey clientApplicationSecret = QuicCrypto.deriveKey(quicVersion, clientApplicationTrafficSecret);
-            SecretKey serverApplicationSecret = QuicCrypto.deriveKey(quicVersion, serverApplicationTrafficSecret);
-            byte[] clientApplicationHpKey = QuicCrypto.deriveHp(quicVersion, clientApplicationTrafficSecret);
-            byte[] serverApplicationHpKey = QuicCrypto.deriveHp(quicVersion, serverApplicationTrafficSecret);
+            SecretKey clientApplicationSecret = QuicCrypto.deriveKey(quicVersion, clientApplicationTrafficSecret, clientMetadata.selectedCipherSuite);
+            SecretKey serverApplicationSecret = QuicCrypto.deriveKey(quicVersion, serverApplicationTrafficSecret, clientMetadata.selectedCipherSuite);
+            byte[] clientApplicationHpKey = QuicCrypto.deriveHp(quicVersion, clientApplicationTrafficSecret, clientMetadata.selectedCipherSuite);
+            byte[] serverApplicationHpKey = QuicCrypto.deriveHp(quicVersion, serverApplicationTrafficSecret, clientMetadata.selectedCipherSuite);
             byte[] clientApplicationIv = QuicCrypto.deriveIv(quicVersion, clientApplicationTrafficSecret);
             byte[] serverApplicationIv = QuicCrypto.deriveIv(quicVersion, serverApplicationTrafficSecret);
 
@@ -244,8 +244,8 @@ public class ConnectionMetadata {
             ByteBuffer clientKeySeg = wrapDirect(clientApplicationSecret.getEncoded());
             ByteBuffer serverKeySeg = wrapDirect(serverApplicationSecret.getEncoded());
 
-            clientApplicationCrypto = new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(clientKeySeg, clientApplicationIv, clientHpKeySeg));
-            serverApplicationCrypto = new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(serverKeySeg, serverApplicationIv, serverHpKeySeg));
+            clientApplicationCrypto = new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(clientKeySeg, clientApplicationIv, clientHpKeySeg), clientMetadata.selectedCipherSuite);
+            serverApplicationCrypto = new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(serverKeySeg, serverApplicationIv, serverHpKeySeg), clientMetadata.selectedCipherSuite);
 
             logger.debug("Derived 1-RTT application keys from transcript hash (stage 2 complete)");
         } catch (GeneralSecurityException e) {
@@ -267,19 +267,19 @@ public class ConnectionMetadata {
             serverApplicationTrafficSecret = QuicCrypto.hkdfExpandLabel(
                     serverApplicationTrafficSecret, QuicCrypto.kuLabel(quicVersion), new byte[0], 32);
 
-            SecretKey clientKey = QuicCrypto.deriveKey(quicVersion, clientApplicationTrafficSecret);
-            SecretKey serverKey = QuicCrypto.deriveKey(quicVersion, serverApplicationTrafficSecret);
+            SecretKey clientKey = QuicCrypto.deriveKey(quicVersion, clientApplicationTrafficSecret, clientMetadata.selectedCipherSuite);
+            SecretKey serverKey = QuicCrypto.deriveKey(quicVersion, serverApplicationTrafficSecret, clientMetadata.selectedCipherSuite);
 
             ByteBuffer clientKeySeg = wrapDirect(clientKey.getEncoded());
             ByteBuffer serverKeySeg = wrapDirect(serverKey.getEncoded());
 
             clientApplicationCrypto = new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(clientKeySeg,
                     QuicCrypto.deriveIv(quicVersion, clientApplicationTrafficSecret),
-                    prevClientApplicationCrypto.getHpKey()));
+                    prevClientApplicationCrypto.getHpKey()), clientMetadata.selectedCipherSuite);
 
             serverApplicationCrypto = new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(serverKeySeg,
                     QuicCrypto.deriveIv(quicVersion, serverApplicationTrafficSecret),
-                    prevServerApplicationCrypto.getHpKey()));
+                    prevServerApplicationCrypto.getHpKey()), clientMetadata.selectedCipherSuite);
 
             currentPhase = (byte)( (currentPhase == 0) ? 1 : 0 );
 
@@ -297,8 +297,8 @@ public class ConnectionMetadata {
             try {
                 QuicCrypto.PacketProtectionKeysWithHP[] keys = deriveInitialKeys(quicVersion,
                         destinationCid);
-                clientInitialCrypto.put(quicVersion, new NativeCrypto(keys[0]));
-                serverInitialCrypto.put(quicVersion, new NativeCrypto(keys[1]));
+                clientInitialCrypto.put(quicVersion, new NativeCrypto(keys[0], QuicCrypto.CipherMode.TLS_AES_128_GCM_SHA256_ID));
+                serverInitialCrypto.put(quicVersion, new NativeCrypto(keys[1], QuicCrypto.CipherMode.TLS_AES_128_GCM_SHA256_ID));
             } catch (QuicCrypto.CryptoException e) {
                 // RFC 9000: Silently discard packets that fail key derivation
                 logger.warn("Failed to derive Initial keys for CID: {}, discarding packet", destinationCid);
@@ -376,10 +376,10 @@ public class ConnectionMetadata {
         public final List<Short> supportedSignatures;
         public final List<Short> supportedGroups;
         public final Map<Short, byte[]> clientKeys;
-        public final String selectedCipherSuite = QuicCrypto.CIPHER_SUITE;
+        public final QuicCrypto.CipherMode selectedCipherSuite;
         public final List<Integer> availableVersions;
 
-        public ClientMetadataNegotiated(String alpn, long maxIdleTimeoutMs, List<Short> supportedGroups, Map<Short, byte[]> clientKeys, long maxUdpPayloadSize, long initialMaxData, long initialMaxStreamDataBidiLocal, long initialMaxStreamDataBidiRemote, long initialMaxStreamDataUni, long initialMaxStreamsBidi, long initialMaxStreamsUni, List<Short> supportedSignatures, long ackDelayExponent,  List<Integer> availableVersions) {
+        public ClientMetadataNegotiated(String alpn, long maxIdleTimeoutMs, List<Short> supportedGroups, Map<Short, byte[]> clientKeys, long maxUdpPayloadSize, long initialMaxData, long initialMaxStreamDataBidiLocal, long initialMaxStreamDataBidiRemote, long initialMaxStreamDataUni, long initialMaxStreamsBidi, long initialMaxStreamsUni, List<Short> supportedSignatures, long ackDelayExponent,  List<Integer> availableVersions, QuicCrypto.CipherMode selectedCipherSuite) {
             this.alpn = alpn;
             this.maxIdleTimeoutMs = maxIdleTimeoutMs;
             this.maxUdpPayloadSize = maxUdpPayloadSize;
@@ -394,6 +394,7 @@ public class ConnectionMetadata {
             this.ackDelayExponent = ackDelayExponent;
             this.clientKeys = clientKeys;
             this.availableVersions = availableVersions;
+            this.selectedCipherSuite = selectedCipherSuite;
         }
     }
 }

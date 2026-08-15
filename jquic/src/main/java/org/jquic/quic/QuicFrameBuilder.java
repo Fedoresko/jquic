@@ -141,7 +141,7 @@ public class QuicFrameBuilder {
         hrr.putShort((short) 0x0303);                     // legacy_version = TLS 1.2
         hrr.put(QuicCrypto.HRR_RANDOM);                              // sentinel random
         hrr.put((byte) 0x00);                             // legacy session_id length = 0
-        hrr.putShort((short) QuicCrypto.TLS_AES_128_GCM_SHA256_ID); // cipher suite
+        hrr.putShort((short) QuicCrypto.CipherMode.TLS_AES_128_GCM_SHA256_ID.val); // cipher suite
         hrr.put((byte) 0x00);                             // legacy compression = null
 
         int extLenPos = hrr.position();
@@ -197,7 +197,7 @@ public class QuicFrameBuilder {
         //   ProtocolVersion(2) + Random(32) + session_id_len(1)
         //   + CipherSuite(2) + compression(1) + extensions_len(2) + extensions
 
-        short cipherSuiteId = QuicCrypto.getCipherSuiteId(metadata.clientMetadata.selectedCipherSuite);
+        short cipherSuiteId = (short) (metadata.clientMetadata.selectedCipherSuite.val & 0xFFFF);
 
         byte[] keyShare = metadata.serverEphemeralPublicKey;
 

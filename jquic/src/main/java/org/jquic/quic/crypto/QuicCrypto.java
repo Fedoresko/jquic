@@ -33,6 +33,7 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 import static org.jquic.quic.QuicPacketBuilder.STATELESS_RESET_TOKEN_LENGTH;
+import static org.jquic.quic.crypto.QuicCrypto.CipherMode.*;
 
 /**
  * Handles QUIC cryptographic operations based on TLS 1.3.
@@ -54,12 +55,29 @@ public class QuicCrypto {
         (byte)0xf9, (byte)0xbd, (byte)0x2e, (byte)0xd9
     };
 
-    public static final String CIPHER_SUITE = "TLS_AES_128_GCM_SHA256";
-    private static final int AES_128_KEY_LENGTH = 16;
-
     // TLS 1.3 identifiers used during ClientHello parsing and ServerHello construction
     /** TLS_AES_128_GCM_SHA256 cipher suite identifier (RFC 8446 Appendix B.4). */
-    public static final int TLS_AES_128_GCM_SHA256_ID = 0x1301;
+    public enum CipherMode {
+        TLS_AES_128_GCM_SHA256_ID (0x1301, 16),
+        TLS_AES_256_GCM_SHA384_ID (0x1302, 32),
+        TLS_CHACHA20_POLY1305_SHA256 (0x1303, 32),
+        UNKNOWN(0, 0);
+
+        CipherMode(int val, int keyLen) {
+            this.val = val;
+            this.keyLen = keyLen;
+        }
+        public static CipherMode fromInt(int val) {
+            for (CipherMode mode : values()) {
+                if (mode.val == val) {
+                    return mode;
+                }
+            }
+            return UNKNOWN;
+        }
+        public final int val;
+        public final int keyLen;
+    }
     /** TLS 1.3 version identifier used in supported_versions extension (RFC 8446 В§4.2.1). */
     public static final int TLS_VERSION_1_3 = 0x0304;
     /** IANA NamedGroup identifier for x25519 (RFC 8446 В§4.2.7). */
@@ -168,16 +186,17 @@ public class QuicCrypto {
             if (buf.remaining() < 2) throw new CryptoException("ClientHello: missing cipher_suites length");
             int cipherSuitesLen = buf.getShort() & 0xFFFF;
             if (buf.remaining() < cipherSuitesLen) throw new CryptoException("ClientHello: truncated cipher_suites");
-            boolean hasTlsAes128Gcm = false;
             int cipherSuitesEnd = buf.position() + cipherSuitesLen;
+            List<CipherMode> cipherSuitesList = new ArrayList<>();
             while (buf.position() < cipherSuitesEnd) {
                 int cs = buf.getShort() & 0xFFFF;
-                if (cs == TLS_AES_128_GCM_SHA256_ID) hasTlsAes128Gcm = true;
+                cipherSuitesList.add(CipherMode.fromInt(cs));
             }
-            if (!hasTlsAes128Gcm) {
-                throw new CryptoException("ClientHello: TLS_AES_128_GCM_SHA256 not offered");
+            if (!cipherSuitesList.contains(TLS_AES_128_GCM_SHA256_ID) &&
+                !cipherSuitesList.contains(TLS_AES_256_GCM_SHA384_ID) &&
+                !cipherSuitesList.contains(TLS_CHACHA20_POLY1305_SHA256)) {
+                throw new CryptoException("ClientHello: no compatible ciphers offered");
             }
-            logger.debug("ClientHello cipher suites: TLS_AES_128_GCM_SHA256 present");
 
             // -- Legacy compression methods ----------------------------------------
             if (buf.remaining() < 1) throw new CryptoException("ClientHello: missing compression_methods length");
@@ -346,8 +365,9 @@ public class QuicCrypto {
 
             logger.debug("Initials negotiated max_data {}, max stream data bidi local {}, max stream data bidi remote {}, max stream data uni {}, max streams bidi {}, max streams uni {}", initialMaxData, initialMaxStreamDataBidiLocal, initialMaxStreamDataBidiRemote, initialMaxStreamDataUni, initialMaxStreamsBidi, initialMaxStreamsUni);
 
-            return new ConnectionMetadata.ClientMetadataNegotiated(alpn, maxIdleTimeout, supportedGroups, clientKeys, maxUdpPayloadSize, initialMaxData, initialMaxStreamDataBidiLocal, initialMaxStreamDataBidiRemote, initialMaxStreamDataUni, initialMaxStreamsBidi, initialMaxStreamsUni, signatures, ackDelayExponent, availableVersions);
+            CipherMode selected = cipherSuitesList.contains(TLS_AES_128_GCM_SHA256_ID) ? TLS_AES_128_GCM_SHA256_ID : cipherSuitesList.get(0);
 
+            return new ConnectionMetadata.ClientMetadataNegotiated(alpn, maxIdleTimeout, supportedGroups, clientKeys, maxUdpPayloadSize, initialMaxData, initialMaxStreamDataBidiLocal, initialMaxStreamDataBidiRemote, initialMaxStreamDataUni, initialMaxStreamsBidi, initialMaxStreamsUni, signatures, ackDelayExponent, availableVersions, selected);
         } catch (CryptoException ce) {
             throw ce;
         } catch (Exception e) {
@@ -982,28 +1002,6 @@ public class QuicCrypto {
         output.write(signature);
     }
 
-    /**
-     * Maps cipher suite name to TLS identifier (RFC 8446 Appendix B.4).
-     */
-    public static short getCipherSuiteId(String cipherSuite) {
-        if (cipherSuite == null) {
-            logger.warn("Cipher suite is null, defaulting to TLS_AES_128_GCM_SHA256");
-            return (short) 0x1301;
-        }
-
-        return switch (cipherSuite) {
-            case "TLS_AES_128_GCM_SHA256" -> (short) 0x1301;
-            case "TLS_AES_256_GCM_SHA384" -> (short) 0x1302;
-            case "TLS_CHACHA20_POLY1305_SHA256" -> (short) 0x1303;
-            case "TLS_AES_128_CCM_SHA256" -> (short) 0x1304;
-            case "TLS_AES_128_CCM_8_SHA256" -> (short) 0x1305;
-            default -> {
-                logger.warn("Unknown cipher suite: {}, defaulting to TLS_AES_128_GCM_SHA256", cipherSuite);
-                yield (short) 0x1301;
-            }
-        };
-    }
-
     // ========== HKDF Implementation ==========
 
     /**
@@ -1097,8 +1095,8 @@ public class QuicCrypto {
         };
     }
 
-    public static SecretKey deriveKey(QuicVersion version, byte[] secret) throws CryptoException {
-        byte[] key = hkdfExpandLabel(secret, keyLabel(version), new byte[0], AES_128_KEY_LENGTH);
+    public static SecretKey deriveKey(QuicVersion version, byte[] secret, CipherMode mode) throws CryptoException {
+        byte[] key = hkdfExpandLabel(secret, keyLabel(version), new byte[0], mode.keyLen);
         return new SecretKeySpec(key, "AES");
     }
 
@@ -1106,8 +1104,8 @@ public class QuicCrypto {
         return hkdfExpandLabel(secret, ivLabel(version), new byte[0], GCM_NONCE_LENGTH);
     }
 
-    public static byte[] deriveHp(QuicVersion version, byte[] secret) throws CryptoException {
-        return hkdfExpandLabel(secret, hpLabel(version), new byte[0], AES_128_KEY_LENGTH);
+    public static byte[] deriveHp(QuicVersion version, byte[] secret, CipherMode mode) throws CryptoException {
+        return hkdfExpandLabel(secret, hpLabel(version), new byte[0], mode.keyLen);
     }
 
     /**
