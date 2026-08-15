@@ -24,6 +24,8 @@ import org.slf4j.LoggerFactory;
 import javax.crypto.SecretKey;
 import java.nio.ByteBuffer;
 import java.security.GeneralSecurityException;
+import java.util.HashMap;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 
@@ -65,8 +67,8 @@ public class ConnectionMetadata {
      */
     public byte[] handshakeSecretBytes;
 
-    public NativeCrypto clientInitialCrypto;
-    public NativeCrypto serverInitialCrypto;
+    public Map<QuicVersion, NativeCrypto> clientInitialCrypto = new HashMap<>();
+    public Map<QuicVersion, NativeCrypto> serverInitialCrypto = new HashMap<>();
     public NativeCrypto clientHandshakeCrypto;
     public NativeCrypto serverHandshakeCrypto;
     public byte[] clientHandshakeTrafficSecret;
@@ -179,16 +181,28 @@ public class ConnectionMetadata {
         ByteBuffer serverKeySeg = wrapDirect(serverKey.getEncoded());
         ByteBuffer serverHpKeySeg = wrapDirect(serverHp);
 
+
+        byte[] iv = QuicCrypto.deriveIv(quicVersion, serverHandshakeTrafficSecret);
+
+        logger.info("Server Key {}", HexFormat.of().formatHex(serverKey.getEncoded()));
+        logger.info("Server HP {}", HexFormat.of().formatHex(serverHp));
+        logger.info("Server IV {}", HexFormat.of().formatHex(iv));
+
         serverHandshakeCrypto = new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(serverKeySeg,
-                QuicCrypto.deriveIv(quicVersion, serverHandshakeTrafficSecret), serverHpKeySeg));
+                iv, serverHpKeySeg));
 
         byte[] clientHp = QuicCrypto.deriveHp(quicVersion, clientHandshakeTrafficSecret);
         ByteBuffer clientHpKeySeg = wrapDirect(clientHp);
         SecretKey clientKey = QuicCrypto.deriveKey(quicVersion, clientHandshakeTrafficSecret);
         ByteBuffer clientKeySeg = wrapDirect(clientKey.getEncoded());
+        byte[] iv1 = QuicCrypto.deriveIv(quicVersion, clientHandshakeTrafficSecret);
+
+        logger.info("Client Key {}", HexFormat.of().formatHex(clientKey.getEncoded()));
+        logger.info("Client HP {}", HexFormat.of().formatHex(clientHp));
+        logger.info("Client IV {}", HexFormat.of().formatHex(iv1));
 
         clientHandshakeCrypto = new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(clientKeySeg,
-                QuicCrypto.deriveIv(quicVersion, clientHandshakeTrafficSecret), clientHpKeySeg));
+                iv1, clientHpKeySeg));
     }
 
     /**
@@ -277,14 +291,14 @@ public class ConnectionMetadata {
 
     public @Nullable Boolean initializeKeys(QuicVersion quicVersion, byte[] destinationCid) {
         boolean isNewConnection = false;
-        if (clientInitialCrypto == null) {
+        if (!clientInitialCrypto.containsKey(quicVersion)) {
             originalDCid = destinationCid;
             isNewConnection = true;
             try {
                 QuicCrypto.PacketProtectionKeysWithHP[] keys = deriveInitialKeys(quicVersion,
                         destinationCid);
-                clientInitialCrypto = new NativeCrypto(keys[0]);
-                serverInitialCrypto = new NativeCrypto(keys[1]);
+                clientInitialCrypto.put(quicVersion, new NativeCrypto(keys[0]));
+                serverInitialCrypto.put(quicVersion, new NativeCrypto(keys[1]));
             } catch (QuicCrypto.CryptoException e) {
                 // RFC 9000: Silently discard packets that fail key derivation
                 logger.warn("Failed to derive Initial keys for CID: {}, discarding packet", destinationCid);
@@ -363,8 +377,9 @@ public class ConnectionMetadata {
         public final List<Short> supportedGroups;
         public final Map<Short, byte[]> clientKeys;
         public final String selectedCipherSuite = QuicCrypto.CIPHER_SUITE;
+        public final List<Integer> availableVersions;
 
-        public ClientMetadataNegotiated(String alpn, long maxIdleTimeoutMs, List<Short> supportedGroups, Map<Short, byte[]> clientKeys, long maxUdpPayloadSize, long initialMaxData, long initialMaxStreamDataBidiLocal, long initialMaxStreamDataBidiRemote, long initialMaxStreamDataUni, long initialMaxStreamsBidi, long initialMaxStreamsUni, List<Short> supportedSignatures, long ackDelayExponent) {
+        public ClientMetadataNegotiated(String alpn, long maxIdleTimeoutMs, List<Short> supportedGroups, Map<Short, byte[]> clientKeys, long maxUdpPayloadSize, long initialMaxData, long initialMaxStreamDataBidiLocal, long initialMaxStreamDataBidiRemote, long initialMaxStreamDataUni, long initialMaxStreamsBidi, long initialMaxStreamsUni, List<Short> supportedSignatures, long ackDelayExponent,  List<Integer> availableVersions) {
             this.alpn = alpn;
             this.maxIdleTimeoutMs = maxIdleTimeoutMs;
             this.maxUdpPayloadSize = maxUdpPayloadSize;
@@ -378,6 +393,7 @@ public class ConnectionMetadata {
             this.supportedGroups = supportedGroups;
             this.ackDelayExponent = ackDelayExponent;
             this.clientKeys = clientKeys;
+            this.availableVersions = availableVersions;
         }
     }
 }

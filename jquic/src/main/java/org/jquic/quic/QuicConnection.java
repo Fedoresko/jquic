@@ -82,7 +82,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
     private ConnectionStreamManager connectionStreamManager;
     private long currentTimestamp;
     private final byte[] statelessResetToken;
-    private final QuicVersion quicVersion;
+    private QuicVersion quicVersion;
 
     // ALPN - negotiated application protocol (RFC 9001 Section 8.1)
     private String negotiatedProtocol = null;
@@ -341,7 +341,9 @@ public class QuicConnection implements TimeoutHeap.Entry {
                     connectionMetadata.clientHandshakeCrypto = null;
                 }
                 if (connectionMetadata.clientInitialCrypto != null) {
-                    connectionMetadata.clientInitialCrypto.close();
+                    for (NativeCrypto crypto : connectionMetadata.clientInitialCrypto.values()) {
+                        crypto.close();
+                    }
                     connectionMetadata.clientInitialCrypto = null;
                 }
                 if (connectionMetadata.serverApplicationCrypto != null) {
@@ -353,7 +355,9 @@ public class QuicConnection implements TimeoutHeap.Entry {
                     connectionMetadata.serverHandshakeCrypto = null;
                 }
                 if (connectionMetadata.serverInitialCrypto != null) {
-                    connectionMetadata.serverInitialCrypto.close();
+                    for (NativeCrypto crypto : connectionMetadata.serverInitialCrypto.values()) {
+                        crypto.close();
+                    }
                     connectionMetadata.serverInitialCrypto = null;
                 }
             } catch (Exception ex) {
@@ -396,7 +400,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
         if (isNewConnection == null) return null;
 
         // Parse masked header (packet number still protected)
-        QuicPacketHeader header = QuicPacketHeader.parse(packet.buf(), connectionMetadata.clientInitialCrypto, initialSpace.getLargestReceivedPacketNumber());
+        QuicPacketHeader header = QuicPacketHeader.parse(packet.buf(), connectionMetadata.clientInitialCrypto.get(packetSummary.version()), initialSpace.getLargestReceivedPacketNumber());
         if (header == null) {
             // RFC 9000: Silently discard malformed packets
             logger.warn("Failed to parse Initial packet header for CID: {}, discarding", connectionId);
@@ -417,7 +421,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
 
         int remaining = packet.buf().remaining();
         try {
-            return decryptAeadInPlace(packet, header, (int) header.payloadLength - header.pnLength, connectionMetadata.clientInitialCrypto);
+            return decryptAeadInPlace(packet, header, (int) header.payloadLength - header.pnLength, connectionMetadata.clientInitialCrypto.get(packetSummary.version()));
         } catch (Exception e) {
             // RFC 9000: Silently discard packets that fail decryption or tag verification
             logger.warn("Initial packet decryption/authentication failed for CID: {}, size: {} pn {} payloadLen {} issue stateless reset",
@@ -425,9 +429,6 @@ public class QuicConnection implements TimeoutHeap.Entry {
             logger.warn("Packet details: DCID {}, Pay len {}, PN {} remaining {}", header.destinationCid, header.payloadLength, header.packetNumber, remaining);
             if (isNewConnection) {
                 sendStatelessReset(packetLen);
-            } else {
-                sendConnectionCloseAndUpdateState(QuicTransportError.PROTOCOL_VIOLATION,
-                "Initial packet crypto validation failed.");
             }
             packet.release();
             return null;
@@ -942,15 +943,17 @@ public class QuicConnection implements TimeoutHeap.Entry {
             frames.release();
         }
 
-        if (needAck) {
-            sendInitialAck();
-        }
-
         logger.debug("Initial packet processed for connection {}", connectionId);
 
         if (state.get() == INITIAL && connectionMetadata.clientMetadata != null) {
             try {
                 logger.info("Connection CID: {} got complete ClientHello, proceeding with handshake...", connectionId);
+
+                if (connectionMetadata.clientMetadata.availableVersions.contains(QuicVersion.QUIC_VERSION_2.val)
+                        && quicVersion != QuicVersion.QUIC_VERSION_2) {
+                    quicVersion = QuicVersion.QUIC_VERSION_2;
+                    connectionMetadata.initializeKeys(quicVersion, connectionMetadata.originalDCid);
+                }
 
                 sendInitialResponse();
 
@@ -967,6 +970,11 @@ public class QuicConnection implements TimeoutHeap.Entry {
                 logger.error("Failed to send Handshake response", e);
             }
         }
+
+        if (needAck) {
+            sendInitialAck();
+        }
+
     }
 
     private void rebuildCryptoFrame(long offset, long length, PoolBuffer frames, Consumer<ByteBuffer> readyFrameConsumer) {
@@ -1111,7 +1119,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
                         packetNumber,
                         space.getLargestAckedPacketNumber(),
                         payload.buf().duplicate(),            // Plaintext payload
-                        connectionMetadata.serverInitialCrypto
+                        connectionMetadata.serverInitialCrypto.get(quicVersion)
                     );
                 case HANDSHAKE -> QuicPacketBuilder.buildHandshakePacket(
                         quicVersion,
@@ -1224,7 +1232,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
         TranscryptHashSupport transcryptUpdater = new TranscryptHashSupport(out, this::updateTranscript);
         // -- 1. EncryptedExtensions --------------------------------------------
         transcryptUpdater.startHashMessage("EncryptedExtensions");
-        QuicCrypto.putEncryptedExtensions(connectionMetadata, connectionId, statelessResetToken, out);
+        QuicCrypto.putEncryptedExtensions(connectionMetadata, connectionId, statelessResetToken, quicVersion, out);
 
         // --- 2. Certificate ---------------------------------------------------
         transcryptUpdater.startHashMessage("Certificate");

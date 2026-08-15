@@ -44,6 +44,7 @@ import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -141,13 +142,13 @@ class QuicConnectionTest {
         mockMetadata.serverEphemeralPublicKey = new byte[32];
         mockMetadata.clientHandshakeCrypto = nCryptoMock;
         mockMetadata.serverHandshakeCrypto = nCryptoMock;
-        mockMetadata.clientInitialCrypto = nCryptoMock;
-        mockMetadata.serverInitialCrypto = nCryptoMock;
+        mockMetadata.clientInitialCrypto = new HashMap<>(Map.of(QuicVersion.QUIC_VERSION_1, nCryptoMock, QuicVersion.QUIC_VERSION_2, nCryptoMock));
+        mockMetadata.serverInitialCrypto = new HashMap<>(Map.of(QuicVersion.QUIC_VERSION_1, nCryptoMock, QuicVersion.QUIC_VERSION_2, nCryptoMock));
         mockMetadata.clientApplicationCrypto = nCryptoMock;
         mockMetadata.serverApplicationCrypto = nCryptoMock;
         mockMetadata.clientMetadata = new ConnectionMetadata.ClientMetadataNegotiated("h3", 1000, List.of(),
                 Map.of(), 1200, 1000, 0, 0,
-                0, 0, 0, List.of(), 3);
+                0, 0, 0, List.of(), 3, List.of());
         mockMetadata.handshakeSecretBytes = new byte[32];
         mockMetadata.selectedSignatureScheme = 0x0403;
         mockMetadata.serverHandshakeTrafficSecret = new byte[32];
@@ -929,8 +930,8 @@ class QuicConnectionTest {
 
         ConnectionMetadata mockMetadata = new ConnectionMetadata();
         mockMetadata.negotiatedIdleTimeoutMs = 10_000;
-        mockMetadata.clientInitialCrypto = nCryptoMock;// new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(initialProtectionKeys[0].key(), initialProtectionKeys[0].iv(), null));
-        mockMetadata.serverInitialCrypto = nCryptoMock;//new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(initialProtectionKeys[1].key(), initialProtectionKeys[1].iv(), null));
+        mockMetadata.clientInitialCrypto = new HashMap<>(Map.of(QuicVersion.QUIC_VERSION_1, nCryptoMock, QuicVersion.QUIC_VERSION_2, nCryptoMock));
+        mockMetadata.serverInitialCrypto = new HashMap<>(Map.of(QuicVersion.QUIC_VERSION_1, nCryptoMock, QuicVersion.QUIC_VERSION_2, nCryptoMock));
         mockMetadata.clientHandshakeCrypto = nCryptoMock;//new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(clientHandshakeSecret, new byte[12], null));
         mockMetadata.serverHandshakeCrypto = nCryptoMock;//new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(serverHandshakeSecret, new byte[12], null));
         mockMetadata.clientApplicationCrypto = nCryptoMock;//new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(client1RttSecret, new byte[12], null));

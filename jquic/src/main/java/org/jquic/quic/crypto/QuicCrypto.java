@@ -206,6 +206,7 @@ public class QuicCrypto {
             List<Short> signatures = new ArrayList<>();
             List<Short> supportedGroups = new ArrayList<>();
             Map<Short, byte[]> clientKeys = new HashMap<>();
+            List<Integer> availableVersions = new ArrayList<>();
 
             int extensionsEnd = buf.position() + extensionsLen;
             while (buf.position() < extensionsEnd && buf.remaining() >= 4) {
@@ -307,6 +308,11 @@ public class QuicCrypto {
                                 ackDelayExponent = QuicVarint.read(buf);
                             } else if (paramId == 0x0E) {
                                 activeConnectionIdLimit = QuicVarint.read(buf);
+                            } else if (paramId == 0x11) { //version_information
+                                int chosenVersion =  buf.getInt();
+                                while (buf.position() < (int)(startPos + paramLen)) {
+                                    availableVersions.add(buf.getInt());
+                                }
                             }
                             
                             // Ensure we consume exactly paramLen bytes
@@ -340,7 +346,7 @@ public class QuicCrypto {
 
             logger.debug("Initials negotiated max_data {}, max stream data bidi local {}, max stream data bidi remote {}, max stream data uni {}, max streams bidi {}, max streams uni {}", initialMaxData, initialMaxStreamDataBidiLocal, initialMaxStreamDataBidiRemote, initialMaxStreamDataUni, initialMaxStreamsBidi, initialMaxStreamsUni);
 
-            return new ConnectionMetadata.ClientMetadataNegotiated(alpn, maxIdleTimeout, supportedGroups, clientKeys, maxUdpPayloadSize, initialMaxData, initialMaxStreamDataBidiLocal, initialMaxStreamDataBidiRemote, initialMaxStreamDataUni, initialMaxStreamsBidi, initialMaxStreamsUni, signatures, ackDelayExponent);
+            return new ConnectionMetadata.ClientMetadataNegotiated(alpn, maxIdleTimeout, supportedGroups, clientKeys, maxUdpPayloadSize, initialMaxData, initialMaxStreamDataBidiLocal, initialMaxStreamDataBidiRemote, initialMaxStreamDataUni, initialMaxStreamsBidi, initialMaxStreamsUni, signatures, ackDelayExponent, availableVersions);
 
         } catch (CryptoException ce) {
             throw ce;
@@ -695,7 +701,7 @@ public class QuicCrypto {
      *
      * @param metadata the live {@link ConnectionMetadata} for this connection
      */
-    public static void putEncryptedExtensions(ConnectionMetadata metadata, long cid, byte[] statelessResetToken, ChunkedOutputStreamWithAmendments output) throws IOException {
+    public static void putEncryptedExtensions(ConnectionMetadata metadata, long cid, byte[] statelessResetToken, QuicVersion quicVersion, ChunkedOutputStreamWithAmendments output) throws IOException {
         // Zero-copy: single pre-allocated buffer, all lengths back-filled in place.
         // Layout:
         //   [0]      HandshakeType (1)          = 0x08
@@ -809,6 +815,12 @@ public class QuicCrypto {
         QuicVarint.write(output, 8);
         output.writeLong(cid);
 
+//        // version_information
+        QuicVarint.write(output, 0x11);
+        QuicVarint.write(output, 12);
+        output.writeInt(quicVersion.val);
+        output.writeInt(QuicVersion.QUIC_VERSION_1.val);
+        output.writeInt(QuicVersion.QUIC_VERSION_2.val);
 
         int tpEnd = output.getPos();
         int tpLen = tpEnd - tpStart;
