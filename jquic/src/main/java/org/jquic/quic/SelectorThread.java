@@ -289,14 +289,7 @@ public class SelectorThread extends Thread {
     private void pollConnectionDataAndSend(QuicConnection conn) {
         OutboundPacket outbound;
         while ((outbound = conn.pollOutbound()) != null) {
-//            try {
-//                channel.send(outbound.data().buf(), conn.getRemoteAddress(), outbound.ectMarking());
-//            } catch (IOException e) {
-//                logger.error("Selector-{}: Error while sending outbound packets", threadId, e);
-//            } finally {
-//                outbound.data().release();
-//            }
-            packetsToSendPerConnection.add(new PacketToSend(conn.getRemoteAddress(), outbound.data(), outbound.ectMarking()));
+            packetsToSendPerConnection.add(new PacketToSend(outbound.dest(), outbound.data(), outbound.ectMarking()));
             switch (outbound.packetSource()) {
                 case NEW -> sentPackets++;
                 case RETRANSMISSION -> retransmittedPackets++;
@@ -380,7 +373,8 @@ public class SelectorThread extends Thread {
                     break;
                 }
 
-                if (!connection.getRemoteAddress().equals(sender)) {
+                if (!connection.getRemoteAddress().equals(sender) && connection.getState() != QuicConnection.State.ESTABLISHED) {
+                    //TODO: RETRY
                     logger.warn("Selector-{} CID: {}, different remote address, discarding datagram", threadId, cid);
                     break;
                 }
@@ -401,7 +395,7 @@ public class SelectorThread extends Thread {
                         }
                         case ONE_RTT -> {
                             logger.debug("Selector-{}: Processing 1-RTT packet for CID: {} from: {}", threadId, cid, sender);
-                            connection.process1RttPacket(datagram, ecnFlags);
+                            connection.process1RttPacket(datagram, ecnFlags, sender);
                         }
                         case RETRY, ZERO_RTT -> {
                             logger.warn("Selector-{}: Processing {} packet for CID: {} not implemented",threadId, packetSummary.type(), cid);

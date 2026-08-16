@@ -294,7 +294,7 @@ class QuicConnectionTest {
 
         // Create 1-RTT packet with STREAM frame
         ByteBuffer packet = createMock1RttPacketWithStreamData(4L, "Hello QUIC".getBytes());
-        connection.process1RttPacket(new RootPoolBuffer(packet, pool, false), 0);
+        connection.process1RttPacket(new RootPoolBuffer(packet, pool, false), 0, null);
         OutboundPacket ackResponse = connection.pollOutbound();
 
 
@@ -317,7 +317,7 @@ class QuicConnectionTest {
         setupMockTlsMetadata();
 
         ByteBuffer packet = createMock1RttPacketWithStreamData(0L, "test".getBytes());
-        connection.process1RttPacket(new RootPoolBuffer(packet, pool, false), 0);
+        connection.process1RttPacket(new RootPoolBuffer(packet, pool, false), 0, null);
         List<ByteBuffer> responses = getOutboundPackets(connection);
 
         assertEquals(0, responses.size(), "1-RTT packet should be rejected in HANDSHAKE state");
@@ -335,7 +335,7 @@ class QuicConnectionTest {
 
         // Send CONNECTION_CLOSE frame
         ByteBuffer closePacket = createMock1RttPacketWithConnectionClose();
-        connection.process1RttPacket(new RootPoolBuffer(closePacket, pool, false), 0);
+        connection.process1RttPacket(new RootPoolBuffer(closePacket, pool, false), 0, null);
         OutboundPacket ackResponse = connection.pollOutbound();
 
         // Verify state transition
@@ -360,7 +360,7 @@ class QuicConnectionTest {
 
         // Try to send stream data
         ByteBuffer packet = createMock1RttPacketWithStreamData(0L, "test".getBytes());
-        connection.process1RttPacket(new RootPoolBuffer(packet, pool, false), 0);
+        connection.process1RttPacket(new RootPoolBuffer(packet, pool, false), 0, null);
 
         // Verify payload listener was NOT called
         assertEquals(0, callCount.get(), "Stream data should be ignored in CLOSING state");
@@ -393,7 +393,7 @@ class QuicConnectionTest {
         setupMockTlsMetadata();
 
         ByteBuffer packet = createMock1RttPacketWithStreamData(0L, "test".getBytes());
-        connection.process1RttPacket(new RootPoolBuffer(packet, pool, false), 0);
+        connection.process1RttPacket(new RootPoolBuffer(packet, pool, false), 0, null);
         List<ByteBuffer> responses = getOutboundPackets(connection);
 
         assertEquals(0, responses.size(), "1-RTT packet should be rejected in CLOSED state");
@@ -414,9 +414,9 @@ class QuicConnectionTest {
         ByteBuffer packet0 = createMock1RttPacket(0, new byte[]{0x00});
         ByteBuffer packet1 = createMock1RttPacket(1, new byte[]{0x00});
 
-        connection.process1RttPacket(new RootPoolBuffer(packet2, pool, false), 0);
-        connection.process1RttPacket(new RootPoolBuffer(packet0, pool, false), 0);
-        connection.process1RttPacket(new RootPoolBuffer(packet1, pool, false), 0);
+        connection.process1RttPacket(new RootPoolBuffer(packet2, pool, false), 0, null);
+        connection.process1RttPacket(new RootPoolBuffer(packet0, pool, false), 0, null);
+        connection.process1RttPacket(new RootPoolBuffer(packet1, pool, false), 0, null);
 
         // Verify largest received packet number is tracked correctly
         // Note: This is a simplified test - full reordering would need ACK range tracking
@@ -437,7 +437,7 @@ class QuicConnectionTest {
         // Initial phase is 0 (default). Send a packet with key phase bit = 1 (flipped).
         // Packet number must be greater than lastPhaseSwitchPacketNumber (default -1).
         ByteBuffer packet = createMock1RttPacketWithKeyPhase(10L, new byte[]{0x01}, true);
-        connection.process1RttPacket(new RootPoolBuffer(packet, pool, false), 0);
+        connection.process1RttPacket(new RootPoolBuffer(packet, pool, false), 0, null);
 
         ConnectionMetadata meta = connection.getTlsMetadata();
 
@@ -469,7 +469,7 @@ class QuicConnectionTest {
 
         // Phase bit = 0 matches initial currentPhase = 0 -> no rotation expected
         ByteBuffer packet = createMock1RttPacketWithKeyPhase(5L, new byte[]{0x01}, false);
-        connection.process1RttPacket(new RootPoolBuffer(packet, pool, false), 0);
+        connection.process1RttPacket(new RootPoolBuffer(packet, pool, false), 0, null);
 
         // Keys must be unchanged
         assertSame(keyBefore, connection.getTlsMetadata().clientApplicationCrypto,
@@ -485,7 +485,7 @@ class QuicConnectionTest {
         // Step 1: Trigger rotation with key phase bit = 1, packet number 10.
         // The real rotateApplicationKeys derives a new key from clientApplicationTrafficSecret.
         ByteBuffer rotationPacket = createMock1RttPacketWithKeyPhase(10L, new byte[]{0x01}, true);
-        connection.process1RttPacket(new RootPoolBuffer(rotationPacket, pool, false), 0);
+        connection.process1RttPacket(new RootPoolBuffer(rotationPacket, pool, false), 0, null);
 
         NativeCrypto rotatedKey = connection.getTlsMetadata().clientApplicationCrypto;
         assertNotSame(originalKey, rotatedKey,
@@ -495,7 +495,7 @@ class QuicConnectionTest {
         // It must be processed without triggering another rotation (same phase) and must
         // succeed - proving the connection now uses the post-rotation key for decryption.
         ByteBuffer followUpPacket = createMock1RttPacketWithKeyPhase(11L, new byte[]{0x01}, true);
-        connection.process1RttPacket(new RootPoolBuffer(followUpPacket, pool, false), 0);
+        connection.process1RttPacket(new RootPoolBuffer(followUpPacket, pool, false), 0, null);
 
         // Keys must remain the post-rotation keys after the follow-up packet
         assertSame(rotatedKey, connection.getTlsMetadata().clientApplicationCrypto,
@@ -511,7 +511,7 @@ class QuicConnectionTest {
         // Step 1: Trigger rotation with packet number 20, key phase bit = 1.
         // The real rotateApplicationKeys saves prevClientApplicationKeys and derives new ones.
         ByteBuffer rotationPacket = createMock1RttPacketWithKeyPhase(20L, new byte[]{0x01}, true);
-         connection.process1RttPacket(new RootPoolBuffer(rotationPacket, pool, false), 0);
+         connection.process1RttPacket(new RootPoolBuffer(rotationPacket, pool, false), 0, null);
 
         NativeCrypto prevKey = connection.getTlsMetadata().prevClientApplicationCrypto;
         NativeCrypto currentKey = connection.getTlsMetadata().clientApplicationCrypto;
@@ -520,7 +520,7 @@ class QuicConnectionTest {
         // Step 2: Deliver a LATE packet - packet number 5 (< lastPhaseSwitchPacketNumber = 20),
         // key phase bit = 0 (old phase). RFC 9001 В§6: must be decrypted with the PREVIOUS keys.
         ByteBuffer latePacket = createMock1RttPacketWithKeyPhase(5L, new byte[]{0x01}, false);
-        connection.process1RttPacket(new RootPoolBuffer(latePacket, pool, false), 0);
+        connection.process1RttPacket(new RootPoolBuffer(latePacket, pool, false), 0, null);
 
     }
 
@@ -530,14 +530,14 @@ class QuicConnectionTest {
         setupEstablishedConnection();
 
         // First rotation: phase 0 -> 1, at packet 10
-        connection.process1RttPacket(new BorrowedPoolBuffer(mock(RootPoolBuffer.class), createMock1RttPacketWithKeyPhase(10L, new byte[]{0x01}, true)), 0);
+        connection.process1RttPacket(new BorrowedPoolBuffer(mock(RootPoolBuffer.class), createMock1RttPacketWithKeyPhase(10L, new byte[]{0x01}, true)), 0, null);
         assertEquals(10L, connection.getTlsMetadata().lastPhaseSwitchPacketNumber,
                 "After first rotation lastPhaseSwitchPacketNumber should be 10");
         assertEquals((byte) 1, connection.getTlsMetadata().currentPhase,
                 "currentPhase should be 1 after first rotation");
 
         // Second rotation: phase 1 -> 0, at packet 30
-        connection.process1RttPacket(new BorrowedPoolBuffer(mock(RootPoolBuffer.class), createMock1RttPacketWithKeyPhase(30L, new byte[]{0x01}, false)), 0);
+        connection.process1RttPacket(new BorrowedPoolBuffer(mock(RootPoolBuffer.class), createMock1RttPacketWithKeyPhase(30L, new byte[]{0x01}, false)), 0, null);
         assertEquals(30L, connection.getTlsMetadata().lastPhaseSwitchPacketNumber,
                 "After second rotation lastPhaseSwitchPacketNumber should be 30");
         assertEquals((byte) 0, connection.getTlsMetadata().currentPhase,
@@ -557,7 +557,7 @@ class QuicConnectionTest {
 
         // Send packet with only PADDING (non-ack-eliciting)
         ByteBuffer packet = createMock1RttPacket(0, new byte[]{0x00}); // PADDING frame
-        connection.process1RttPacket(new RootPoolBuffer(packet, pool, false), 0);
+        connection.process1RttPacket(new RootPoolBuffer(packet, pool, false), 0, TEST_ADDRESS);
         List<ByteBuffer> responses = getOutboundPackets(connection);
 
         assertEquals(0, responses.size(), "ACK should not be generated for PADDING-only packet");
@@ -571,7 +571,7 @@ class QuicConnectionTest {
 
         // Send packet with STREAM frame (ack-eliciting)
         ByteBuffer packet = createMock1RttPacketWithStreamData(0L, "data".getBytes());
-        connection.process1RttPacket(new RootPoolBuffer(packet, pool, false), 0);
+        connection.process1RttPacket(new RootPoolBuffer(packet, pool, false), 0, null);
         ByteBuffer ackResponse = getOutboundPackets(connection).get(0);
 
         assertNotNull(ackResponse, "ACK should be generated for STREAM frame");
@@ -774,7 +774,7 @@ class QuicConnectionTest {
         // This creates a gap that should trigger retransmission of packet 0
         ByteBuffer ackPacket = createMock1RttPacketWithSelectiveAck(4, new long[]{2, 3, 4}, appSpace.allocatePacketNumber());
 
-        connection.process1RttPacket(new RootPoolBuffer(ackPacket, pool, false).borrow(), 0);
+        connection.process1RttPacket(new RootPoolBuffer(ackPacket, pool, false).borrow(), 0, null);
         List<ByteBuffer> responses = getOutboundPackets(connection);
 
         // Should return retransmissions for lost packets
@@ -848,7 +848,7 @@ class QuicConnectionTest {
 
         // Trigger retransmission by ACKing packets 2-4 (packet 0 will be lost)
         ByteBuffer ackPacket = createMock1RttPacketWithSelectiveAck(4, new long[]{2, 3, 4}, nextPnBeforeRetransmit);
-        connection.process1RttPacket(new RootPoolBuffer(ackPacket, pool, false).borrow(), 0);
+        connection.process1RttPacket(new RootPoolBuffer(ackPacket, pool, false).borrow(), 0, null);
         List<ByteBuffer> responses = getOutboundPackets(connection);
 
         // Verify retransmissions were created
@@ -890,7 +890,7 @@ class QuicConnectionTest {
 
         // ACK only packet 5, causing packets 0, 1 to be declared lost (5 - 3 = 2)
         ByteBuffer ackPacket = createMock1RttPacketWithSelectiveAck(5, new long[]{5}, nextPnBefore);
-        connection.process1RttPacket(new RootPoolBuffer(ackPacket, pool, false).borrow(), 0);
+        connection.process1RttPacket(new RootPoolBuffer(ackPacket, pool, false).borrow(), 0, null);
         List<ByteBuffer> responses = getOutboundPackets(connection);
 
         // Should have at least 2 retransmissions (packets 0 and 1)

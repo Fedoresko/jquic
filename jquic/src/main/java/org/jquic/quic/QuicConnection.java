@@ -23,6 +23,8 @@ import org.jquic.quic.buffers.TranscryptHashSupport;
 import org.jquic.quic.crypto.NativeCrypto;
 import org.jquic.quic.crypto.QuicCrypto;
 import org.jquic.quic.linux.ECT;
+import org.jquic.quic.paths.ConnectionPath;
+import org.jquic.quic.paths.PathState;
 import org.jquic.quic.streamapi.CongestionControl;
 import org.jquic.quic.streamapi.ConnectionStreamManager;
 import org.jquic.quic.streamapi.QuicApplicationProtocol;
@@ -47,6 +49,7 @@ import java.util.function.Consumer;
 import static org.jquic.quic.QuicConnection.State.*;
 import static org.jquic.quic.QuicFrameBuilder.*;
 import static org.jquic.quic.crypto.QuicCrypto.GCM_TAG_LENGTH;
+import static org.jquic.quic.paths.PathState.*;
 import static org.jquic.quic.streamapi.impl.StreamFrameWriter.*;
 
 /**
@@ -57,6 +60,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
 
     /** Maximum number of early 1-RTT packets buffered before ESTABLISHED. */
     private static final int MAX_EARLY_1RTT_QUEUE = 32;
+    public static final int MAX_PATH_ID = 3;
 
     /**
      * QUIC connection state following the connection lifecycle.
@@ -75,7 +79,10 @@ public class QuicConnection implements TimeoutHeap.Entry {
 
     private final long connectionId;
     private final ByteBuffer connectionIdBytes;
-    private final SocketAddress remoteAddress;
+
+    private final Map<SocketAddress, ConnectionPath> pathMap = new HashMap<>();
+    private SocketAddress primaryAddress;
+
     private final AtomicReference<State> state = new AtomicReference<>(INITIAL);
     public ConnectionMetadata connectionMetadata = new ConnectionMetadata();
     private int timeoutHeapIndex = -1;
@@ -120,11 +127,12 @@ public class QuicConnection implements TimeoutHeap.Entry {
     public QuicConnection(long connectionId, QuicVersion version, SocketAddress remoteAddress, MessagePassingQueue<TriStateQueue<ApplicationData>> wakeQueue, SelectorThread selector) {
         this.connectionId = connectionId;
         this.connectionIdBytes = ByteBuffer.allocate(8).putLong(connectionId);
-        this.remoteAddress = remoteAddress;
+        primaryAddress = remoteAddress;
         this.wakeQueue = wakeQueue;
         this.state.set(INITIAL);
         this.currentTimestamp = System.currentTimeMillis();
         this.timeoutTimestamp = idleTimeoutMs + currentTimestamp;
+        this.pathMap.put(remoteAddress, new ConnectionPath(remoteAddress, currentTimestamp));
         this.selector = selector;
         this.quicVersion = version;
         statelessResetToken = QuicCrypto.generateStatelessResetToken(ByteBuffer.allocate(8).putLong(connectionId).array());
@@ -171,7 +179,75 @@ public class QuicConnection implements TimeoutHeap.Entry {
      * @return the next ready-to-send encrypted packet, or {@code null} if the queue is empty
      */
     OutboundPacket pollOutbound() {
-        return outboundQueue.pollFirst();
+        OutboundPacket probePacket = checkConnectionPaths();
+        if (probePacket != null) return probePacket;
+
+        OutboundPacket outboundPacket = outboundQueue.peek();
+        if (outboundPacket == null) {
+            return null;
+        }
+
+        if (pathMap.isEmpty()) {
+            return null;
+        }
+
+        SocketAddress sendAddr = outboundPacket.dest();
+        ConnectionPath path = pathMap.get(sendAddr);
+        Iterator<ConnectionPath> iterator = pathMap.values().iterator();
+
+        while (path == null || (path.state == NEW && path.receivedBytes * 3 < path.sentBytes) ) { // 3X Amplification limit
+            if (iterator.hasNext()) {
+                path = iterator.next();
+            } else {
+                path = null;
+                break;
+            }
+        }
+
+        if (path != null) {
+            path.sentBytes += outboundPacket.data().buf().remaining();
+            outboundQueue.pollFirst();
+            return new OutboundPacket(outboundPacket.packetSource(), outboundPacket.data(), outboundPacket.ectMarking(), path.address);
+        }
+
+        return null;
+    }
+
+    public @Nullable OutboundPacket checkConnectionPaths() {
+        for (Iterator<Map.Entry<SocketAddress, ConnectionPath>> it = pathMap.entrySet().iterator(); it.hasNext(); ) {
+            ConnectionPath path = it.next().getValue();
+            if (path.state == VERIFIED) {
+                if (currentTimestamp - path.lastActive > 1000) {
+                    path.state = PROBING;
+                    logger.info("Probing dangling path (connection {} path {})", connectionId, path.address);
+                    path.probeSentAt = currentTimestamp;
+                    try {
+                        return new OutboundPacket(PacketSource.NEW, build1RttPing(), ECT.ECT_0, path.address);
+                    } catch (QuicException e) {
+                        logger.error("Failed to build PING frame", e);
+                    }
+                }
+            }
+            if (path.state == PROBING) {
+                if (currentTimestamp - path.lastActive < 1000) {
+                    path.state = VERIFIED;
+                } else if (currentTimestamp - path.lastActive > 5000) {
+                    it.remove();
+                    logger.info("Dangling path declared dead (connection {} path {})", connectionId, path.address);
+                } else if (currentTimestamp - path.probeSentAt > 1000) {
+                    path.probeSentAt = currentTimestamp;
+                    try {
+                        return new OutboundPacket(PacketSource.NEW, build1RttPing(), ECT.ECT_0, path.address);
+                    } catch (QuicException e) {
+                        logger.error("Failed to build PING frame", e);
+                    }
+                }
+            }
+            if (path.state == NEW && currentTimestamp - path.createdAt > 3000) {
+                it.remove(); // Not verified yet.
+            }
+        }
+        return null;
     }
 
     int outboundQueueSize() {
@@ -243,7 +319,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
     }
 
     public SocketAddress getRemoteAddress() {
-        return remoteAddress;
+        return primaryAddress;
     }
 
     public State getState() {
@@ -291,7 +367,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
                 PoolBuffer snapshot;
                 while ((snapshot = earlyOneRttQueue.pollFirst()) != null) {
                     try {
-                        process1RttPacket(snapshot, 0);
+                        process1RttPacket(snapshot, 0, getRemoteAddress());
                         snapshot.release();
                     } catch (Exception ex) {
                         logger.error("Failed to replay early 1-RTT packet for CID: {}", connectionId, ex);
@@ -490,6 +566,9 @@ public class QuicConnection implements TimeoutHeap.Entry {
             return;
         }
 
+        pathMap.get(primaryAddress).receivedBytes += packet.buf().remaining();
+        pathMap.get(primaryAddress).lastActive = currentTimestamp;
+
         PoolBuffer frames;
         try {
             frames = decryptAeadInPlace(packet, header, (int) header.payloadLength - header.pnLength, connectionMetadata.clientHandshakeCrypto);
@@ -579,6 +658,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
 
                 connectionMetadata.updateTranscript(clientFinishedBytes);
 
+                pathMap.get(primaryAddress).state = PathState.VERIFIED;
                 // Generate HANDSHAKE_DONE packet (uses server1RttSecret, now available)
                 setState(State.ESTABLISHED);
 
@@ -598,7 +678,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
      * The packet buffer position is advanced as data is read.
      * Stream data is delivered to the payload listener.
      */
-    void process1RttPacket(PoolBuffer packet, int ecnFlags) {
+    void process1RttPacket(PoolBuffer packet, int ecnFlags, SocketAddress sender) {
         logger.debug("Processing 1-RTT packet for CID: {} in state: {}, len: {}", connectionId, state, packet.buf().remaining());
 
         // If in CLOSING state do nothing
@@ -628,6 +708,9 @@ public class QuicConnection implements TimeoutHeap.Entry {
         }
 
         int remaining = packet.buf().remaining();
+
+        if (!checkSenderAddress(sender, remaining))
+            return;
 
         // Parse short header - use the HP key pre-derived in TlsMetadata
         QuicPacketHeader header = QuicPacketHeader.parse(packet.buf(), connectionMetadata.clientApplicationCrypto, applicationSpace.getLargestReceivedPacketNumber());
@@ -812,13 +895,22 @@ public class QuicConnection implements TimeoutHeap.Entry {
                 needsAck = true;
             } else if (frameType == 0x1a) { // PATH_CHALLENGE
                 // RFC 9000 Section 19.17: data(8 bytes)
-                plaintext.buf().position(plaintext.buf().position() + 8);
-                logger.info("Received PATH_CHALLENGE CID={}", connectionId);
+                byte[] data = new byte[8];
+                plaintext.buf().get(data);
+                PoolBuffer buffer = getBufferPool().requestWriteBuffer();
+                QuicFrameBuilder.writePathResponseFrame(buffer.buf(), data);
+                send1RttPacket(buffer);
+
                 needsAck = true;
             } else if (frameType == 0x1b) { // PATH_RESPONSE
-                // RFC 9000 Section 19.18: data(8 bytes)
-                plaintext.buf().position(plaintext.buf().position() + 8);
-                logger.info("Received PATH_RESPONSE CID={}", connectionId);
+                byte[] data = new byte[8];
+                plaintext.buf().get(data);
+                ConnectionPath path = pathMap.get(sender);
+                if (path != null && path.state == NEW && Arrays.equals(path.challenge, data)) {
+                    path.state = VERIFIED;
+                    path.challenge = null;
+                    logger.error("New Sender address VERIFIED for CID {}: {}", connectionId, sender);
+                }
                 needsAck = true;
             } else if (frameType == 0x1e) { // HANDSHAKE_DONE
                 logger.info("Received HANDSHAKE_DONE from client (unexpected)");
@@ -867,6 +959,28 @@ public class QuicConnection implements TimeoutHeap.Entry {
         }
     }
 
+    private boolean checkSenderAddress(SocketAddress sender, int packetSize) {
+        if (!pathMap.containsKey(sender)) {
+            logger.error("New Sender address not found for CID {}: {}", connectionId, sender);
+            primaryAddress = sender;
+            ConnectionPath path = new ConnectionPath(primaryAddress, currentTimestamp);
+            if (pathMap.size() >= MAX_PATH_ID) {
+                closeConnection(QuicTransportError.PROTOCOL_VIOLATION, "Too many active paths for CID: " + connectionId);
+                return false;
+            }
+            pathMap.put(sender, path);
+            PoolBuffer buf = getBufferPool().requestWriteBuffer();
+            path.challenge = new byte[8];
+            QuicCrypto.secureRandom.get().nextBytes(path.challenge);
+            QuicFrameBuilder.writePathChallengeFrame(buf.buf(), path.challenge);
+            send1RttPacket(buf); // Send Path Challenge
+        }
+
+        pathMap.get(sender).receivedBytes += packetSize;
+        pathMap.get(sender).lastActive = currentTimestamp;
+        return true;
+    }
+
     /**
      * Processes client's Initial packet and generates server's Initial response.
      * This is the first step of the QUIC handshake (RFC 9000 Section 7).
@@ -886,6 +1000,9 @@ public class QuicConnection implements TimeoutHeap.Entry {
             datagram.buf().position(datagram.buf().limit());
             return;
         }
+
+        pathMap.get(primaryAddress).receivedBytes += datagram.buf().remaining();
+        pathMap.get(primaryAddress).lastActive = currentTimestamp;
 
         logger.debug("Processing Initial packet for CID: {} in state: {}", connectionId, state);
 
@@ -1147,12 +1264,12 @@ public class QuicConnection implements TimeoutHeap.Entry {
             return;
         }
 
-        logger.debug("Sending connection {} {} packet {}: {}b payload", connectionId, phase, packetNumber, payload.buf().remaining());
+//        logger.debug("Sending connection {} {} packet {}: {}b payload", connectionId, phase, packetNumber, payload.buf().remaining());
 
         // Track sent packet: store UNENCRYPTED payload for retransmission
         space.onPacketSent(currentTimestamp, packetNumber, payload, true);
 
-        outboundQueue.add(new OutboundPacket(retrasmit ? PacketSource.RETRANSMISSION : PacketSource.NEW, completePacket, (congestionControl != null) ? congestionControl.getEctMarking() : ECT.ECT_0));
+        outboundQueue.add(new OutboundPacket(retrasmit ? PacketSource.RETRANSMISSION : PacketSource.NEW, completePacket, (congestionControl != null) ? congestionControl.getEctMarking() : ECT.ECT_0, primaryAddress));
     }
 
     private void sendInitialPacket(PoolBuffer payload) {
@@ -1299,6 +1416,25 @@ public class QuicConnection implements TimeoutHeap.Entry {
         QuicFrameBuilder.writeAckEcnFrame(applicationSpace, currentTimestamp, buffer.buf());
         logger.debug("Sending 1-RTT ACK");
         sendPacket(buffer, PacketNumberSpace.PacketPhase.APPLICATION, false);
+    }
+
+    private PoolBuffer build1RttPing() throws QuicException {
+        long packetNumber = applicationSpace.allocatePacketNumber();
+
+        byte[] packet = new byte[16];
+        packet[0] = (byte) 0x01;
+        ByteBuffer buf = ByteBuffer.wrap(packet);
+
+        return QuicPacketBuilder.build1RttPacket(
+                quicVersion,
+                getBufferPool(),
+                clientCid,
+                packetNumber,
+                applicationSpace.getLargestAckedPacketNumber(),
+                buf,          // Plaintext payload
+                connectionMetadata.serverApplicationCrypto,
+                connectionMetadata.currentPhase
+        );
     }
 
     /**

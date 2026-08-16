@@ -277,5 +277,41 @@ public class QuicFrameBuilder {
         out.limit(out.position());
         out.position(start);
     }
+
+    /**
+     * Creates a PATH_CHALLENGE frame (RFC 9000 Section 19.17).
+     * Format: type(0x1a) | data(64 bits)
+     *
+     * @param out  Output buffer
+     * @param data 8 bytes of unpredictable data
+     */
+    public static void writePathChallengeFrame(ByteBuffer out, byte[] data) {
+        if (data.length != 8) {
+            throw new IllegalArgumentException("PATH_CHALLENGE data must be 8 bytes long");
+        }
+        int start = out.position();
+        out.put((byte) 0x1a);
+        out.put(data);
+        out.limit(out.position());
+        out.position(start);
+    }
+
+    /**
+     * Creates a PATH_RESPONSE frame (RFC 9000 Section 19.18).
+     * Format: type(0x1b) | data(64 bits)
+     *
+     * @param out  Output buffer
+     * @param data 8 bytes of unpredictable data (from the PATH_CHALLENGE frame)
+     */
+    public static void writePathResponseFrame(ByteBuffer out, byte[] data) {
+        if (data.length != 8) {
+            throw new IllegalArgumentException("PATH_RESPONSE data must be 8 bytes long");
+        }
+        int start = out.position();
+        out.put((byte) 0x1b);
+        out.put(data);
+        out.limit(out.position());
+        out.position(start);
+    }
 }
 

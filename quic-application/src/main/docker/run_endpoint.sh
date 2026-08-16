@@ -44,5 +44,5 @@ export SSLKEYLOGFILE=/logs/keys.log
 cd /app
 # Start the Java application in the background and capture its PID
 exec ${JAVA_HOME}/bin/java -Djava.net.preferIPv4Stack=false\
-   --add-opens java.base/sun.nio.ch=ALL-UNNAMED --add-opens java.base/java.io=ALL-UNNAMED --enable-native-access=ALL-UNNAMED -Dlog.level=DEBUG\
+   --add-opens java.base/sun.nio.ch=ALL-UNNAMED --add-opens java.base/java.io=ALL-UNNAMED --enable-native-access=ALL-UNNAMED -Dlog.level=INFO\
    -Dquic.port=443 -Dquic.keystore_type=PEM -Dquic.cert_path=/certs/cert.pem -Dquic.key_path=/certs/priv.key -jar jquic.jar

@@ -237,7 +237,7 @@ class QuicConnectionCryptoIntegrationTest {
                 destinationCidBytes(TEST_CONNECTION_ID), 5, 0, plaintext,
             meta1Rtt.clientApplicationCrypto, (byte) 0);
 
-        connection.process1RttPacket(packet, 0);
+        connection.process1RttPacket(packet, 0, null);
         List<ByteBuffer> responses = getOutboundPackets(connection);
 
         assertNotNull(responses, "Should process packet with valid GCM tag");
@@ -293,7 +293,7 @@ class QuicConnectionCryptoIntegrationTest {
         int last = tamperedBuf.limit() - 1;
         tamperedBuf.put(last, (byte) (tamperedBuf.get(last) ^ 0xFF));
 
-        connection.process1RttPacket(packet, 0);
+        connection.process1RttPacket(packet, 0, TEST_ADDRESS);
         List<ByteBuffer> responses = getOutboundPackets(connection);
 
         assertEquals(0, responses.size(), "Should reject packet with invalid GCM tag");
@@ -376,7 +376,7 @@ class QuicConnectionCryptoIntegrationTest {
         PoolBuffer rttPacket = QuicPacketBuilder.build1RttPacket(QuicVersion.QUIC_VERSION_1, pool,
                 TEST_CID, 1, 0, pingFrame, meta.clientApplicationCrypto, (byte) 0);
 
-        connection.process1RttPacket(rttPacket, 0);
+        connection.process1RttPacket(rttPacket, 0, null);
         List<ByteBuffer> rttResponses = getOutboundPackets(connection);
         assertFalse(rttResponses.isEmpty(), "Should generate ACK for 1-RTT PING");
     }
