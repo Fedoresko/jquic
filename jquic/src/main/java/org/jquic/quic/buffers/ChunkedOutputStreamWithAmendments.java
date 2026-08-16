@@ -41,7 +41,7 @@ public abstract class ChunkedOutputStreamWithAmendments extends DataOutputStream
      * @param chunkWrapper - callback that wraps a chunk with optional header\footer, returns the result as ButeBuffer,
      *                     and adjusts passed ByteBuffer position where to continue writes (reserve header space).
      */
-    public static ChunkedOutputStreamWithAmendments createNonWrapping(BufferPool pool, int chunkSize, int trailingPadding,
+    public static ChunkedOutputStreamWithAmendments createNonWrapping(WriteBufferPool pool, int chunkSize, int trailingPadding,
                                                                       ChunkWrapper chunkWrapper) {
         return new ChunkedOutputStreamWithAmendmentsImpl(pool, chunkSize, trailingPadding, chunkWrapper);
     }

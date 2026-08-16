@@ -16,6 +16,7 @@
 package org.jquic.quic;
 
 import org.jquic.quic.buffers.ChunkedOutputStreamWithAmendments;
+import org.jquic.quic.crypto.CipherMode;
 import org.jquic.quic.crypto.QuicCrypto;
 import org.jquic.quic.struct.SortedIntervals;
 
@@ -141,7 +142,7 @@ public class QuicFrameBuilder {
         hrr.putShort((short) 0x0303);                     // legacy_version = TLS 1.2
         hrr.put(QuicCrypto.HRR_RANDOM);                   // sentinel random
         hrr.put((byte) 0x00);                             // legacy session_id length = 0
-        hrr.putShort((short) QuicCrypto.CipherMode.TLS_AES_128_GCM_SHA256_ID.val); // cipher suite
+        hrr.putShort((short) CipherMode.TLS_AES_128_GCM_SHA256_ID.val); // cipher suite
         hrr.put((byte) 0x00);                             // legacy compression = null
 
         int extLenPos = hrr.position();

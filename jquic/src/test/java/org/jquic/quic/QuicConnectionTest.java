@@ -20,6 +20,7 @@ import org.jquic.quic.buffers.BorrowedPoolBuffer;
 import org.jquic.quic.buffers.BufferPool;
 import org.jquic.quic.buffers.PoolBuffer;
 import org.jquic.quic.buffers.RootPoolBuffer;
+import org.jquic.quic.crypto.CipherMode;
 import org.jquic.quic.crypto.NativeCrypto;
 import org.jquic.quic.crypto.QuicCrypto;
 import org.jquic.quic.streamapi.ConnectionStreamManager;
@@ -148,7 +149,7 @@ class QuicConnectionTest {
         mockMetadata.serverApplicationCrypto = nCryptoMock;
         mockMetadata.clientMetadata = new ConnectionMetadata.ClientMetadataNegotiated("h3", 1000, List.of(),
                 Map.of(), 1200, 1000, 0, 0,
-                0, 0, 0, List.of(), 3, List.of(), QuicCrypto.CipherMode.TLS_AES_128_GCM_SHA256_ID);
+                0, 0, 0, List.of(), 3, List.of(), CipherMode.TLS_AES_128_GCM_SHA256_ID);
         mockMetadata.handshakeSecretBytes = new byte[32];
         mockMetadata.selectedSignatureScheme = 0x0403;
         mockMetadata.serverHandshakeTrafficSecret = new byte[32];
@@ -295,7 +296,7 @@ class QuicConnectionTest {
         // Create 1-RTT packet with STREAM frame
         ByteBuffer packet = createMock1RttPacketWithStreamData(4L, "Hello QUIC".getBytes());
         connection.process1RttPacket(new RootPoolBuffer(packet, pool, false), 0, null);
-        OutboundPacket ackResponse = connection.pollOutbound();
+        OutboundPacket ackResponse = connection.getConnectionPathController().pollOutbound();
 
 
         // Verify stream data was delivered
@@ -336,7 +337,7 @@ class QuicConnectionTest {
         // Send CONNECTION_CLOSE frame
         ByteBuffer closePacket = createMock1RttPacketWithConnectionClose();
         connection.process1RttPacket(new RootPoolBuffer(closePacket, pool, false), 0, null);
-        OutboundPacket ackResponse = connection.pollOutbound();
+        OutboundPacket ackResponse = connection.getConnectionPathController().pollOutbound();
 
         // Verify state transition
         assertEquals(QuicConnection.State.CLOSING, connection.getState(),

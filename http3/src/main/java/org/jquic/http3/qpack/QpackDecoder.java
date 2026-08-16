@@ -37,16 +37,6 @@ public class QpackDecoder implements Decoder {
     private static final int LITERAL_WITH_NAME_REF_PREFIX = 0x40;
     private static final int LITERAL_WITHOUT_NAME_REF_PREFIX = 0x20;
 
-    private static final int ENCODER_INSERT_NAME_REF_PREFIX = 0x80;
-    private static final int ENCODER_INSERT_NAME_REF_PREFIX_BITS = 6;
-    private static final int ENCODER_INSERT_STATIC_BIT = 0x40;
-    private static final int ENCODER_INSERT_LITERAL_NAME_PREFIX = 0x40;
-    private static final int ENCODER_INSERT_LITERAL_NAME_PREFIX_BITS = 5;
-    private static final int ENCODER_CAPACITY_PREFIX = 0x20;
-    private static final int ENCODER_CAPACITY_PREFIX_BITS = 5;
-    private static final int ENCODER_DUPLICATE_PREFIX = 0x00;
-    private static final int ENCODER_DUPLICATE_PREFIX_BITS = 5;
-
     private static final int DECODER_CANCEL_PREFIX = 0x40;
     private static final int DECODER_CANCEL_PREFIX_BITS = 6;
     private static final int DECODER_INCREMENT_PREFIX = 0x00;
@@ -72,7 +62,6 @@ public class QpackDecoder implements Decoder {
     private final DataOutputStream decoderOutputStream;
     private final Set<Long> activeStreams = new LinkedHashSet<>();
     private long maxPermittedCapacity;
-    private long lastSentInsertCount = 0;
     private Consumer<Long> unblockedStreamListener;
 
     public QpackDecoder() {
@@ -121,15 +110,6 @@ public class QpackDecoder implements Decoder {
             }
             long fullRange = 2 * maxEntries;
             long totalAccumulatedIndex = dynamicTable.getInsertCount();
-            
-            // RFC 9204:
-            // MaxEntries = floor(MaxTableCapacity / 32)
-            // FullRange = 2 * MaxEntries
-            // MaxRIC = TotalAccumulatedIndex + MaxEntries
-            // if EncodedRIC == 0:
-            //   RequiredInsertCount = 0
-            // else:
-            //   RequiredInsertCount = Reconstruct(EncodedRIC)
             
             long maxRic = totalAccumulatedIndex + maxEntries;
             requiredInsertCount = maxRic - (maxRic % fullRange) + (encodedRic - 1);

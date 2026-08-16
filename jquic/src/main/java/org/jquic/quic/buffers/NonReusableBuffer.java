@@ -13,25 +13,32 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.jquic.quic.paths;
+package org.jquic.quic.buffers;
 
-import java.net.SocketAddress;
+import java.nio.ByteBuffer;
 
-public class ConnectionPath {
-    public final SocketAddress address;
-    public long lastActive;
-    public long probeSentAt;
-    public long receivedBytes;
-    public long sentBytes;
-    public long createdAt;
-    public long bytesLastBlocked;
-    public byte[] challenge;
-    public PathState state;
+public class NonReusableBuffer implements PoolBuffer {
+    private final ByteBuffer buffer;
 
-    public ConnectionPath(SocketAddress address, long now) {
-        this.address = address;
-        this.state = PathState.NEW;
-        this.lastActive = now;
-        this.createdAt = lastActive;
+    public NonReusableBuffer(int size) {
+        buffer = ByteBuffer.allocateDirect(size + 100);
+        buffer.position(100);
+    }
+
+    NonReusableBuffer(ByteBuffer buffer) {
+        this.buffer = buffer;
+    }
+
+    @Override
+    public PoolBuffer borrow() {
+        return new NonReusableBuffer(buffer.duplicate());
+    }
+
+    @Override
+    public void release() {}
+
+    @Override
+    public ByteBuffer buf() {
+        return buffer;
     }
 }

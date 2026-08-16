@@ -20,6 +20,7 @@ import org.jquic.quic.buffers.BorrowedPoolBuffer;
 import org.jquic.quic.buffers.BufferPool;
 import org.jquic.quic.buffers.PoolBuffer;
 import org.jquic.quic.buffers.RootPoolBuffer;
+import org.jquic.quic.crypto.CipherMode;
 import org.jquic.quic.crypto.NativeCrypto;
 import org.jquic.quic.crypto.QuicCrypto;
 import org.jquic.quic.streamapi.QuicApplicationProtocol;
@@ -117,7 +118,7 @@ class QuicConnectionCryptoIntegrationTest {
         ByteBuffer.wrap(destinationCid).putLong(TEST_CONNECTION_ID);
 
         QuicCrypto.PacketProtectionKeysWithHP[] keys = ConnectionMetadata.deriveInitialKeys(QuicVersion.QUIC_VERSION_1, destinationCid);
-        NativeCrypto clientKeys = new NativeCrypto(keys[0], QuicCrypto.CipherMode.TLS_AES_128_GCM_SHA256_ID);
+        NativeCrypto clientKeys = new NativeCrypto(keys[0], CipherMode.TLS_AES_128_GCM_SHA256_ID);
 
         // Build a real TLS 1.3 ClientHello and wrap it in a CRYPTO frame
         ByteBuffer clientHello = buildMinimalClientHello();
@@ -156,7 +157,7 @@ class QuicConnectionCryptoIntegrationTest {
         ByteBuffer.wrap(destinationCid).putLong(TEST_CONNECTION_ID);
 
         QuicCrypto.PacketProtectionKeysWithHP[] keys = ConnectionMetadata.deriveInitialKeys(QuicVersion.QUIC_VERSION_1, destinationCid);
-        NativeCrypto clientKeys = new NativeCrypto(keys[0], QuicCrypto.CipherMode.TLS_AES_128_GCM_SHA256_ID);
+        NativeCrypto clientKeys = new NativeCrypto(keys[0], CipherMode.TLS_AES_128_GCM_SHA256_ID);
 
         ByteBuffer clientHello = buildMinimalClientHello();
         ByteBuffer framebuffer = ByteBuffer.allocateDirect(500);
@@ -246,7 +247,7 @@ class QuicConnectionCryptoIntegrationTest {
 
     public static List<ByteBuffer> getOutboundPackets(QuicConnection connection) {
         List<ByteBuffer> responses = new ArrayList<>();
-        for (OutboundPacket res = connection.pollOutbound(); res != null; res = connection.pollOutbound()) {
+        for (OutboundPacket res = connection.getConnectionPathController().pollOutbound(); res != null; res = connection.getConnectionPathController().pollOutbound()) {
             responses.add(res.data().buf().duplicate());
         }
         return responses;
@@ -324,7 +325,7 @@ class QuicConnectionCryptoIntegrationTest {
         cryptoFrame.flip();
 
         PoolBuffer initialPacket = QuicPacketBuilder.buildInitialPacket(QuicVersion.QUIC_VERSION_1, pool,
-                TEST_CID, TEST_CID_BUF, 0, 0, cryptoFrame, new NativeCrypto(initKeys[0], QuicCrypto.CipherMode.TLS_AES_128_GCM_SHA256_ID));
+                TEST_CID, TEST_CID_BUF, 0, 0, cryptoFrame, new NativeCrypto(initKeys[0], CipherMode.TLS_AES_128_GCM_SHA256_ID));
 
         connection.processInitialAndRespond(initialPacket, 0);
 
@@ -543,18 +544,18 @@ class QuicConnectionCryptoIntegrationTest {
     private ConnectionMetadata make1RttMetadata(ByteBuffer real1RttKey) throws Exception {
         byte[] bytes = new byte[real1RttKey.remaining()];
         real1RttKey.get(bytes).flip();
-        byte[] hpKey = QuicCrypto.deriveHp(QuicVersion.QUIC_VERSION_1, bytes, QuicCrypto.CipherMode.TLS_AES_128_GCM_SHA256_ID);
+        byte[] hpKey = QuicCrypto.deriveHp(QuicVersion.QUIC_VERSION_1, bytes, CipherMode.TLS_AES_128_GCM_SHA256_ID);
 
         ByteBuffer hpSeg = ByteBuffer.allocateDirect(hpKey.length).put(hpKey).flip();
 
         byte[] iv    = deriveIv(bytes);
         ConnectionMetadata m = new ConnectionMetadata();
         m.negotiatedIdleTimeoutMs = 10_000;
-        m.clientHandshakeCrypto = new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(real1RttKey, new byte[12], hpSeg), QuicCrypto.CipherMode.TLS_AES_128_GCM_SHA256_ID);
-        m.serverHandshakeCrypto = new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(real1RttKey, new byte[12], hpSeg), QuicCrypto.CipherMode.TLS_AES_128_GCM_SHA256_ID);
+        m.clientHandshakeCrypto = new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(real1RttKey, new byte[12], hpSeg), CipherMode.TLS_AES_128_GCM_SHA256_ID);
+        m.serverHandshakeCrypto = new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(real1RttKey, new byte[12], hpSeg), CipherMode.TLS_AES_128_GCM_SHA256_ID);
 
-        m.clientApplicationCrypto = new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(real1RttKey, new byte[12], hpSeg), QuicCrypto.CipherMode.TLS_AES_128_GCM_SHA256_ID);
-        m.serverApplicationCrypto = new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(real1RttKey, new byte[12], hpSeg), QuicCrypto.CipherMode.TLS_AES_128_GCM_SHA256_ID);
+        m.clientApplicationCrypto = new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(real1RttKey, new byte[12], hpSeg), CipherMode.TLS_AES_128_GCM_SHA256_ID);
+        m.serverApplicationCrypto = new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(real1RttKey, new byte[12], hpSeg), CipherMode.TLS_AES_128_GCM_SHA256_ID);
         return m;
     }
 

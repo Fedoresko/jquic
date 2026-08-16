@@ -19,9 +19,9 @@ import org.jctools.queues.MpmcUnboundedXaddArrayQueue;
 
 import java.nio.ByteBuffer;
 
-public class BufferPool {
+public class BufferPool implements ReadBufferPool, WriteBufferPool {
     public static final int READ_BUFFER_SIZE = 2048;
-    public static final int WRITE_BUFFER_SIZE = 4096;
+    public static final int WRITE_BUFFER_SIZE = 2048;
     public static final int INITIAL_SIZE = 100;
 
     private final MpmcUnboundedXaddArrayQueue<RootPoolBuffer> readBufferPool = new MpmcUnboundedXaddArrayQueue<>( 10, 100);

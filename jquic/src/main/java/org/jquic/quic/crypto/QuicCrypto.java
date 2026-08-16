@@ -33,7 +33,7 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 import static org.jquic.quic.QuicPacketBuilder.STATELESS_RESET_TOKEN_LENGTH;
-import static org.jquic.quic.crypto.QuicCrypto.CipherMode.*;
+import static org.jquic.quic.crypto.CipherMode.*;
 
 /**
  * Handles QUIC cryptographic operations based on TLS 1.3.
@@ -56,28 +56,6 @@ public class QuicCrypto {
     };
 
     // TLS 1.3 identifiers used during ClientHello parsing and ServerHello construction
-    /** TLS_AES_128_GCM_SHA256 cipher suite identifier (RFC 8446 Appendix B.4). */
-    public enum CipherMode {
-        TLS_AES_128_GCM_SHA256_ID (0x1301, 16),
-        TLS_AES_256_GCM_SHA384_ID (0x1302, 32),
-        TLS_CHACHA20_POLY1305_SHA256 (0x1303, 32),
-        UNKNOWN(0, 0);
-
-        CipherMode(int val, int keyLen) {
-            this.val = val;
-            this.keyLen = keyLen;
-        }
-        public static CipherMode fromInt(int val) {
-            for (CipherMode mode : values()) {
-                if (mode.val == val) {
-                    return mode;
-                }
-            }
-            return UNKNOWN;
-        }
-        public final int val;
-        public final int keyLen;
-    }
     /** TLS 1.3 version identifier used in supported_versions extension (RFC 8446 В§4.2.1). */
     public static final int TLS_VERSION_1_3 = 0x0304;
     /** IANA NamedGroup identifier for x25519 (RFC 8446 В§4.2.7). */
@@ -124,6 +102,9 @@ public class QuicCrypto {
         ThreadLocal.withInitial(SecureRandom::new);
 
     private static KeystoreManager keystoreManager;
+    public static  byte[] certChainBytes;
+
+
 
     public static void initKeystore() {
         // Install Conscrypt as the preferred security provider
@@ -133,6 +114,7 @@ public class QuicCrypto {
         try {
             QuicServerConfig config = QuicServerConfig.createDefault();
             keystoreManager = new KeystoreManager(config);
+            certChainBytes = encodeCertificateChain();
             logger.info("Initialized KeystoreManager with default configuration");
         } catch (Exception e) {
             logger.warn("Failed to initialize KeystoreManager, will use mock certificates: {}", e.getMessage());
@@ -917,8 +899,6 @@ public class QuicCrypto {
      * will reject it, but this keeps the code runnable during development).
      */
     public static void putCertificate(ChunkedOutputStreamWithAmendments out) throws IOException {
-        byte[] certChainBytes = encodeCertificateChain();
-
         if (certChainBytes != null) {
             // encodeCertificateChainTls() returns the full certificate_list body
             // (each entry: 3-byte cert length + DER cert + 2-byte extensions length).

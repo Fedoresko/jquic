@@ -17,6 +17,7 @@ package org.jquic.quic;
 
 import org.jquic.quic.buffers.BufferPool;
 import org.jquic.quic.buffers.PoolBuffer;
+import org.jquic.quic.crypto.CipherMode;
 import org.jquic.quic.crypto.NativeCrypto;
 import org.jquic.quic.crypto.QuicCrypto;
 import org.junit.jupiter.api.Test;
@@ -252,7 +253,7 @@ public class QuicPacketHeaderTest {
 
         ByteBuffer hpSeg = ByteBuffer.allocateDirect(hpKey.length).put(hpKey).flip();
         // Now parse it
-        QuicPacketHeader header = QuicPacketHeader.parse(buf, new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(null, null, hpSeg), QuicCrypto.CipherMode.TLS_AES_128_GCM_SHA256_ID), largestPn);
+        QuicPacketHeader header = QuicPacketHeader.parse(buf, new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(null, null, hpSeg), CipherMode.TLS_AES_128_GCM_SHA256_ID), largestPn);
 
         assertNotNull(header);
         assertEquals(pn, header.packetNumber);

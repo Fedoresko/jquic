@@ -21,7 +21,7 @@ import java.nio.ByteBuffer;
 public class ChunkedOutputStreamWithAmendmentsImpl extends ChunkedOutputStreamWithAmendments {
     private volatile boolean isClosed = false;
 
-    public ChunkedOutputStreamWithAmendmentsImpl(BufferPool pool, int chunkSize, int trailingPadding,
+    public ChunkedOutputStreamWithAmendmentsImpl(WriteBufferPool pool, int chunkSize, int trailingPadding,
                                                  ChunkWrapper chunkWrapper) {
         super(new ChunkingOutputStream(pool, chunkSize, trailingPadding));
         ((ChunkingOutputStream) out).setCallback(chunkWrapper);

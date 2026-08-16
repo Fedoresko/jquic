@@ -46,7 +46,7 @@ public class NativeCrypto implements AutoCloseable {
     private final MemorySegment openOutLen = arena.allocate(ValueLayout.JAVA_LONG);
 
     private final QuicCrypto.PacketProtectionKeysWithHP keys;
-    private final QuicCrypto.CipherMode mode;
+    private final CipherMode mode;
 
     /**
      * Set ecnription keys used for the all further encription calls.
@@ -55,15 +55,15 @@ public class NativeCrypto implements AutoCloseable {
      * @param mode
      * @throws QuicException - exception if crypto problems
      */
-    public NativeCrypto(QuicCrypto.PacketProtectionKeysWithHP keys, QuicCrypto.CipherMode mode) throws QuicException {
+    public NativeCrypto(QuicCrypto.PacketProtectionKeysWithHP keys, CipherMode mode) throws QuicException {
         this.keys = keys;
         this.mode = mode;
 
         if (keys.headerProtection() != null) {
-            if (mode == QuicCrypto.CipherMode.TLS_AES_128_GCM_SHA256_ID || mode == QuicCrypto.CipherMode.TLS_AES_256_GCM_SHA384_ID) {
+            if (mode == CipherMode.TLS_AES_128_GCM_SHA256_ID || mode == CipherMode.TLS_AES_256_GCM_SHA384_ID) {
                 EVP_CIPHER_CTX_init(ecbCtx);
                 try {
-                    MemorySegment cipher = mode == QuicCrypto.CipherMode.TLS_AES_128_GCM_SHA256_ID ? EVP_aes_128_ecb() : EVP_aes_256_ecb();
+                    MemorySegment cipher = mode == CipherMode.TLS_AES_128_GCM_SHA256_ID ? EVP_aes_128_ecb() : EVP_aes_256_ecb();
                     if (EVP_EncryptInit_ex(ecbCtx, cipher, MemorySegment.NULL,
                             MemorySegment.ofBuffer(keys.headerProtection()), MemorySegment.NULL) != 1) {
                         logErrorAndThrow("Failed to init AES / ECB");
@@ -152,12 +152,12 @@ public class NativeCrypto implements AutoCloseable {
      * @throws QuicException if encryption fails
      */
     public void encryptEcbInPlace(ByteBuffer plaintext) throws QuicException {
-        if (mode == QuicCrypto.CipherMode.TLS_AES_128_GCM_SHA256_ID || mode == QuicCrypto.CipherMode.TLS_AES_256_GCM_SHA384_ID) {
+        if (mode == CipherMode.TLS_AES_128_GCM_SHA256_ID || mode == CipherMode.TLS_AES_256_GCM_SHA384_ID) {
             if (EVP_EncryptUpdate(ecbCtx, MemorySegment.ofBuffer(plaintext), retLen,
                     MemorySegment.ofBuffer(plaintext), plaintext.remaining()) != 1) {
                 logErrorAndThrow("Failed to encrypt AES / ECB");
             }
-        } else if (mode == QuicCrypto.CipherMode.TLS_CHACHA20_POLY1305_SHA256) {
+        } else if (mode == CipherMode.TLS_CHACHA20_POLY1305_SHA256) {
             // RFC 9001 5.4.4: The block function takes a 256-bit key and a 16-byte sample.
             // The first 4 bytes of the sample are used as a block counter and the next 12 bytes are used as a nonce.
             // CRYPTO_chacha_20(uint8_t *out, const uint8_t *in, size_t in_len, const uint8_t key[32], const uint8_t nonce[12], uint32_t counter)

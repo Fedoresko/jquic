@@ -15,6 +15,7 @@
  */
 package org.jquic.quic;
 
+import org.jquic.quic.crypto.CipherMode;
 import org.jquic.quic.crypto.NativeCrypto;
 import org.jquic.quic.crypto.QuicCrypto;
 import org.jspecify.annotations.Nullable;
@@ -137,15 +138,15 @@ public class ConnectionMetadata {
 
             // Derive client keys
             byte[] clientInitialSecret = QuicCrypto.hkdfExpandLabel(initialSecret, "client in", new byte[0], 32);
-            SecretKey clientKey = QuicCrypto.deriveKey(quicVersion, clientInitialSecret, QuicCrypto.CipherMode.TLS_AES_128_GCM_SHA256_ID);
+            SecretKey clientKey = QuicCrypto.deriveKey(quicVersion, clientInitialSecret, CipherMode.TLS_AES_128_GCM_SHA256_ID);
             byte[] clientIv = QuicCrypto.deriveIv(quicVersion, clientInitialSecret);
-            byte[] clientHp = QuicCrypto.deriveHp(quicVersion, clientInitialSecret, QuicCrypto.CipherMode.TLS_AES_128_GCM_SHA256_ID);
+            byte[] clientHp = QuicCrypto.deriveHp(quicVersion, clientInitialSecret, CipherMode.TLS_AES_128_GCM_SHA256_ID);
 
             // Derive server keys
             byte[] serverInitialSecret = QuicCrypto.hkdfExpandLabel(initialSecret, "server in", new byte[0], 32);
-            SecretKey serverKey = QuicCrypto.deriveKey(quicVersion, serverInitialSecret, QuicCrypto.CipherMode.TLS_AES_128_GCM_SHA256_ID);
+            SecretKey serverKey = QuicCrypto.deriveKey(quicVersion, serverInitialSecret, CipherMode.TLS_AES_128_GCM_SHA256_ID);
             byte[] serverIv = QuicCrypto.deriveIv(quicVersion, serverInitialSecret);
-            byte[] serverHp = QuicCrypto.deriveHp(quicVersion, serverInitialSecret, QuicCrypto.CipherMode.TLS_AES_128_GCM_SHA256_ID);
+            byte[] serverHp = QuicCrypto.deriveHp(quicVersion, serverInitialSecret, CipherMode.TLS_AES_128_GCM_SHA256_ID);
 
 
             ByteBuffer clientKeySeg = wrapDirect(clientKey.getEncoded());
@@ -184,10 +185,6 @@ public class ConnectionMetadata {
 
         byte[] iv = QuicCrypto.deriveIv(quicVersion, serverHandshakeTrafficSecret);
 
-        logger.info("Server Key {}", HexFormat.of().formatHex(serverKey.getEncoded()));
-        logger.info("Server HP {}", HexFormat.of().formatHex(serverHp));
-        logger.info("Server IV {}", HexFormat.of().formatHex(iv));
-
         serverHandshakeCrypto = new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(serverKeySeg,
                 iv, serverHpKeySeg), clientMetadata.selectedCipherSuite);
 
@@ -196,10 +193,6 @@ public class ConnectionMetadata {
         SecretKey clientKey = QuicCrypto.deriveKey(quicVersion, clientHandshakeTrafficSecret, clientMetadata.selectedCipherSuite);
         ByteBuffer clientKeySeg = wrapDirect(clientKey.getEncoded());
         byte[] iv1 = QuicCrypto.deriveIv(quicVersion, clientHandshakeTrafficSecret);
-
-        logger.info("Client Key {}", HexFormat.of().formatHex(clientKey.getEncoded()));
-        logger.info("Client HP {}", HexFormat.of().formatHex(clientHp));
-        logger.info("Client IV {}", HexFormat.of().formatHex(iv1));
 
         clientHandshakeCrypto = new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(clientKeySeg,
                 iv1, clientHpKeySeg), clientMetadata.selectedCipherSuite);
@@ -297,8 +290,8 @@ public class ConnectionMetadata {
             try {
                 QuicCrypto.PacketProtectionKeysWithHP[] keys = deriveInitialKeys(quicVersion,
                         destinationCid);
-                clientInitialCrypto.put(quicVersion, new NativeCrypto(keys[0], QuicCrypto.CipherMode.TLS_AES_128_GCM_SHA256_ID));
-                serverInitialCrypto.put(quicVersion, new NativeCrypto(keys[1], QuicCrypto.CipherMode.TLS_AES_128_GCM_SHA256_ID));
+                clientInitialCrypto.put(quicVersion, new NativeCrypto(keys[0], CipherMode.TLS_AES_128_GCM_SHA256_ID));
+                serverInitialCrypto.put(quicVersion, new NativeCrypto(keys[1], CipherMode.TLS_AES_128_GCM_SHA256_ID));
             } catch (QuicException e) {
                 // RFC 9000: Silently discard packets that fail key derivation
                 logger.warn("Failed to derive Initial keys for CID: {}, discarding packet", destinationCid);
@@ -376,10 +369,10 @@ public class ConnectionMetadata {
         public final List<Short> supportedSignatures;
         public final List<Short> supportedGroups;
         public final Map<Short, byte[]> clientKeys;
-        public final QuicCrypto.CipherMode selectedCipherSuite;
+        public final CipherMode selectedCipherSuite;
         public final List<Integer> availableVersions;
 
-        public ClientMetadataNegotiated(String alpn, long maxIdleTimeoutMs, List<Short> supportedGroups, Map<Short, byte[]> clientKeys, long maxUdpPayloadSize, long initialMaxData, long initialMaxStreamDataBidiLocal, long initialMaxStreamDataBidiRemote, long initialMaxStreamDataUni, long initialMaxStreamsBidi, long initialMaxStreamsUni, List<Short> supportedSignatures, long ackDelayExponent,  List<Integer> availableVersions, QuicCrypto.CipherMode selectedCipherSuite) {
+        public ClientMetadataNegotiated(String alpn, long maxIdleTimeoutMs, List<Short> supportedGroups, Map<Short, byte[]> clientKeys, long maxUdpPayloadSize, long initialMaxData, long initialMaxStreamDataBidiLocal, long initialMaxStreamDataBidiRemote, long initialMaxStreamDataUni, long initialMaxStreamsBidi, long initialMaxStreamsUni, List<Short> supportedSignatures, long ackDelayExponent,  List<Integer> availableVersions, CipherMode selectedCipherSuite) {
             this.alpn = alpn;
             this.maxIdleTimeoutMs = maxIdleTimeoutMs;
             this.maxUdpPayloadSize = maxUdpPayloadSize;

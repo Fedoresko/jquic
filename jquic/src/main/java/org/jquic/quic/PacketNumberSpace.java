@@ -129,9 +129,6 @@ public class PacketNumberSpace {
 
         packet.lossDeadline = sentTime + initialLossDelay;
         lossHeap.insertOrUpdate(packet);
-
-//        logger.debug("{}: Sent packet {} (ack-eliciting: {}, payload: {} bytes)",
-//                phase, packetNumber, ackEliciting, unencryptedPayload.buf().remaining());
     }
 
     /**

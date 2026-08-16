@@ -13,25 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.jquic.quic.paths;
+package org.jquic.quic.buffers;
 
-import java.net.SocketAddress;
-
-public class ConnectionPath {
-    public final SocketAddress address;
-    public long lastActive;
-    public long probeSentAt;
-    public long receivedBytes;
-    public long sentBytes;
-    public long createdAt;
-    public long bytesLastBlocked;
-    public byte[] challenge;
-    public PathState state;
-
-    public ConnectionPath(SocketAddress address, long now) {
-        this.address = address;
-        this.state = PathState.NEW;
-        this.lastActive = now;
-        this.createdAt = lastActive;
-    }
+public interface WriteBufferPool {
+    PoolBuffer requestWriteBuffer();
 }

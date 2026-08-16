@@ -30,7 +30,7 @@ import java.util.*;
 public class ChunkingOutputStream extends OutputStream {
     private ByteBuffer buf;
     private volatile PoolBuffer pbuf;
-    private final BufferPool pool;
+    private final WriteBufferPool pool;
     private final int chunkSize;
     private ChunkedOutputStreamWithAmendments.ChunkWrapper chunkWrapper;
     private int chunkStart;
@@ -55,7 +55,7 @@ public class ChunkingOutputStream extends OutputStream {
      * @param pool    - buffer pool
      * @param chunkSize - size of max continuous data block before callback is called.
      */
-    public ChunkingOutputStream(BufferPool pool, int chunkSize, int trailingPadding) {
+    public ChunkingOutputStream(WriteBufferPool pool, int chunkSize, int trailingPadding) {
         this.pool = pool;
         this.chunkSize = chunkSize;
         this.pbuf = pool.requestWriteBuffer();
@@ -276,7 +276,7 @@ public class ChunkingOutputStream extends OutputStream {
 
     public Iterator<ByteBuffer> readyContentFrom(int pos) {
         if (historyMode) throw new IllegalStateException("Cant iterate content while in history mode");
-        if (pos < lastBufferLogicalStart) throw new IllegalStateException("Position behind current buffer start");
+        if (pos < lastBufferLogicalStart) throw new IllegalStateException("Position behind current buffer pos "+ pos + " start "+ lastBufferLogicalStart + " chinkSize "+ chunkSize + " buf cap "+ capacity);
         LogicalPosition lpos = getLogicalPosition(pos);
         int curPos = lpos.chunkStart() + lpos.rpos();
         if (position - curPos > capacity) throw new IllegalArgumentException("Start position is too early away.");

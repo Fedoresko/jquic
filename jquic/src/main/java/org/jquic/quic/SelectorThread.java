@@ -288,7 +288,7 @@ public class SelectorThread extends Thread {
 
     private void pollConnectionDataAndSend(QuicConnection conn) {
         OutboundPacket outbound;
-        while ((outbound = conn.pollOutbound()) != null) {
+        while ((outbound = conn.getConnectionPathController().pollOutbound()) != null) {
             packetsToSendPerConnection.add(new PacketToSend(outbound.dest(), outbound.data(), outbound.ectMarking()));
             switch (outbound.packetSource()) {
                 case NEW -> sentPackets++;
@@ -306,8 +306,8 @@ public class SelectorThread extends Thread {
         // Update timeout in heap after processing
         timeoutHeap.insertOrUpdate(conn);
 
-        if (conn.outboundQueueSize() > 0) {
-            logger.debug("Selector-{}: Connection CID: {} sending {} response packets.", threadId, conn.getConnectionId(), conn.outboundQueueSize());
+        if (conn.getConnectionPathController().outboundQueueSize() > 0) {
+            logger.debug("Selector-{}: Connection CID: {} sending {} response packets.", threadId, conn.getConnectionId(), conn.getConnectionPathController().outboundQueueSize());
         }
         pollConnectionDataAndSend(conn);
     }
@@ -318,6 +318,7 @@ public class SelectorThread extends Thread {
      */
     private void processDatagram(long now, PoolBuffer datagram, SocketAddress sender, String source, int ecnFlags) {
         try {
+            int datagramSize = datagram.buf().remaining();
             // Process all coalesced packets in the datagram
             while (datagram.buf().hasRemaining()) {
                 if (datagram.buf().remaining() < 9) { // Minimum: 1 byte flags + 8 bytes CID
@@ -373,10 +374,15 @@ public class SelectorThread extends Thread {
                     break;
                 }
 
-                if (!connection.getRemoteAddress().equals(sender) && connection.getState() != QuicConnection.State.ESTABLISHED) {
+                if (!connection.getConnectionPathController().getRemoteAddress().equals(sender) && connection.getState() != QuicConnection.State.ESTABLISHED) {
                     //TODO: RETRY
                     logger.warn("Selector-{} CID: {}, different remote address, discarding datagram", threadId, cid);
                     break;
+                }
+
+                if (datagramSize > 0) {
+                    connection.getConnectionPathController().updateIncomingLimits(sender, datagramSize);
+                    datagramSize = 0;
                 }
 
                 // Route packet to connection for processing
@@ -407,7 +413,7 @@ public class SelectorThread extends Thread {
 
                     // Drain any packets the connection produced internally (e.g. early-1RTT
                     // replay triggered by the ESTABLISHED transition, or sendFrame() calls).
-                    logger.debug("Selector-{}: Connection CID: {} sending {} response packets.", threadId, cid, connection.outboundQueueSize());
+                    logger.debug("Selector-{}: Connection CID: {} sending {} response packets.", threadId, cid, connection.getConnectionPathController().outboundQueueSize());
 
                     pollConnectionDataAndSend(connection);
                 } catch (Exception e) {
