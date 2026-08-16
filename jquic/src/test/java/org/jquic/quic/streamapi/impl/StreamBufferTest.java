@@ -15,6 +15,7 @@
  */
 package org.jquic.quic.streamapi.impl;
 
+import org.jquic.quic.QuicException;
 import org.jquic.quic.buffers.PoolBuffer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -56,7 +57,7 @@ class StreamBufferTest {
     }
 
     @Test
-    void testAddInOrderData() throws IOException {
+    void testAddInOrderData() throws Exception {
         byte[] data1 = "Hello ".getBytes();
         PoolBuffer pb1 = mockPoolBuffer(data1);
 
@@ -71,7 +72,7 @@ class StreamBufferTest {
     }
 
     @Test
-    void testAddOutOfOrderData() throws IOException {
+    void testAddOutOfOrderData() throws Exception {
         byte[] data1 = "Hello ".getBytes();
         byte[] data2 = "World".getBytes();
         PoolBuffer pb1 = mockPoolBuffer(data1);
@@ -94,7 +95,7 @@ class StreamBufferTest {
     }
 
     @Test
-    void testDuplicateData() throws IOException {
+    void testDuplicateData() throws Exception {
         byte[] data1 = "Hello ".getBytes();
         PoolBuffer pb1 = mockPoolBuffer(data1);
         PoolBuffer pb1Dup = mockPoolBuffer(data1);
@@ -113,7 +114,7 @@ class StreamBufferTest {
     }
 
     @Test
-    void testOverlappingData() throws IOException {
+    void testOverlappingData() throws Exception {
         byte[] data1 = "Hello ".getBytes(); // 6 bytes
         byte[] data2 = "lo World".getBytes(); // overlaps "lo "
         PoolBuffer pb1 = mockPoolBuffer(data1);
@@ -128,17 +129,17 @@ class StreamBufferTest {
     }
 
     @Test
-    void testFlowControl() {
+    void testFlowControl() throws Exception {
         byte[] largeData = new byte[CAPACITY + 1];
         PoolBuffer pb = mockPoolBuffer(largeData);
 
-        assertFalse(streamBuffer.addIncomingData(0, pb, false), "Should reject data exceeding capacity");
+        assertThrows(QuicException.class, () -> streamBuffer.addIncomingData(0, pb, false), "Should reject data exceeding capacity");
         verify(pb).release();
         assertEquals(0, streamBuffer.getBufferedBytes());
     }
 
     @Test
-    void testFinHandling() throws IOException {
+    void testFinHandling() throws Exception {
         byte[] data1 = "Last ".getBytes();
         byte[] data2 = "Data".getBytes();
         PoolBuffer pb1 = mockPoolBuffer(data1);
@@ -154,7 +155,7 @@ class StreamBufferTest {
     }
 
     @Test
-    void testFinWithEmptyData() throws IOException {
+    void testFinWithEmptyData() throws Exception {
         PoolBuffer pb = mockPoolBuffer(new byte[0]);
         streamBuffer.addIncomingData(10, pb, true);
         
@@ -171,7 +172,7 @@ class StreamBufferTest {
     }
 
     @Test
-    void testFree() {
+    void testFree() throws Exception {
         PoolBuffer pb = mockPoolBuffer("data".getBytes());
         streamBuffer.addIncomingData(0, pb, false);
         assertEquals(4, streamBuffer.getBufferedBytes());
@@ -181,7 +182,7 @@ class StreamBufferTest {
     }
 
     @Test
-    void testComplexOverlapping() throws IOException {
+    void testComplexOverlapping() throws Exception {
         // [A A A] (0, 3)
         //       [B B B] (3, 3) - touching
         //     [C C C] (2, 3) - overlap both A and B
@@ -229,7 +230,7 @@ class StreamBufferTest {
     }
 
     @Test
-    void testFragmentInsideAnother() throws IOException {
+    void testFragmentInsideAnother() throws Exception {
         streamBuffer.addIncomingData(0, mockPoolBuffer(new byte[]{1, 2, 3, 4, 5}), false);
         streamBuffer.addIncomingData(1, mockPoolBuffer(new byte[]{9, 9, 9}), false); // Inside
 
@@ -239,7 +240,7 @@ class StreamBufferTest {
     }
 
     @Test
-    void testFragmentCoveringMultipleExisting() throws IOException {
+    void testFragmentCoveringMultipleExisting() throws Exception {
         streamBuffer.addIncomingData(0, mockPoolBuffer(new byte[]{1, 1}), false);
         streamBuffer.addIncomingData(4, mockPoolBuffer(new byte[]{3, 3}), false);
         
@@ -268,7 +269,7 @@ class StreamBufferTest {
     }
 
     @Test
-    void testTouchingFragments() throws IOException {
+    void testTouchingFragments() throws Exception {
         streamBuffer.addIncomingData(0, mockPoolBuffer(new byte[]{1, 2}), false);
         streamBuffer.addIncomingData(2, mockPoolBuffer(new byte[]{3, 4}), false);
         
@@ -278,7 +279,7 @@ class StreamBufferTest {
     }
 
     @Test
-    void testOverlappingStart() throws IOException {
+    void testOverlappingStart() throws Exception {
         streamBuffer.addIncomingData(2, mockPoolBuffer(new byte[]{3, 4, 5}), false);
         streamBuffer.addIncomingData(0, mockPoolBuffer(new byte[]{1, 2, 9}), false); // Overlaps at offset 2
         
@@ -289,7 +290,7 @@ class StreamBufferTest {
     }
 
     @Test
-    void testOverlappingEnd() throws IOException {
+    void testOverlappingEnd() throws Exception {
         streamBuffer.addIncomingData(0, mockPoolBuffer(new byte[]{1, 2, 3}), false);
         streamBuffer.addIncomingData(2, mockPoolBuffer(new byte[]{9, 4, 5}), false); // Overlaps at offset 2
         
@@ -300,7 +301,7 @@ class StreamBufferTest {
     }
 
     @Test
-    void testCrossSectionedFragments() throws IOException {
+    void testCrossSectionedFragments() throws Exception {
         // [1, 2, 3] at 0
         //       [5, 6, 7] at 4
         //   [9, 9, 9, 9, 9] at 1
@@ -321,7 +322,7 @@ class StreamBufferTest {
     }
 
     @Test
-    void testDuplicateFragments() throws IOException {
+    void testDuplicateFragments() throws Exception {
         streamBuffer.addIncomingData(0, mockPoolBuffer(new byte[]{1, 2}), false);
         streamBuffer.addIncomingData(0, mockPoolBuffer(new byte[]{1, 2}), false);
         
@@ -332,7 +333,7 @@ class StreamBufferTest {
     }
 
     @Test
-    void testBufferSegments() throws IOException {
+    void testBufferSegments() throws Exception {
         // Create a large buffer and use segments of it
         byte[] fullData = "0123456789".getBytes();
         
@@ -382,7 +383,7 @@ class StreamBufferTest {
     }
 
     @Test
-    void testBufferedBytesWithSegments() {
+    void testBufferedBytesWithSegments() throws Exception {
         byte[] fullData = new byte[100];
         
         // pb1 uses 10 bytes of 100-byte buffer
@@ -402,7 +403,7 @@ class StreamBufferTest {
     }
 
     @Test
-    void testOverlappingSegmentsInReadAvailableData() throws IOException {
+    void testOverlappingSegmentsInReadAvailableData() throws Exception {
         byte[] fullData = "ABCDEFGHIJ".getBytes(); // 10 bytes
         
         // PB1: offset 0, data "ABC" (pos 0, limit 3)
@@ -430,16 +431,16 @@ class StreamBufferTest {
     }
 
     @Test
-    void testInconsistentFin()  {
+    void testInconsistentFin() throws Exception {
         streamBuffer.addIncomingData(0, mockPoolBuffer(new byte[]{1, 2}), true); // FIN at 2
         
         // What if we receive more data AFTER FIN? QUIC says it's an error if it extends beyond FIN.
         // Implementation check:
-        assertFalse(streamBuffer.addIncomingData(2, mockPoolBuffer(new byte[]{3}), false));
+        assertThrows(QuicException.class, () -> streamBuffer.addIncomingData(2, mockPoolBuffer(new byte[]{3}), false));
     }
 
     @Test
-    void testGetBufferedBytesTracking() throws IOException {
+    void testGetBufferedBytesTracking() throws Exception {
         byte[] data1 = new byte[100];
         byte[] data2 = new byte[50];
         PoolBuffer pb1 = mockPoolBuffer(data1);
@@ -499,7 +500,7 @@ class StreamBufferTest {
     }
 
     @Test
-    void testGetBufferedBytesSequentialReleaseOverlapping() throws IOException {
+    void testGetBufferedBytesSequentialReleaseOverlapping() throws Exception {
         // This test specifically targets the sequential release of overlapping buffers.
         // Scenario:
         // 1. Add fragment A: [0, 100)
@@ -565,7 +566,7 @@ class StreamBufferTest {
     }
 
     @Test
-    void testGetBufferedBytesMultipleFragmentsSequentialRelease() throws IOException {
+    void testGetBufferedBytesMultipleFragmentsSequentialRelease() throws Exception {
         // Scenario where fragments are partially overlapping and released one by one
         // [0, 50) - Fragment A
         // [25, 75) - Fragment B (trimmed to [50, 75))
@@ -622,7 +623,7 @@ class StreamBufferTest {
     }
 
     @Test
-    void testGetBufferedBytesSequentialReleaseWithGaps() throws IOException {
+    void testGetBufferedBytesSequentialReleaseWithGaps() throws Exception {
         // [0, 20) - A
         // [40, 60) - B
         // [10, 50) - C. 
@@ -653,7 +654,7 @@ class StreamBufferTest {
     }
 
     @Test
-    void testStressComplexInteractions() throws IOException {
+    void testStressComplexInteractions() throws Exception {
         // This test simulates a complex sequence of events:
         // out-of-order arrival, multiple gaps, overlapping fragments filling multiple gaps, 
         // and interleaved reads.

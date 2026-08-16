@@ -26,8 +26,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
-import static org.jquic.quic.QuicTransportError.FLOW_CONTROL_ERROR;
-import static org.jquic.quic.QuicTransportError.STREAM_STATE_ERROR;
+import static org.jquic.quic.QuicTransportError.*;
 import static org.jquic.quic.streamapi.QuicConnectionControl.StreamType.Bidirectional;
 import static org.jquic.quic.streamapi.QuicConnectionControl.StreamType.Unidirectional;
 import static org.jquic.quic.streamapi.impl.StreamState.State.CLOSED;

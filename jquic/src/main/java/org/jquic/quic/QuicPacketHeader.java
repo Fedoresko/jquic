@@ -332,8 +332,6 @@ public class QuicPacketHeader {
                 unmaskedFlags ^= (byte) (mask.get(0) & 0x1F); // Unmask lower 5 bits
             }
 
-            log.debug("Masked flags {}, unmasked flags {}", protectedFlags, unmaskedFlags);
-
             packet.duplicate().position(startPosition).put(unmaskedFlags);
 
             // Get actual packet number length from unmasked flags

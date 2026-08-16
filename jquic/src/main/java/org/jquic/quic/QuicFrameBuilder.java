@@ -139,7 +139,7 @@ public class QuicFrameBuilder {
         // -- ServerHello body (RFC 8446 В§4.1.3) -----------------------------------
         int bodyStart = hrr.position();
         hrr.putShort((short) 0x0303);                     // legacy_version = TLS 1.2
-        hrr.put(QuicCrypto.HRR_RANDOM);                              // sentinel random
+        hrr.put(QuicCrypto.HRR_RANDOM);                   // sentinel random
         hrr.put((byte) 0x00);                             // legacy session_id length = 0
         hrr.putShort((short) QuicCrypto.CipherMode.TLS_AES_128_GCM_SHA256_ID.val); // cipher suite
         hrr.put((byte) 0x00);                             // legacy compression = null

@@ -216,7 +216,7 @@ class QuicConnectionTest {
         // Initial state
         assertEquals(QuicConnection.State.INITIAL, connection.getState());
 
-        cryptoMock.when(() -> QuicCrypto.processClientHello(any(), any())).thenThrow(new QuicCrypto.CryptoException("Err"));
+        cryptoMock.when(() -> QuicCrypto.processClientHello(any(), any())).thenThrow(new QuicException("Err"));
 
         // Process Initial packet with invalid ClientHello
         PoolBuffer initialPacket = createMockInitialPacket();
@@ -1141,7 +1141,7 @@ class QuicConnectionTest {
         return bytes;
     }
 
-    private NativeCrypto mockNCrypto() throws QuicCrypto.CryptoException {
+    private NativeCrypto mockNCrypto() throws QuicException {
         NativeCrypto mock = mock(NativeCrypto.class);
         doNothing().when(mock).decryptAeadInPlace(any(), anyLong(), any());
         doNothing().when(mock).encryptEcbInPlace(any());

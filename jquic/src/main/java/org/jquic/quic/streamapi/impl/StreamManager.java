@@ -247,14 +247,13 @@ public class StreamManager implements ConnectionStreamManager {
 
             flightControl.addReceivedBytes(state, offset, dataSize);
 
-            // Add data to the reassembly buffer - StreamBuffer enforces maxStreamData limit
-            if (streamBuffer.addIncomingData(offset, data, hasFin)) {
-                // Deliver contiguous data to handler
-                deliverStreamData(state, null);
-            } else {
-                logger.warn("Connection {} stream {} has reached MAX_STREAM_DATA", getConnectionId(), streamId);
-                connection.closeConnection(QuicTransportError.FLOW_CONTROL_ERROR, "MAX_STREAM_DATA limit reached");
-                //TODO: lsquic get this for some reason under load.
+            try {
+                if (streamBuffer.addIncomingData(offset, data, hasFin)) {
+                    deliverStreamData(state, null);
+                }
+            } catch (QuicException e) {
+                logger.warn("Connection {} stream {} has encountered an error", getConnectionId(), streamId, e);
+                connection.closeConnection(e.getError(), e.getMessage());
             }
         }
 
@@ -409,8 +408,14 @@ public class StreamManager implements ConnectionStreamManager {
     @Override
     public void onConnectionClose() {
         handler.onConnectionClose();
-        for (long stramId : new HashSet<>(streamBuffers.keySet()))
-            streamBuffers.remove(stramId).free();
+        for (long stramId : new HashSet<>(streamBuffers.keySet())) {
+            StreamBuffer buffer = streamBuffers.remove(stramId);
+            if (buffer.getBufferedBytes() > 0) {
+                logger.warn("Stream Buffer #{} still has input data {}", stramId, buffer.getBufferedBytes());
+                buffer.logIncomingFragments();
+            }
+            buffer.free();
+        }
         for (long stramId : new HashSet<>(streamOutputs.keySet()))
             streamOutputs.remove(stramId);
     }

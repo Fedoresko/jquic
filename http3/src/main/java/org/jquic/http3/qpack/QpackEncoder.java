@@ -79,6 +79,7 @@ public class QpackEncoder implements Encoder {
     private long blockedCount = 0;
     private final Map<Long, StreamRicEntry> streamRicEntries = new HashMap<>();
     private final TimeoutHeap<StreamRicEntry> ricHeap = new TimeoutHeap<>(StreamRicEntry.class);
+    private final ByteBuffer headerBlock = ByteBuffer.allocate(INITIAL_HEADER_BLOCK_SIZE);
 
     private static class StreamRicEntry implements TimeoutHeap.Entry {
         final long streamId;
@@ -117,7 +118,7 @@ public class QpackEncoder implements Encoder {
         long ricBefore = dynamicTable.getInsertCount();
         long maxRicNeeded = 0;
 
-        ByteBuffer headerBlock = ByteBuffer.allocate(INITIAL_HEADER_BLOCK_SIZE);
+        headerBlock.clear();
         for (Header header : headers) {
             // Check Static Table
             Map<String, Integer> staticValues = FULL_TO_INDEX.get(header.name());

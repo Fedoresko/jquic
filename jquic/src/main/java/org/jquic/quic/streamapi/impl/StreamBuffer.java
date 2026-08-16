@@ -15,7 +15,11 @@
  */
 package org.jquic.quic.streamapi.impl;
 
+import org.jquic.quic.QuicException;
+import org.jquic.quic.QuicTransportError;
 import org.jquic.quic.buffers.PoolBuffer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -30,6 +34,7 @@ import java.util.TreeMap;
  * Thread-safety: ALL methods are called from worker thread only - no synchronization needed.
  */
 public class StreamBuffer {
+    private static final Logger log = LoggerFactory.getLogger(StreamBuffer.class);
     private final long streamId;
     private final int streamBufferCapacity;
 
@@ -64,17 +69,25 @@ public class StreamBuffer {
      * @param fin Whether this frame has the FIN flag
      * @return true if this frame allows reading more data (in-order data received)
      */
-    public boolean addIncomingData(long offset, PoolBuffer data, boolean fin) {
+    public boolean addIncomingData(long offset, PoolBuffer data, boolean fin) throws QuicException {
         // Check flow control limit before accepting new data
         if (data.buf().remaining() > 0 && bufferedBytes + data.buf().remaining() > streamBufferCapacity) {
             // Reject fragment - exceeds maxStreamData limit
             data.release();
-            return false;
+            throw new QuicException(
+                    "MAX Data reached for stream#%d while adding bytes %d current buffered %d capacity %d"
+                            .formatted(streamId, data.buf().remaining(), bufferedBytes, streamBufferCapacity),
+                    QuicTransportError.STREAM_LIMIT_ERROR
+            );
         }
 
         if (receivedFin && offset >= finOffset) {
             data.release();
-            return false;
+            throw new QuicException(
+                    "Received data ofder FIN on stream#%d offset %d finOffset %d"
+                            .formatted(streamId, offset, finOffset),
+                    QuicTransportError.STREAM_STATE_ERROR
+            );
         }
 
         processFragment(offset, data, fin);
@@ -187,6 +200,7 @@ public class StreamBuffer {
             // Handle overlapping or duplicate data
             if (firstOffset + fragment.buf().remaining() <= nextExpectedOffset) {
                 // Already received this data, skip
+                fragment.release();
                 continue;
             }
 
@@ -251,6 +265,14 @@ public class StreamBuffer {
 
         public boolean isLast() {
             return isLast;
+        }
+    }
+
+    public void logIncomingFragments() {
+        if (log.isDebugEnabled()) {
+            for (Map.Entry<Long, PoolBuffer> entry : incomingFragments.entrySet()) {
+                log.debug("Stream#{} Incoming Fragment: offset {}, bytes {}", streamId, entry.getKey(), entry.getValue().buf().remaining());
+            }
         }
     }
 }

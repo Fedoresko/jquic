@@ -18,7 +18,6 @@ package org.jquic.quic;
 import org.jquic.quic.buffers.BufferPool;
 import org.jquic.quic.buffers.PoolBuffer;
 import org.jquic.quic.crypto.NativeCrypto;
-import org.jquic.quic.crypto.QuicCrypto;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -59,10 +58,10 @@ public class QuicPacketBuilder {
      * @param packetBuffer Plaintext payload (QUIC frames) to encrypt
      * @param crypto with encryption keys (RFC 9001 Section 5.4)
      * @return Complete Initial packet ready to send
-     * @throws QuicCrypto.CryptoException if encryption fails
+     * @throws QuicException if encryption fails
      */
     public static PoolBuffer buildInitialPacket(QuicVersion quicVersion, BufferPool bufferPool, byte [] destinationCid, ByteBuffer sourceCid,
-                                                long packetNumber, long largestAcked, ByteBuffer packetBuffer, NativeCrypto crypto) throws QuicCrypto.CryptoException {
+                                                long packetNumber, long largestAcked, ByteBuffer packetBuffer, NativeCrypto crypto) throws QuicException {
         int encryptedPayloadSize = packetBuffer.remaining() + GCM_TAG_LENGTH;
         int pnLen = QuicPacketHeader.calculatePnLength(packetNumber, largestAcked);
 
@@ -74,7 +73,7 @@ public class QuicPacketBuilder {
         return encryptAndProtectQuicPacket(bufferPool, packetBuffer, header, crypto);
     }
 
-    private static PoolBuffer encryptAndProtectQuicPacket(BufferPool bufferPool, ByteBuffer plaintext, QuicPacketHeader header, NativeCrypto crypto) throws QuicCrypto.CryptoException {
+    private static PoolBuffer encryptAndProtectQuicPacket(BufferPool bufferPool, ByteBuffer plaintext, QuicPacketHeader header, NativeCrypto crypto) throws QuicException {
         PoolBuffer packet = bufferPool.requestWriteBuffer();
         int headerStart = packet.buf().position();
         header.write(packet.buf());
@@ -98,11 +97,11 @@ public class QuicPacketBuilder {
      * @param packetNumber Packet number
      * @param payload Plaintext payload (QUIC frames) to encrypt
      * @param crypto with encryption keys (RFC 9001 Section 5.4)
-     * @throws QuicCrypto.CryptoException if encryption fails
+     * @throws QuicException if encryption fails
      */
     public static PoolBuffer buildHandshakePacket(QuicVersion quicVersion, BufferPool bufferPool, byte [] destinationCid, ByteBuffer sourceCid,
                                                   long packetNumber, long largestAcked, ByteBuffer payload, NativeCrypto crypto)
-            throws QuicCrypto.CryptoException {
+            throws QuicException {
         int encryptedPayloadSize = payload.remaining() + GCM_TAG_LENGTH; // + GCM tag
         int pnLen = QuicPacketHeader.calculatePnLength(packetNumber, largestAcked);
 
@@ -123,10 +122,10 @@ public class QuicPacketBuilder {
      * @param plaintext Plaintext payload (QUIC frames) to encrypt
      * @param crypto with encryption keys (RFC 9001 Section 5.4)
      * @return Complete 1-RTT packet ready to send
-     * @throws QuicCrypto.CryptoException if encryption fails
+     * @throws QuicException if encryption fails
      */
     public static PoolBuffer build1RttPacket(QuicVersion quicVersion, BufferPool bufferPool, byte [] destinationCid, long packetNumber, long largestAcked,
-                                             ByteBuffer plaintext, NativeCrypto crypto, byte keyPhase) throws QuicCrypto.CryptoException {
+                                             ByteBuffer plaintext, NativeCrypto crypto, byte keyPhase) throws QuicException {
         int pnLen = QuicPacketHeader.calculatePnLength(packetNumber, largestAcked);
 
         if (plaintext.hasRemaining() && plaintext.duplicate().get() == 0) {
@@ -156,10 +155,10 @@ public class QuicPacketBuilder {
      * @param packet          fully assembled packet (flipped, ready to read)
      * @param headerLength    total header length in bytes (packet number is last {@code pnLen} bytes)
      * @param pnLen           packet number length in bytes (1-4)
-     * @throws QuicCrypto.CryptoException if AES-ECB fails
+     * @throws QuicException if AES-ECB fails
      */
     private static void applyHeaderProtection(ByteBuffer packet, int headerLength, int pnLen,
-                                              NativeCrypto crypto) throws QuicCrypto.CryptoException {
+                                              NativeCrypto crypto) throws QuicException {
         if (crypto.getHpKey() == null) {
             return;
         }
@@ -169,7 +168,7 @@ public class QuicPacketBuilder {
         int sampleOffset = packet.position() + (headerLength - pnLen) + 4;
 
         if (packet.limit() < sampleOffset + 16) {
-            throw new QuicCrypto.CryptoException(
+            throw new QuicException(
                     "Packet too short to extract HP sample (limit=" + packet.limit() + ")");
         }
 

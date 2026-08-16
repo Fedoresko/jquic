@@ -128,7 +128,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
         this.selector = selector;
         this.quicVersion = version;
         statelessResetToken = QuicCrypto.generateStatelessResetToken(ByteBuffer.allocate(8).putLong(connectionId).array());
-        logger.info("Connection {} initial tiemout set to {}", connectionId, timeoutTimestamp);
+        logger.info("Connection {} initial timeout set to {}", connectionId, timeoutTimestamp);
     }
 
     public BufferPool getBufferPool() {
@@ -194,6 +194,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
             logger.debug("Queued early 1-RTT packet for CID: {} (queue depth: {})",
                     connectionId, earlyOneRttQueue.size());
         } else {
+            snapshot.release();
             logger.warn("Early 1-RTT queue full for CID: {}, dropping packet", connectionId);
         }
     }
@@ -629,7 +630,6 @@ public class QuicConnection implements TimeoutHeap.Entry {
         int remaining = packet.buf().remaining();
 
         // Parse short header - use the HP key pre-derived in TlsMetadata
-        // (RFC 9001 Section 5.4: 1-RTT level hp_key derived via "quic hp")
         QuicPacketHeader header = QuicPacketHeader.parse(packet.buf(), connectionMetadata.clientApplicationCrypto, applicationSpace.getLargestReceivedPacketNumber());
         logger.debug("Processing 1-RTT packet: CID={}, packetNumber={}, ", header.destinationCid, header.packetNumber);
 
@@ -1033,7 +1033,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
             }
 
             logger.debug("TLS keys derived, cipher: {}", connectionMetadata.clientMetadata.selectedCipherSuite);
-        }  catch (QuicCrypto.CryptoException e) {
+        }  catch (QuicException e) {
             if (e.getDemandedGroupId() != null) {
                 logger.warn("ClientHello does not contain Key for supported KPG algorithms. Requesting another one {}", e.getDemandedGroupId());
 
@@ -1142,7 +1142,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
                         connectionMetadata.currentPhase
                 );
             };
-        } catch (QuicCrypto.CryptoException e) {
+        } catch (QuicException e) {
             logger.error("Failed to build Initial packet", e);
             return;
         }
@@ -1367,7 +1367,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
 
         // Re-wrap lost packets with NEW packet numbers and encryption
         if (!lostPackets.isEmpty()) {
-            logger.warn("Detected {} lost packets in connection {}, retransmitting with NEW packet numbers", connectionId, lostPackets.size());
+            logger.warn("Detected {} lost packets in connection {}, retransmitting with NEW packet numbers", lostPackets.size(), connectionId);
 
             for (Map.Entry<Long, PacketNumberSpace.SentPacket> entry : lostPackets.entrySet()) {
                 long originalPn = entry.getKey();

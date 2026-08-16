@@ -18,6 +18,7 @@ package org.jquic.quic.crypto;
 import org.jquic.boringssl.EVP_AEAD_CTX;
 import org.jquic.boringssl.EVP_CIPHER_CTX;
 import org.jquic.boringssl.err_h;
+import org.jquic.quic.QuicException;
 import org.jspecify.annotations.NonNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -52,9 +53,9 @@ public class NativeCrypto implements AutoCloseable {
      *
      * @param keys - encryption key parameters
      * @param mode
-     * @throws QuicCrypto.CryptoException - exception if crypto problems
+     * @throws QuicException - exception if crypto problems
      */
-    public NativeCrypto(QuicCrypto.PacketProtectionKeysWithHP keys, QuicCrypto.CipherMode mode) throws QuicCrypto.CryptoException {
+    public NativeCrypto(QuicCrypto.PacketProtectionKeysWithHP keys, QuicCrypto.CipherMode mode) throws QuicException {
         this.keys = keys;
         this.mode = mode;
 
@@ -83,7 +84,7 @@ public class NativeCrypto implements AutoCloseable {
                 case TLS_AES_128_GCM_SHA256_ID -> EVP_aead_aes_128_gcm();
                 case TLS_AES_256_GCM_SHA384_ID -> EVP_aead_aes_256_gcm();
                 case TLS_CHACHA20_POLY1305_SHA256 -> EVP_aead_chacha20_poly1305();
-                default -> throw new QuicCrypto.CryptoException("Unsupported cipher mode: " + mode);
+                default -> throw new QuicException("Unsupported cipher mode: " + mode);
             };
             if (EVP_AEAD_CTX_init(aeadCtx, aead_engine, MemorySegment.ofBuffer(keys.key()),
                     keys.key().remaining(), EVP_AEAD_DEFAULT_TAG_LENGTH(), MemorySegment.NULL) != 1) {
@@ -118,9 +119,9 @@ public class NativeCrypto implements AutoCloseable {
      * @param encrypted      The encrypted data to decrypt (QUIC frames)
      * @param packetNumber   QUIC packet number (used to construct nonce via XOR with base IV)
      * @param associatedData Packet header bytes to authenticate (RFC 9001 Section 5.4.1)
-     * @throws QuicCrypto.CryptoException if decryption fails
+     * @throws QuicException if decryption fails
      */
-    public void decryptAeadInPlace(ByteBuffer encrypted, long packetNumber, ByteBuffer associatedData) throws QuicCrypto.CryptoException {
+    public void decryptAeadInPlace(ByteBuffer encrypted, long packetNumber, ByteBuffer associatedData) throws QuicException {
         ByteBuffer nonce = generateNonce(packetNumber, keys.iv());
         decryptAeadInPlace(encrypted, MemorySegment.ofBuffer(associatedData), nonce);
     }
@@ -137,10 +138,10 @@ public class NativeCrypto implements AutoCloseable {
      * @param plaintext      The plaintext data to encrypt (QUIC frames)
      * @param packetNumber   QUIC packet number (used to construct nonce via XOR with base IV)
      * @param associatedData Packet header bytes to authenticate (RFC 9001 Section 5.4.1)
-     * @throws QuicCrypto.CryptoException if encryption fails
+     * @throws QuicException if encryption fails
      */
     public void encryptPacketInPlace(ByteBuffer plaintext, long packetNumber,
-                                            ByteBuffer associatedData) throws QuicCrypto.CryptoException {
+                                            ByteBuffer associatedData) throws QuicException {
         ByteBuffer nonce = generateNonce(packetNumber, keys.iv());
         encryptAeadInPlace(plaintext, MemorySegment.ofBuffer(associatedData), nonce);
     }
@@ -148,9 +149,9 @@ public class NativeCrypto implements AutoCloseable {
     /**
      * Encpript using plain AES/ECB cipher over the 128-bit current key or ChaCha20 block function.
      * @param plaintext - plaintext
-     * @throws QuicCrypto.CryptoException if encryption fails
+     * @throws QuicException if encryption fails
      */
-    public void encryptEcbInPlace(ByteBuffer plaintext) throws QuicCrypto.CryptoException {
+    public void encryptEcbInPlace(ByteBuffer plaintext) throws QuicException {
         if (mode == QuicCrypto.CipherMode.TLS_AES_128_GCM_SHA256_ID || mode == QuicCrypto.CipherMode.TLS_AES_256_GCM_SHA384_ID) {
             if (EVP_EncryptUpdate(ecbCtx, MemorySegment.ofBuffer(plaintext), retLen,
                     MemorySegment.ofBuffer(plaintext), plaintext.remaining()) != 1) {
@@ -170,7 +171,7 @@ public class NativeCrypto implements AutoCloseable {
         }
     }
 
-    private void decryptAeadInPlace(ByteBuffer encrypted, MemorySegment associatedData, ByteBuffer nonce) throws QuicCrypto.CryptoException {
+    private void decryptAeadInPlace(ByteBuffer encrypted, MemorySegment associatedData, ByteBuffer nonce) throws QuicException {
         int ret = EVP_AEAD_CTX_open(aeadCtx,
                 MemorySegment.ofBuffer(encrypted), openOutLen, encrypted.remaining(),
                 MemorySegment.ofBuffer(nonce.rewind()), GCM_NONCE_LENGTH,
@@ -183,7 +184,7 @@ public class NativeCrypto implements AutoCloseable {
         encrypted.limit(encrypted.position() + (int) openOutLen.get(ValueLayout.JAVA_LONG, 0));
     }
 
-    private void encryptAeadInPlace(ByteBuffer plaintext, MemorySegment associatedData, ByteBuffer nonce) throws QuicCrypto.CryptoException {
+    private void encryptAeadInPlace(ByteBuffer plaintext, MemorySegment associatedData, ByteBuffer nonce) throws QuicException {
         if (EVP_AEAD_CTX_seal(aeadCtx,
                 MemorySegment.ofBuffer(plaintext), sealOutLen, plaintext.remaining() + QuicCrypto.GCM_TAG_LENGTH,
                 MemorySegment.ofBuffer(nonce.rewind()), GCM_NONCE_LENGTH,
@@ -213,9 +214,9 @@ public class NativeCrypto implements AutoCloseable {
         }
     }
 
-    private void logErrorAndThrow(String error) throws QuicCrypto.CryptoException {
+    private void logErrorAndThrow(String error) throws QuicException {
         logSslError(error);
-        throw new QuicCrypto.CryptoException(error);
+        throw new QuicException(error);
     }
 
 }

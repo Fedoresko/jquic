@@ -158,34 +158,34 @@ public class QuicCrypto {
      *
      * @param clientHello Raw ClientHello bytes (including the 4-byte TLS handshake header)
      * @return Parsed and validated ClientHello data
-     * @throws CryptoException if a required field is missing or unsupported
+     * @throws QuicException if a required field is missing or unsupported
      */
-    public static ConnectionMetadata.ClientMetadataNegotiated parseClientHello(ByteBuffer clientHello) throws CryptoException {
+    public static ConnectionMetadata.ClientMetadataNegotiated parseClientHello(ByteBuffer clientHello) throws QuicException {
         ByteBuffer buf = clientHello.duplicate();
 
         try {
             // -- TLS Handshake header ----------------------------------------------
             // msg_type (1 byte) + length (3 bytes)
-            if (buf.remaining() < 4) throw new CryptoException("ClientHello too short");
+            if (buf.remaining() < 4) throw new QuicException("ClientHello too short");
             buf.get(); // msg_type (0x01 = ClientHello)
             buf.get(); buf.get(); buf.get(); // 3-byte length
 
             // -- Legacy client version (2 bytes) + random (32 bytes) ---------------
-            if (buf.remaining() < 34) throw new CryptoException("ClientHello: missing version/random");
+            if (buf.remaining() < 34) throw new QuicException("ClientHello: missing version/random");
             buf.position(buf.position() + 2); // legacy_version (ignored for TLS 1.3)
             byte[] clientRandom = new byte[32];
             buf.get(clientRandom); // random field (not used here, kept for completeness)
 
             // -- Legacy session ID -------------------------------------------------
-            if (buf.remaining() < 1) throw new CryptoException("ClientHello: missing session_id length");
+            if (buf.remaining() < 1) throw new QuicException("ClientHello: missing session_id length");
             int sessionIdLen = buf.get() & 0xFF;
-            if (buf.remaining() < sessionIdLen) throw new CryptoException("ClientHello: truncated session_id");
+            if (buf.remaining() < sessionIdLen) throw new QuicException("ClientHello: truncated session_id");
             buf.position(buf.position() + sessionIdLen);
 
             // -- Cipher Suites -----------------------------------------------------
-            if (buf.remaining() < 2) throw new CryptoException("ClientHello: missing cipher_suites length");
+            if (buf.remaining() < 2) throw new QuicException("ClientHello: missing cipher_suites length");
             int cipherSuitesLen = buf.getShort() & 0xFFFF;
-            if (buf.remaining() < cipherSuitesLen) throw new CryptoException("ClientHello: truncated cipher_suites");
+            if (buf.remaining() < cipherSuitesLen) throw new QuicException("ClientHello: truncated cipher_suites");
             int cipherSuitesEnd = buf.position() + cipherSuitesLen;
             List<CipherMode> cipherSuitesList = new ArrayList<>();
             while (buf.position() < cipherSuitesEnd) {
@@ -195,19 +195,19 @@ public class QuicCrypto {
             if (!cipherSuitesList.contains(TLS_AES_128_GCM_SHA256_ID) &&
                 !cipherSuitesList.contains(TLS_AES_256_GCM_SHA384_ID) &&
                 !cipherSuitesList.contains(TLS_CHACHA20_POLY1305_SHA256)) {
-                throw new CryptoException("ClientHello: no compatible ciphers offered");
+                throw new QuicException("ClientHello: no compatible ciphers offered");
             }
 
             // -- Legacy compression methods ----------------------------------------
-            if (buf.remaining() < 1) throw new CryptoException("ClientHello: missing compression_methods length");
+            if (buf.remaining() < 1) throw new QuicException("ClientHello: missing compression_methods length");
             int compressionLen = buf.get() & 0xFF;
-            if (buf.remaining() < compressionLen) throw new CryptoException("ClientHello: truncated compression_methods");
+            if (buf.remaining() < compressionLen) throw new QuicException("ClientHello: truncated compression_methods");
             buf.position(buf.position() + compressionLen);
 
             // -- Extensions --------------------------------------------------------
-            if (buf.remaining() < 2) throw new CryptoException("ClientHello: missing extensions length");
+            if (buf.remaining() < 2) throw new QuicException("ClientHello: missing extensions length");
             int extensionsLen = buf.getShort() & 0xFFFF;
-            if (buf.remaining() < extensionsLen) throw new CryptoException(String.format("ClientHello: truncated extensions remainig: %d extensionsLen %d", buf.remaining(), extensionsLen));
+            if (buf.remaining() < extensionsLen) throw new QuicException(String.format("ClientHello: truncated extensions remainig: %d extensionsLen %d", buf.remaining(), extensionsLen));
 
             boolean hasTls13Version = false;
             boolean hasTransportParameters = false;
@@ -359,7 +359,7 @@ public class QuicCrypto {
             }
 
             if (!hasTransportParameters) {
-                throw new CryptoException("ClientHello: no transport parameters", QuicTransportError.TLS_ERROR_MISSING_EXTENSION);
+                throw new QuicException("ClientHello: no transport parameters", QuicTransportError.TLS_ERROR_MISSING_EXTENSION);
             }
 
 
@@ -368,10 +368,10 @@ public class QuicCrypto {
             CipherMode selected = cipherSuitesList.contains(TLS_AES_128_GCM_SHA256_ID) ? TLS_AES_128_GCM_SHA256_ID : cipherSuitesList.get(0);
 
             return new ConnectionMetadata.ClientMetadataNegotiated(alpn, maxIdleTimeout, supportedGroups, clientKeys, maxUdpPayloadSize, initialMaxData, initialMaxStreamDataBidiLocal, initialMaxStreamDataBidiRemote, initialMaxStreamDataUni, initialMaxStreamsBidi, initialMaxStreamsUni, signatures, ackDelayExponent, availableVersions, selected);
-        } catch (CryptoException ce) {
+        } catch (QuicException ce) {
             throw ce;
         } catch (Exception e) {
-            throw new CryptoException("Failed to parse ClientHello: " + e.getMessage(), e);
+            throw new QuicException("Failed to parse ClientHello: " + e.getMessage(), e);
         }
     }
 
@@ -397,10 +397,10 @@ public class QuicCrypto {
      * <p>The 1-RTT keys are not produced here; call
      *
      * @param clientHello The raw ClientHello bytes (including the 4-byte TLS header)
-     * @throws CryptoException if the ClientHello is malformed, missing required extensions,
+     * @throws QuicException if the ClientHello is malformed, missing required extensions,
      *         advertises unsupported parameters, or key derivation fails
      */
-    public static void processClientHello(ConnectionMetadata metadata, ByteBuffer clientHello) throws CryptoException {
+    public static void processClientHello(ConnectionMetadata metadata, ByteBuffer clientHello) throws QuicException {
         try {
             // -- Step 1: Create TlsMetadata - the golden source of state.
             // Early Secret = HKDF-Extract(salt=0, IKM=0) [RFC 8446 В§7.1, no PSK]
@@ -419,7 +419,7 @@ public class QuicCrypto {
             // -- Step 4: Set negotiated application-level parameters.
 
             if (parsed.supportedSignatures.isEmpty()) {
-                throw new CryptoException("No signature_algorithms found are in ClientHello!");
+                throw new QuicException("No signature_algorithms found are in ClientHello!");
             }
             metadata.selectedSignatureScheme = getKeystoreManager().selectSignatureScheme(parsed.supportedSignatures);
 
@@ -441,9 +441,9 @@ public class QuicCrypto {
             logger.info("Client key shared {}.", parsed.clientKeys.keySet().stream().map(String::valueOf).collect(Collectors.joining(", ")));
             TlsGroupMapping.SelectionResult selectionResult = TlsGroupMapping.selectGroup(parsed.supportedGroups, parsed.clientKeys.keySet());
             if (selectionResult == null) {
-                throw new CryptoException("There is no suitable KPG algorithm in clients supported_groups.", (short) 0x001D);
+                throw new QuicException("There is no suitable KPG algorithm in clients supported_groups.", (short) 0x001D);
             } else if (selectionResult.requiresHelloRetryRequest) {
-                throw new CryptoException("Client keys not supported, demand another.", selectionResult.chosenGroupId);
+                throw new QuicException("Client keys not supported, demand another.", selectionResult.chosenGroupId);
             } else {
                 logger.info("Negotiated KPG algorithm for group {}.", selectionResult.chosenGroupId);
                 KpgResult kpgResult = generateKeysAndDeriveSharedSecret(TlsGroupMapping.resolve(selectionResult.chosenGroupId), parsed.clientKeys.get(selectionResult.chosenGroupId));
@@ -459,7 +459,7 @@ public class QuicCrypto {
                 logger.debug("Handshake traffic secrets derived");
             }
         } catch (GeneralSecurityException e) {
-            throw new CryptoException("Failed to process ClientHello", e);
+            throw new QuicException("Failed to process ClientHello", e);
         }
     }
 
@@ -878,9 +878,9 @@ public class QuicCrypto {
      * where {@code finished_key = HKDF-Expand-Label(server_hs_secret, "finished", "", 32)}.
      *
      * @param metadata the live {@link ConnectionMetadata}; its transcript must be fully up-to-date
-     * @throws CryptoException if HMAC computation fails
+     * @throws QuicException if HMAC computation fails
      */
-    public static void createServerFinished(ConnectionMetadata metadata, ChunkedOutputStreamWithAmendments output) throws CryptoException, IOException {
+    public static void createServerFinished(ConnectionMetadata metadata, ChunkedOutputStreamWithAmendments output) throws QuicException, IOException {
         try {
             byte[] finishedKey = hkdfExpandLabel(metadata.serverHandshakeTrafficSecret, "finished", new byte[0], 32);
             byte[] transcriptHash = metadata.transcriptHash();
@@ -896,7 +896,7 @@ public class QuicCrypto {
             output.write((byte) ( verifyData.length         & 0xFF));
             output.write(verifyData);
         } catch (GeneralSecurityException e) {
-            throw new CryptoException("Failed to create server Finished", e);
+            throw new QuicException("Failed to create server Finished", e);
         }
     }
 
@@ -972,9 +972,9 @@ public class QuicCrypto {
      * <p>If no keystore is configured an empty CertificateVerify stub is returned.
      *
      * @param metadata the live {@link ConnectionMetadata}; transcript must include Certificate
-     * @throws CryptoException if signing fails unexpectedly
+     * @throws QuicException if signing fails unexpectedly
      */
-    public static void putCertificateVerify(ConnectionMetadata metadata, ChunkedOutputStreamWithAmendments output) throws CryptoException, IOException {
+    public static void putCertificateVerify(ConnectionMetadata metadata, ChunkedOutputStreamWithAmendments output) throws QuicException, IOException {
         byte[] contextString = "TLS 1.3, server CertificateVerify"
                 .getBytes(java.nio.charset.StandardCharsets.US_ASCII);
         byte[] transcriptHash = metadata.transcriptHash();
@@ -988,7 +988,7 @@ public class QuicCrypto {
         try {
             signature = signData(toSign, metadata.selectedSignatureScheme);
         } catch (GeneralSecurityException e) {
-            throw new CryptoException("Failed to sign TLS data", e);
+            throw new QuicException("Failed to sign TLS data", e);
         }
 
         short sigScheme = metadata.selectedSignatureScheme;
@@ -1017,12 +1017,12 @@ public class QuicCrypto {
      * HKDF-Expand-Label as per RFC 8446 for TLS 1.3.
      */
     public static byte[] hkdfExpandLabel(byte[] secret, String label, byte[] context, int length)
-            throws CryptoException {
+            throws QuicException {
         byte[] hkdfLabel = buildHkdfLabel(length, "tls13 " + label, context);
         return hkdfExpand(secret, hkdfLabel, length);
     }
 
-    private static byte[] hkdfExpand(byte[] prk, byte[] info, int length) throws CryptoException {
+    private static byte[] hkdfExpand(byte[] prk, byte[] info, int length) throws QuicException {
         try {
             Mac mac = Mac.getInstance("HmacSHA256");
             mac.init(new SecretKeySpec(prk, "HmacSHA256"));
@@ -1046,7 +1046,7 @@ public class QuicCrypto {
 
             return result;
         } catch (GeneralSecurityException e) {
-            throw new CryptoException("Failed to hkdf expand", e);
+            throw new QuicException("Failed to hkdf expand", e);
         }
     }
 
@@ -1063,48 +1063,48 @@ public class QuicCrypto {
 
     // ========== QUIC-specific key derivation ==========
 
-    public static String keyLabel(QuicVersion version) throws CryptoException {
+    public static String keyLabel(QuicVersion version) throws QuicException {
         return switch (version) {
             case QUIC_VERSION_1 -> "quic key";
             case QUIC_VERSION_2 -> "quicv2 key";
-            default -> throw new CryptoException("Unsupported version");
+            default -> throw new QuicException("Unsupported version");
         };
     }
 
-    public static String ivLabel(QuicVersion version) throws CryptoException {
+    public static String ivLabel(QuicVersion version) throws QuicException {
         return switch (version) {
             case QUIC_VERSION_1 -> "quic iv";
             case QUIC_VERSION_2 -> "quicv2 iv";
-            default -> throw new CryptoException("Unsupported version");
+            default -> throw new QuicException("Unsupported version");
         };
     }
 
-    public static String hpLabel(QuicVersion version) throws CryptoException {
+    public static String hpLabel(QuicVersion version) throws QuicException {
         return switch (version) {
             case QUIC_VERSION_1 -> "quic hp";
             case QUIC_VERSION_2 -> "quicv2 hp";
-            default -> throw new CryptoException("Unsupported version");
+            default -> throw new QuicException("Unsupported version");
         };
     }
 
-    public static String kuLabel(QuicVersion version) throws CryptoException {
+    public static String kuLabel(QuicVersion version) throws QuicException {
         return switch (version) {
             case QUIC_VERSION_1 -> "quic ku";
             case QUIC_VERSION_2 -> "quicv2 ku";
-            default -> throw new CryptoException("Unsupported version");
+            default -> throw new QuicException("Unsupported version");
         };
     }
 
-    public static SecretKey deriveKey(QuicVersion version, byte[] secret, CipherMode mode) throws CryptoException {
+    public static SecretKey deriveKey(QuicVersion version, byte[] secret, CipherMode mode) throws QuicException {
         byte[] key = hkdfExpandLabel(secret, keyLabel(version), new byte[0], mode.keyLen);
         return new SecretKeySpec(key, "AES");
     }
 
-    public static byte[] deriveIv(QuicVersion version, byte[] secret) throws CryptoException {
+    public static byte[] deriveIv(QuicVersion version, byte[] secret) throws QuicException {
         return hkdfExpandLabel(secret, ivLabel(version), new byte[0], GCM_NONCE_LENGTH);
     }
 
-    public static byte[] deriveHp(QuicVersion version, byte[] secret, CipherMode mode) throws CryptoException {
+    public static byte[] deriveHp(QuicVersion version, byte[] secret, CipherMode mode) throws QuicException {
         return hkdfExpandLabel(secret, hpLabel(version), new byte[0], mode.keyLen);
     }
 
@@ -1147,10 +1147,10 @@ public class QuicCrypto {
      * @param clientHandshakeSecret The client's handshake traffic secret
      * @param transcriptHash The hash of all handshake messages received so far (simplified: can be empty for testing)
      * @return true if verification succeeds
-     * @throws CryptoException if parsing or verification fails
+     * @throws QuicException if parsing or verification fails
      */
     public static boolean verifyClientFinished(ByteBuffer finishedData, byte[] clientHandshakeSecret, byte[] transcriptHash)
-            throws CryptoException {
+            throws QuicException {
         try {
             finishedData.mark();
             // Parse TLS Finished message structure:
@@ -1159,13 +1159,13 @@ public class QuicCrypto {
             // - verify_data (32 bytes for SHA-256)
 
             if (finishedData.remaining() < 4) {
-                throw new CryptoException("Finished message too short");
+                throw new QuicException("Finished message too short");
             }
 
             int length = getCryptoFrameLength(finishedData);
 
             if (finishedData.remaining() < length) {
-                throw new CryptoException("Finished message incomplete");
+                throw new QuicException("Finished message incomplete");
             }
 
             // Extract received verify_data
@@ -1215,44 +1215,6 @@ public class QuicCrypto {
         return ((buffer.get() & 0xFF) << 16) | ((buffer.get() & 0xFF) << 8) | buffer.get() & 0xFF;
     }
 
-
-    /**
-     * Exception thrown when cryptographic operations fail.
-     */
-    public static class CryptoException extends Exception {
-        private final Short demandedGroupId;
-        private final QuicTransportError error;
-
-        public Short getDemandedGroupId() {
-            return demandedGroupId;
-        }
-
-        public QuicTransportError getError() { return  error; }
-
-        public CryptoException(String message, QuicTransportError error) {
-            super(message);
-            this.error = error;
-            demandedGroupId = null;
-        }
-
-        public CryptoException(String message) {
-            super(message);
-            demandedGroupId = null;
-            this.error = null;
-        }
-
-        public CryptoException(String message, short demandedGroupId) {
-            super(message);
-            this.demandedGroupId = demandedGroupId;
-            this.error = null;
-        }
-
-        public CryptoException(String message, Throwable cause) {
-            super(message, cause);
-            demandedGroupId = null;
-            this.error = null;
-        }
-    }
 
     public static byte[] generateStatelessResetToken(byte[] connectionId) {
         try {

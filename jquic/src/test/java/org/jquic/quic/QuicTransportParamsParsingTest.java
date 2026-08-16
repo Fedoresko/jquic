@@ -61,8 +61,8 @@ class QuicTransportParamsParsingTest {
     void testParseClientHelloMissingTransportParametersThrowsException() throws Exception {
         ByteBuffer hello = buildClientHelloWithoutParams();
 
-        QuicCrypto.CryptoException ex = org.junit.jupiter.api.Assertions.assertThrows(
-                QuicCrypto.CryptoException.class,
+        QuicException ex = org.junit.jupiter.api.Assertions.assertThrows(
+                QuicException.class,
                 () -> QuicCrypto.parseClientHello(hello)
         );
 

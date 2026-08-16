@@ -36,14 +36,16 @@ public class FramedStreamWrapper implements StreamWrapper {
     }
 
     private void processMoreData() throws IOException {
-        currentFrame.write(context.readAllBytes());
+        int byteread;
+        while ( (byteread = context.read()) != -1) {
+            currentFrame.write(byteread);
+        }
 
         ByteBuffer wrap = ByteBuffer.wrap(currentFrame.toByteArray());
 
         if (wrap.remaining() > 8 && curType == null) {
             curType = QuicVarint.read(wrap);
             curLen = QuicVarint.read(wrap);
-
         }
 
         if (curType != null && curLen != null && wrap.remaining() >= curLen) {

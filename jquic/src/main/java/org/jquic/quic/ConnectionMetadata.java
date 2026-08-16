@@ -111,11 +111,11 @@ public class ConnectionMetadata {
         }
     }
 
-    private static byte[] getQuicInitialSalt(QuicVersion version) throws QuicCrypto.CryptoException {
+    private static byte[] getQuicInitialSalt(QuicVersion version) throws QuicException {
         return switch (version) {
             case QUIC_VERSION_1 -> QuicCrypto.QUIC_VERSION_1_SALT;
             case QUIC_VERSION_2 -> QuicCrypto.QUIC_VERSION_2_SALT;
-            case UNKNOWN -> throw new QuicCrypto.CryptoException("Unsupported Vesrion");
+            case UNKNOWN -> throw new QuicException("Unsupported Vesrion");
 
         };
     }
@@ -130,7 +130,7 @@ public class ConnectionMetadata {
      * Derives Initial packet protection keys from destination connection ID.
      * Does not decrypt - only derives keys for header protection removal.
      */
-    public static QuicCrypto.PacketProtectionKeysWithHP[] deriveInitialKeys(QuicVersion quicVersion, byte[] destinationCid) throws QuicCrypto.CryptoException {
+    public static QuicCrypto.PacketProtectionKeysWithHP[] deriveInitialKeys(QuicVersion quicVersion, byte[] destinationCid) throws QuicException {
         try {
             // Derive Initial secrets using HKDF with DCID
             byte[] initialSecret = QuicCrypto.hkdfExtract( getQuicInitialSalt(quicVersion) , destinationCid);
@@ -160,11 +160,11 @@ public class ConnectionMetadata {
             return new QuicCrypto.PacketProtectionKeysWithHP[] { clientKeys, serverKeys };
 
         } catch (GeneralSecurityException e) {
-            throw new QuicCrypto.CryptoException("Failed to derive Initial keys", e);
+            throw new QuicException("Failed to derive Initial keys", e);
         }
     }
 
-    public void generateHandshakeSecrets(QuicVersion quicVersion) throws QuicCrypto.CryptoException {
+    public void generateHandshakeSecrets(QuicVersion quicVersion) throws QuicException {
         // Context = transcript hash up to and including ClientHello.
         // ServerHello is appended later by createInitialResponse.
         byte[] transcriptSoFar = transcriptHash();
@@ -213,9 +213,9 @@ public class ConnectionMetadata {
      * which must have been updated with all messages up to and including the client
      * Finished before this method is called.
      *
-     * @throws QuicCrypto.CryptoException if key derivation fails
+     * @throws QuicException if key derivation fails
      */
-    public void createApplicationKeys(QuicVersion quicVersion) throws QuicCrypto.CryptoException {
+    public void createApplicationKeys(QuicVersion quicVersion) throws QuicException {
         try {
             // Master Secret = HKDF-Extract(Derive-Secret(Handshake Secret, "derived", ""), 0)
             byte[] derivedFromHandshake = QuicCrypto.hkdfExpandLabel(
@@ -249,7 +249,7 @@ public class ConnectionMetadata {
 
             logger.debug("Derived 1-RTT application keys from transcript hash (stage 2 complete)");
         } catch (GeneralSecurityException e) {
-            throw new QuicCrypto.CryptoException("Failed to derive application keys", e);
+            throw new QuicException("Failed to derive application keys", e);
         }
     }
 
@@ -285,7 +285,7 @@ public class ConnectionMetadata {
 
             logger.info("Rotated application keys, current Key Phase set to {}", currentPhase);
         } catch (GeneralSecurityException e) {
-            throw new QuicCrypto.CryptoException("Failed to rotate application keys", e);
+            throw new QuicException("Failed to rotate application keys", e);
         }
     }
 
@@ -299,7 +299,7 @@ public class ConnectionMetadata {
                         destinationCid);
                 clientInitialCrypto.put(quicVersion, new NativeCrypto(keys[0], QuicCrypto.CipherMode.TLS_AES_128_GCM_SHA256_ID));
                 serverInitialCrypto.put(quicVersion, new NativeCrypto(keys[1], QuicCrypto.CipherMode.TLS_AES_128_GCM_SHA256_ID));
-            } catch (QuicCrypto.CryptoException e) {
+            } catch (QuicException e) {
                 // RFC 9000: Silently discard packets that fail key derivation
                 logger.warn("Failed to derive Initial keys for CID: {}, discarding packet", destinationCid);
                 return null;

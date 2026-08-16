@@ -46,7 +46,7 @@ class QuicPacketBuilderTest {
     private static final BufferPool pool = mock(BufferPool.class);
 
     @BeforeAll
-    static void init() throws QuicCrypto.CryptoException {
+    static void init() throws QuicException {
         when(pool.requestWriteBuffer()).thenAnswer((a) -> new RootPoolBuffer(ByteBuffer.allocate(2000).position(100), pool, true) );
         doAnswer(
                 invocation -> {
@@ -58,7 +58,7 @@ class QuicPacketBuilderTest {
     }
     
     @Test
-    void testBuildInitialPacket_HeaderStructure() throws QuicCrypto.CryptoException {
+    void testBuildInitialPacket_HeaderStructure() throws QuicException {
         // Arrange
         long destinationCid = 0x1234567890ABCDEFL;
         ByteBuffer sourceCid = ByteBuffer.wrap(new byte[8]).putLong(0xFEDCBA0987654321L).flip();
@@ -124,7 +124,7 @@ class QuicPacketBuilderTest {
     }
 
     @Test
-    void testBuildHandshakePacket_HeaderStructure() throws QuicCrypto.CryptoException {
+    void testBuildHandshakePacket_HeaderStructure() throws QuicException {
         // Arrange
         long destinationCid = 0xAAAABBBBCCCCDDDDL;
         ByteBuffer sourceCid = ByteBuffer.wrap(new byte[8]).putLong(0x1111222233334444L).flip();
@@ -174,7 +174,7 @@ class QuicPacketBuilderTest {
     }
 
     @Test
-    void testBuild1RttPacket_ShortHeaderStructure() throws QuicCrypto.CryptoException {
+    void testBuild1RttPacket_ShortHeaderStructure() throws QuicException {
         // Arrange
         long destinationCid = 0x9999888877776666L;
         long packetNumber = 42;
@@ -210,7 +210,7 @@ class QuicPacketBuilderTest {
     }
 
     @Test
-    void testBuildInitialPacket_PayloadIntegrity() throws QuicCrypto.CryptoException {
+    void testBuildInitialPacket_PayloadIntegrity() throws QuicException {
         // Arrange
         byte[] testData = new byte[256];
         for (int i = 0; i < testData.length; i++) {
@@ -234,7 +234,7 @@ class QuicPacketBuilderTest {
     }
 
     @Test
-    void testBuild1RttPacket_MinimumSize() throws QuicCrypto.CryptoException {
+    void testBuild1RttPacket_MinimumSize() throws QuicException {
         // Arrange
         ByteBuffer emptyPayload = ByteBuffer.allocate(0);
         // PoolBuffer uses a buffer from QuicEngine.getPool() which is typically large enough.
@@ -250,7 +250,7 @@ class QuicPacketBuilderTest {
     }
 
     @Test
-    void testBuildPackets_DifferentPacketNumbers() throws QuicCrypto.CryptoException {
+    void testBuildPackets_DifferentPacketNumbers() throws QuicException {
         // Test that packet numbers are correctly encoded for different values
         for (int pn = 0; pn < 256; pn += 17) {
             ByteBuffer payload = ByteBuffer.wrap(new byte[10]);
@@ -274,7 +274,7 @@ class QuicPacketBuilderTest {
     }
 
     @Test
-    void testBuildInitialPacket_TokenLength() throws QuicCrypto.CryptoException {
+    void testBuildInitialPacket_TokenLength() throws QuicException {
         // Arrange
         ByteBuffer payload = ByteBuffer.allocate(0);
 
@@ -290,7 +290,7 @@ class QuicPacketBuilderTest {
     }
 
     @Test
-    void testBuildHandshakePacket_LengthField() throws QuicCrypto.CryptoException {
+    void testBuildHandshakePacket_LengthField() throws QuicException {
         // Arrange
         byte[] payloadData = new byte[200];
         ByteBuffer payload = ByteBuffer.wrap(payloadData);

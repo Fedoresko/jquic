@@ -144,11 +144,12 @@ public class SelectorThread extends Thread {
         try {
             this.channel = new QuicDatagramChannel(socket);
 
+            for (int i = 0; i < MAX_RECIEVE_BATCH; i++) {
+                readBuffers[i] = bufferPool.requestReadBuffer();
+            }
+
             long lastTime = System.nanoTime();
             while (!Thread.currentThread().isInterrupted()) {
-                for (int i = 0; i < MAX_RECIEVE_BATCH; i++) {
-                    readBuffers[i] = bufferPool.requestReadBuffer();
-                }
 
                 long nowNs = System.nanoTime();
                 long now = System.currentTimeMillis();
@@ -168,6 +169,11 @@ public class SelectorThread extends Thread {
                 List<QuicDatagramChannel.ReceivedPacket> batch = (now - startIdlingTimeMs > 1_000) ?
                         channel.receiveBatchBlocking(readBuffers) :
                         channel.receiveBatch(readBuffers);
+
+                for (int i = 0; i < batch.size(); i++) {
+                    // Request fresh buffers
+                    readBuffers[i] = bufferPool.requestReadBuffer();
+                }
 
                 if (!batch.isEmpty()) logger.info("Selector-{}: Received {} datagrams in batch", threadId, batch.size());
 
@@ -214,7 +220,7 @@ public class SelectorThread extends Thread {
                 int i = currentSendQueueSize;
                 if (currentSendQueueSize != 0) logger.info("Selector-{}: Have {} response packets before taking application pkts", threadId, currentSendQueueSize);
 
-                while (appDataPriorityQueue.nextTimestamp() < nowNs && i < MAX_SEND_BATCH) {
+                while (appDataPriorityQueue.nextTimestamp() < nowNs && i < MAX_RECIEVE_BATCH) {
                     ApplicationData data = appDataPriorityQueue.poll(nowNs);
                     processApplicationPacket(data, now);
                     i++;
