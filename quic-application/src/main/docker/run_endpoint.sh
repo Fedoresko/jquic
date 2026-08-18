@@ -43,6 +43,11 @@ export SSLKEYLOGFILE=/logs/keys.log
 
 cd /app
 # Start the Java application in the background and capture its PID
+QUIC_V2_PREFERENCE="false"
+if [ "$TESTCASE" == "v2" ]; then
+    QUIC_V2_PREFERENCE="true"
+fi
+
 exec ${JAVA_HOME}/bin/java -Djava.net.preferIPv4Stack=false\
-   --add-opens java.base/sun.nio.ch=ALL-UNNAMED --add-opens java.base/java.io=ALL-UNNAMED --enable-native-access=ALL-UNNAMED -Dlog.level=DEBUG\
-   -Dquic.port=443 -Dquic.keystore_type=PEM -Dquic.cert_path=/certs/cert.pem -Dquic.key_path=/certs/priv.key -jar jquic.jar
+   --add-opens java.base/sun.nio.ch=ALL-UNNAMED --add-opens java.base/java.io=ALL-UNNAMED --enable-native-access=ALL-UNNAMED -Dlog.level=INFO\
+   -Dquic.prefer_v2=$QUIC_V2_PREFERENCE -Dquic.port=443 -Dquic.keystore_type=PEM -Dquic.cert_path=/certs/cert.pem -Dquic.key_path=/certs/priv.key -jar jquic.jar

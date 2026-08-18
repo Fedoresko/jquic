@@ -360,7 +360,7 @@ public class StreamManager implements ConnectionStreamManager {
      * Appends ready to send Buffer from a stream to outputQueue.
      * Called from the Worker thread.
      */
-    public void appendOutgoingData(StreamState state, PoolBuffer data) throws IOException {
+    public int appendOutgoingData(StreamState state, PoolBuffer data) throws IOException {
         long streamId = state.getStreamId();
         if (connection.getState() != QuicConnection.State.ESTABLISHED) {
             logger.error("Connection is in wrong state " + connection.getState());
@@ -395,6 +395,7 @@ public class StreamManager implements ConnectionStreamManager {
 
         logger.info("Stream #{} maxSreamData {} remoteMaxStreamData {}, maxSentOffset {}, bufferesBytes {}, maxOffset {}", streamId, state.getMaxStreamData(), state.getRemoteMaxStreamData(), state.getMaxSentOffset(), state.getBufferedBytes(), state.getMaxOffset());
         logger.info("Total CID#{} buffered {}, in-flight {}, totalMaxOffsetsSum {}", getConnectionId(), flightControl.getBytesBuffered(), flightControl.getTotalInFlightBytes(), flightControl.totalMaxOffsetsSum);
+        return 0;
     }
 
     private void trySendData(TriStateQueue<ApplicationData> queue, long streamId, PoolBuffer data) throws TimeoutException {

@@ -36,7 +36,7 @@ public class PacketNumberSpace {
     private static final int K_GRANULARITY_MS = 1; // Timer granularity: 1ms
     private static final int K_INITIAL_RTT_MS = 333; // Initial RTT estimate: 333ms
 
-    final PacketPhase phase; // For logging: "Initial", "Handshake", "Application"
+    public final PacketPhase phase; // For logging: "Initial", "Handshake", "Application"
 
     // Packet number allocation
     private long nextPacketNumber = 0;
@@ -306,9 +306,11 @@ public class PacketNumberSpace {
     }
 
     public void discardSentPackets() {
-        if (!sentPackets.isEmpty()) {
-            sentPackets.pollFirstEntry().getValue().getUnencryptedPayload().release();
+        logger.info("Discarding sent packets {}", phase);
+        for (SentPacket packet : sentPackets.values()) {
+            packet.getUnencryptedPayload().release();
         }
+        sentPackets.clear();
     }
 
     /**

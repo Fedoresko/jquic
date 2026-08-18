@@ -38,9 +38,7 @@ import static org.jquic.quic.crypto.QuicCrypto.GCM_TAG_LENGTH;
 public class QuicPacketBuilder {
     // QUIC version 1 (RFC 9000)
     public static final int STATELESS_RESET_TOKEN_LENGTH = 16; // RFC 9000: 16 bytes
-    private static final Logger log = LoggerFactory.getLogger(QuicPacketBuilder.class);
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
-    private static final int MIN_STATELESS_RESET_LENGTH = 21; // 1 byte fixed bit + 4 bytes unpredictable + 16 bytes token
     private static final ThreadLocal<ByteBuffer> sample = ThreadLocal.withInitial(()->ByteBuffer.allocateDirect(16));
 
     /**
@@ -60,7 +58,7 @@ public class QuicPacketBuilder {
      * @return Complete Initial packet ready to send
      * @throws QuicException if encryption fails
      */
-    public static PoolBuffer buildInitialPacket(QuicVersion quicVersion, BufferPool bufferPool, byte [] destinationCid, ByteBuffer sourceCid,
+    public static PoolBuffer buildInitialPacket(QuicVersion quicVersion, PoolBuffer packet, byte [] destinationCid, ByteBuffer sourceCid,
                                                 long packetNumber, long largestAcked, ByteBuffer packetBuffer, NativeCrypto crypto) throws QuicException {
         int encryptedPayloadSize = packetBuffer.remaining() + GCM_TAG_LENGTH;
         int pnLen = QuicPacketHeader.calculatePnLength(packetNumber, largestAcked);
@@ -70,11 +68,10 @@ public class QuicPacketBuilder {
                 new byte[0], encryptedPayloadSize + pnLen, (byte)0
         );
 
-        return encryptAndProtectQuicPacket(bufferPool, packetBuffer, header, crypto);
+        return encryptAndProtectQuicPacket(packet, packetBuffer, header, crypto);
     }
 
-    private static PoolBuffer encryptAndProtectQuicPacket(BufferPool bufferPool, ByteBuffer plaintext, QuicPacketHeader header, NativeCrypto crypto) throws QuicException {
-        PoolBuffer packet = bufferPool.requestWriteBuffer();
+    private static PoolBuffer encryptAndProtectQuicPacket(PoolBuffer packet, ByteBuffer plaintext, QuicPacketHeader header, NativeCrypto crypto) throws QuicException {
         int headerStart = packet.buf().position();
         header.write(packet.buf());
         ByteBuffer headerData = packet.buf().duplicate().position(headerStart).limit(packet.buf().position());
@@ -99,7 +96,7 @@ public class QuicPacketBuilder {
      * @param crypto with encryption keys (RFC 9001 Section 5.4)
      * @throws QuicException if encryption fails
      */
-    public static PoolBuffer buildHandshakePacket(QuicVersion quicVersion, BufferPool bufferPool, byte [] destinationCid, ByteBuffer sourceCid,
+    public static PoolBuffer buildHandshakePacket(QuicVersion quicVersion, PoolBuffer packet, byte [] destinationCid, ByteBuffer sourceCid,
                                                   long packetNumber, long largestAcked, ByteBuffer payload, NativeCrypto crypto)
             throws QuicException {
         int encryptedPayloadSize = payload.remaining() + GCM_TAG_LENGTH; // + GCM tag
@@ -109,7 +106,7 @@ public class QuicPacketBuilder {
             quicVersion, destinationCid, sourceCid.array(),
             QuicPacketHeader.PacketType.HANDSHAKE, new byte[0], encryptedPayloadSize + pnLen, (byte)0 );
 
-        return encryptAndProtectQuicPacket(bufferPool, payload, header, crypto);
+        return encryptAndProtectQuicPacket(packet, payload, header, crypto);
     }
 
     /**
@@ -124,19 +121,15 @@ public class QuicPacketBuilder {
      * @return Complete 1-RTT packet ready to send
      * @throws QuicException if encryption fails
      */
-    public static PoolBuffer build1RttPacket(QuicVersion quicVersion, BufferPool bufferPool, byte [] destinationCid, long packetNumber, long largestAcked,
+    public static PoolBuffer build1RttPacket(QuicVersion quicVersion, PoolBuffer packet, byte [] destinationCid, long packetNumber, long largestAcked,
                                              ByteBuffer plaintext, NativeCrypto crypto, byte keyPhase) throws QuicException {
         int pnLen = QuicPacketHeader.calculatePnLength(packetNumber, largestAcked);
-
-        if (plaintext.hasRemaining() && plaintext.duplicate().get() == 0) {
-            log.error("!!!!!!Very Strange packet");
-        }
 
         QuicPacketHeader header = new QuicPacketHeader(new QuicPacketHeader.PacketNumber(pnLen, packetNumber, (byte) (0x40 | (keyPhase << 2))),
                 quicVersion, destinationCid, null,
                 QuicPacketHeader.PacketType.ONE_RTT, null, -1, keyPhase);
 
-        return encryptAndProtectQuicPacket(bufferPool, plaintext, header, crypto);
+        return encryptAndProtectQuicPacket(packet, plaintext, header, crypto);
     }
 
     /**
@@ -226,11 +219,6 @@ public class QuicPacketBuilder {
     }
 
     static PoolBuffer writeStatelessResetFrame(BufferPool bufferPool, int incomingPacketSize, byte[] statelessResetToken) {
-        // RFC 9000: Stateless Reset should be smaller than incoming packet
-        // to avoid amplification attacks, but at least 21 bytes
-        int resetSize = Math.max(MIN_STATELESS_RESET_LENGTH,
-                Math.min(incomingPacketSize - 1, 1200));
-
         PoolBuffer buffer = bufferPool.requestWriteBuffer();
 
         ByteBuffer frameBuffer = buffer.buf();

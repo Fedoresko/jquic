@@ -43,7 +43,6 @@ public class LinuxEcnSocket implements AutoCloseable {
     private static final MethodHandle send_batch_fast;
     private static final MethodHandle send_batch_ecn;
     private static final MethodHandle send_ecn;
-    private static final MethodHandle send_to;
     private static final Logger log = LoggerFactory.getLogger(LinuxEcnSocket.class);
 
     static {
@@ -136,23 +135,6 @@ public class LinuxEcnSocket implements AutoCloseable {
                     ),
                     Linker.Option.critical(true)
             );
-
-            FunctionDescriptor descForSendTo = FunctionDescriptor.of(
-                    ValueLayout.JAVA_LONG,     // Return value: ssize_t
-                    ValueLayout.JAVA_INT,      // sockfd
-                    ValueLayout.ADDRESS,       // buf (will accept pinned byte[])
-                    ValueLayout.JAVA_LONG,     // len
-                    ValueLayout.JAVA_INT,      // flags
-                    ValueLayout.ADDRESS,       // dest_addr (will accept pinned int[])
-                    ValueLayout.JAVA_INT       // addrlen
-            );
-
-            symbol = Linker.nativeLinker().defaultLookup().find("sendto")
-                    .orElseThrow(() -> new RuntimeException("sendto not found"));
-
-            // critical(true) enables the array pinning feature for downcalls
-            mh3 = Linker.nativeLinker().downcallHandle(symbol, descForSendTo, Linker.Option.critical(true));
-
         } catch (Throwable e) {}
         quic_receive_ecn = mh;
         quic_receive_ecn_blocking = mh2;
@@ -161,7 +143,6 @@ public class LinuxEcnSocket implements AutoCloseable {
         send_batch_fast = mh_send_batch;
         send_batch_ecn = mh_send_batch_ecn;
         send_ecn = mh_send_ecn;
-        send_to = mh3;
     }
 
     private final int fd;
@@ -180,6 +161,7 @@ public class LinuxEcnSocket implements AutoCloseable {
     private final MemorySegment lengthsSegment = socketArena.allocate(ValueLayout.JAVA_INT, 128);
     private final MemorySegment ecnFlagsSegment = socketArena.allocate(ValueLayout.JAVA_INT, 128);
     private final MemorySegment sockaddrPtrs = socketArena.allocate(ValueLayout.ADDRESS, 128);
+    private final MemorySegment addrSegment = socketArena.allocate(28, 2);
 
 
     public LinuxEcnSocket(int fd) throws Exception {
@@ -352,7 +334,6 @@ public class LinuxEcnSocket implements AutoCloseable {
                     ? MemorySegment.ofBuffer(buffer)
                     : MemorySegment.ofArray(buffer.array()).asSlice(buffer.arrayOffset() + buffer.position(), buffer.remaining());
 
-            MemorySegment addrSegment = MemorySegment.ofArray(new byte[28]);
             writeSockAddr(addrSegment, sockaddr.getAddress().getAddress(), sockaddr.getPort(), 0);
 
             int ecn_flag = switch (ectMarking) {

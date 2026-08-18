@@ -26,7 +26,6 @@ import javax.crypto.SecretKey;
 import java.nio.ByteBuffer;
 import java.security.GeneralSecurityException;
 import java.util.HashMap;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 
@@ -59,8 +58,11 @@ public class ConnectionMetadata {
     private final java.security.MessageDigest transcriptDigest;
 
     // ---- Set during stage 1 (processClientHello) ----
+    public QuicVersion quicInitialVersion;
+    public QuicVersion quicVersion;
 
     public byte[] originalDCid;
+    public byte[] clientCid;
     public long negotiatedIdleTimeoutMs;
 
     /**
@@ -165,7 +167,7 @@ public class ConnectionMetadata {
         }
     }
 
-    public void generateHandshakeSecrets(QuicVersion quicVersion) throws QuicException {
+    public void generateHandshakeSecrets() throws QuicException {
         // Context = transcript hash up to and including ClientHello.
         // ServerHello is appended later by createInitialResponse.
         byte[] transcriptSoFar = transcriptHash();
@@ -208,7 +210,7 @@ public class ConnectionMetadata {
      *
      * @throws QuicException if key derivation fails
      */
-    public void createApplicationKeys(QuicVersion quicVersion) throws QuicException {
+    public void createApplicationKeys() throws QuicException {
         try {
             // Master Secret = HKDF-Extract(Derive-Secret(Handshake Secret, "derived", ""), 0)
             byte[] derivedFromHandshake = QuicCrypto.hkdfExpandLabel(
@@ -246,7 +248,7 @@ public class ConnectionMetadata {
         }
     }
 
-    public void rotateApplicationKeys(QuicVersion quicVersion) throws Exception {
+    public void rotateApplicationKeys() throws Exception {
         try {
             if (prevClientApplicationCrypto != null) {
                 prevClientApplicationCrypto.close();
@@ -282,7 +284,7 @@ public class ConnectionMetadata {
         }
     }
 
-    public @Nullable Boolean initializeKeys(QuicVersion quicVersion, byte[] destinationCid) {
+    public @Nullable Boolean initializeKeys(byte[] destinationCid) {
         boolean isNewConnection = false;
         if (!clientInitialCrypto.containsKey(quicVersion)) {
             originalDCid = destinationCid;

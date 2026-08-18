@@ -16,6 +16,7 @@
 package org.jquic.quic;
 
 import org.jquic.quic.buffers.BufferPool;
+import org.jquic.quic.buffers.NonReusableBuffer;
 import org.jquic.quic.buffers.RootPoolBuffer;
 import org.jquic.quic.crypto.NativeCrypto;
 import org.jquic.quic.crypto.QuicCrypto;
@@ -67,7 +68,7 @@ class QuicPacketBuilderTest {
         int payloadSize = payload.remaining();
 
         // Act
-        org.jquic.quic.buffers.PoolBuffer poolBuffer = QuicPacketBuilder.buildInitialPacket(QuicVersion.QUIC_VERSION_1, pool, destinationCidBytes(destinationCid), sourceCid, packetNumber, 0, payload, MOCK_CRYPTO);
+        org.jquic.quic.buffers.PoolBuffer poolBuffer = QuicPacketBuilder.buildInitialPacket(QuicVersion.QUIC_VERSION_1, new NonReusableBuffer(100), destinationCidBytes(destinationCid), sourceCid, packetNumber, 0, payload, MOCK_CRYPTO);
         ByteBuffer packet = poolBuffer.buf();
 
         // Assert
@@ -132,7 +133,7 @@ class QuicPacketBuilderTest {
         ByteBuffer payload = ByteBuffer.wrap(new byte[100]);
 
         // Act
-        org.jquic.quic.buffers.PoolBuffer poolBuffer = QuicPacketBuilder.buildHandshakePacket(QuicVersion.QUIC_VERSION_1, pool, destinationCidBytes(destinationCid), sourceCid, packetNumber, 0, payload, MOCK_CRYPTO);
+        org.jquic.quic.buffers.PoolBuffer poolBuffer = QuicPacketBuilder.buildHandshakePacket(QuicVersion.QUIC_VERSION_1, new NonReusableBuffer(1000), destinationCidBytes(destinationCid), sourceCid, packetNumber, 0, payload, MOCK_CRYPTO);
         ByteBuffer packet = poolBuffer.buf();
 
         // Assert
@@ -182,7 +183,7 @@ class QuicPacketBuilderTest {
         int originalPayloadSize = payload.remaining();
 
         // Act
-        org.jquic.quic.buffers.PoolBuffer poolBuffer = QuicPacketBuilder.build1RttPacket(QuicVersion.QUIC_VERSION_1, pool, destinationCidBytes(destinationCid), packetNumber, 0, payload, MOCK_CRYPTO, (byte) 0);
+        org.jquic.quic.buffers.PoolBuffer poolBuffer = QuicPacketBuilder.build1RttPacket(QuicVersion.QUIC_VERSION_1, new NonReusableBuffer(100), destinationCidBytes(destinationCid), packetNumber, 0, payload, MOCK_CRYPTO, (byte) 0);
         ByteBuffer packet = poolBuffer.buf();
 
         // Assert
@@ -220,7 +221,7 @@ class QuicPacketBuilderTest {
         ByteBuffer packetBuffer = ByteBuffer.wrap(new byte[512]).put(payload).flip();
 
         // Act
-        org.jquic.quic.buffers.PoolBuffer poolBuffer = QuicPacketBuilder.buildInitialPacket(QuicVersion.QUIC_VERSION_1, pool, destinationCidBytes(0x1234L),
+        org.jquic.quic.buffers.PoolBuffer poolBuffer = QuicPacketBuilder.buildInitialPacket(QuicVersion.QUIC_VERSION_1, new NonReusableBuffer(1000), destinationCidBytes(0x1234L),
                 SCID, 0, 0, packetBuffer, MOCK_CRYPTO);
         ByteBuffer packet = poolBuffer.buf();
 
@@ -241,7 +242,7 @@ class QuicPacketBuilderTest {
         // We don't need to wrap our own buffer here if we want to follow how builder works.
 
         // Act
-        org.jquic.quic.buffers.PoolBuffer poolBuffer = QuicPacketBuilder.build1RttPacket(QuicVersion.QUIC_VERSION_1, pool, destinationCidBytes(0x1234L), 0, 0, emptyPayload, MOCK_CRYPTO, (byte) 0);
+        org.jquic.quic.buffers.PoolBuffer poolBuffer = QuicPacketBuilder.build1RttPacket(QuicVersion.QUIC_VERSION_1, new NonReusableBuffer(100), destinationCidBytes(0x1234L), 0, 0, emptyPayload, MOCK_CRYPTO, (byte) 0);
         ByteBuffer packet = poolBuffer.buf();
 
         // Assert - short header: 1 (flags) + 8 (CID) + 1 (PN) + 16 (GCM tag) = 26 bytes
@@ -254,7 +255,7 @@ class QuicPacketBuilderTest {
         // Test that packet numbers are correctly encoded for different values
         for (int pn = 0; pn < 256; pn += 17) {
             ByteBuffer payload = ByteBuffer.wrap(new byte[10]);
-            org.jquic.quic.buffers.PoolBuffer poolBuffer = QuicPacketBuilder.build1RttPacket(QuicVersion.QUIC_VERSION_1, pool, destinationCidBytes(0x1234L), pn, 0, payload, MOCK_CRYPTO, (byte) 0);
+            org.jquic.quic.buffers.PoolBuffer poolBuffer = QuicPacketBuilder.build1RttPacket(QuicVersion.QUIC_VERSION_1, new NonReusableBuffer(100), destinationCidBytes(0x1234L), pn, 0, payload, MOCK_CRYPTO, (byte) 0);
             ByteBuffer packet = poolBuffer.buf();
 
             packet.get(); // Skip flags
@@ -279,7 +280,7 @@ class QuicPacketBuilderTest {
         ByteBuffer payload = ByteBuffer.allocate(0);
 
         // Act
-        org.jquic.quic.buffers.PoolBuffer poolBuffer = QuicPacketBuilder.buildInitialPacket(QuicVersion.QUIC_VERSION_1, pool, destinationCidBytes(0x1111L), SCID, 0, 0, payload, MOCK_CRYPTO);
+        org.jquic.quic.buffers.PoolBuffer poolBuffer = QuicPacketBuilder.buildInitialPacket(QuicVersion.QUIC_VERSION_1, new NonReusableBuffer(100), destinationCidBytes(0x1111L), SCID, 0, 0, payload, MOCK_CRYPTO);
         ByteBuffer packet = poolBuffer.buf();
 
         // Assert - skip to token length field
@@ -296,7 +297,7 @@ class QuicPacketBuilderTest {
         ByteBuffer payload = ByteBuffer.wrap(payloadData);
 
         // Act
-        org.jquic.quic.buffers.PoolBuffer poolBuffer = QuicPacketBuilder.buildHandshakePacket(QuicVersion.QUIC_VERSION_1, pool, destinationCidBytes(0x1111L), SCID, 5, 0, payload, MOCK_CRYPTO);
+        org.jquic.quic.buffers.PoolBuffer poolBuffer = QuicPacketBuilder.buildHandshakePacket(QuicVersion.QUIC_VERSION_1, new NonReusableBuffer(1000), destinationCidBytes(0x1111L), SCID, 5, 0, payload, MOCK_CRYPTO);
         ByteBuffer packet = poolBuffer.buf();
 
         // Assert - skip to length field

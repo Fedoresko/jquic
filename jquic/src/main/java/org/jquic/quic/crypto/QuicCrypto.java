@@ -16,8 +16,9 @@
 package org.jquic.quic.crypto;
 
 //import org.conscrypt.Conscrypt;
+
 import org.jquic.quic.*;
-import org.jquic.quic.buffers.ChunkedOutputStreamWithAmendments;
+import org.jquic.quic.buffers.SlicingOutputStreamWithAmendments;
 import org.jquic.quic.streamapi.QuicApplicationProtocol;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,6 +27,7 @@ import javax.crypto.KeyAgreement;
 import javax.crypto.Mac;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
+import java.io.DataOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.security.*;
@@ -703,7 +705,7 @@ public class QuicCrypto {
      *
      * @param metadata the live {@link ConnectionMetadata} for this connection
      */
-    public static void putEncryptedExtensions(ConnectionMetadata metadata, long cid, byte[] statelessResetToken, QuicVersion quicVersion, ChunkedOutputStreamWithAmendments output) throws IOException {
+    public static void putEncryptedExtensions(ConnectionMetadata metadata, long cid, byte[] statelessResetToken, SlicingOutputStreamWithAmendments output) throws IOException {
         // Zero-copy: single pre-allocated buffer, all lengths back-filled in place.
         // Layout:
         //   [0]      HandshakeType (1)          = 0x08
@@ -820,7 +822,7 @@ public class QuicCrypto {
 //        // version_information
         QuicVarint.write(output, 0x11);
         QuicVarint.write(output, 12);
-        output.writeInt(quicVersion.val);
+        output.writeInt(metadata.quicVersion.val);
         output.writeInt(QuicVersion.QUIC_VERSION_1.val);
         output.writeInt(QuicVersion.QUIC_VERSION_2.val);
 
@@ -862,7 +864,7 @@ public class QuicCrypto {
      * @param metadata the live {@link ConnectionMetadata}; its transcript must be fully up-to-date
      * @throws QuicException if HMAC computation fails
      */
-    public static void createServerFinished(ConnectionMetadata metadata, ChunkedOutputStreamWithAmendments output) throws QuicException, IOException {
+    public static void createServerFinished(ConnectionMetadata metadata, DataOutputStream output) throws QuicException, IOException {
         try {
             byte[] finishedKey = hkdfExpandLabel(metadata.serverHandshakeTrafficSecret, "finished", new byte[0], 32);
             byte[] transcriptHash = metadata.transcriptHash();
@@ -898,7 +900,7 @@ public class QuicCrypto {
      * If no keystore is configured an empty Certificate message is returned (the client
      * will reject it, but this keeps the code runnable during development).
      */
-    public static void putCertificate(ChunkedOutputStreamWithAmendments out) throws IOException {
+    public static void putCertificate(DataOutputStream out) throws IOException {
         if (certChainBytes != null) {
             // encodeCertificateChainTls() returns the full certificate_list body
             // (each entry: 3-byte cert length + DER cert + 2-byte extensions length).
@@ -954,7 +956,7 @@ public class QuicCrypto {
      * @param metadata the live {@link ConnectionMetadata}; transcript must include Certificate
      * @throws QuicException if signing fails unexpectedly
      */
-    public static void putCertificateVerify(ConnectionMetadata metadata, ChunkedOutputStreamWithAmendments output) throws QuicException, IOException {
+    public static void putCertificateVerify(ConnectionMetadata metadata, DataOutputStream output) throws QuicException, IOException {
         byte[] contextString = "TLS 1.3, server CertificateVerify"
                 .getBytes(java.nio.charset.StandardCharsets.US_ASCII);
         byte[] transcriptHash = metadata.transcriptHash();

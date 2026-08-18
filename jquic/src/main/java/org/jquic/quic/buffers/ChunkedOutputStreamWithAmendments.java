@@ -31,7 +31,7 @@ import java.nio.ByteBuffer;
  * Use readyContentFrom() to collect recently written data without wrapping but with all amendments applied
  * limited to size of current buffer.
  */
-public abstract class ChunkedOutputStreamWithAmendments extends DataOutputStream {
+public abstract class ChunkedOutputStreamWithAmendments extends DataOutputStream implements BackwardReadBuffer {
     /**
      * Create new NonWrappingChunkedOutputStreamWithAmendments
      *
@@ -70,8 +70,9 @@ public abstract class ChunkedOutputStreamWithAmendments extends DataOutputStream
         /**
          * Get the next generated chunk
          * @param buf - borrowed link to underlying buffer with written chunk boundaries
+         * @return size of nextChunk;
          */
-        void accept(PoolBuffer buf) throws IOException;
+        int accept(PoolBuffer buf) throws IOException;
     }
 
     /**
@@ -81,15 +82,6 @@ public abstract class ChunkedOutputStreamWithAmendments extends DataOutputStream
      * @param consumer called immediately to consume chunk when ready.
      */
     public abstract void setChunkConsumer(ChunkConsumer consumer);
-
-    /**
-     * Go to some previously written position to fill-in placeholder.
-     * Writes performed by @{writer} would amend previously written data inplace (filling placeholders).
-     *
-     * @param position - position in underlying buffer.
-     * @param writer   - writer to put some amendments in place
-     */
-    public abstract void amendAtPos(int position, Writer writer) throws IOException;
 
     /**
      * Returns position for goBacks, readyContentFrom, and other...
@@ -110,13 +102,5 @@ public abstract class ChunkedOutputStreamWithAmendments extends DataOutputStream
      */
     public abstract boolean isClosed();
 
-    /**
-     * Get unwrapped (original) data only starting from the provided position until the current position.
-     *
-     * @param position - position to get data from
-     * @return - sequence of buffers containing data (if data split to different chunks there would be two and more of them).
-     * @throws IllegalStateException if in history mode.
-     */
-    public abstract Iterable<ByteBuffer> readyContentFrom(int position);
 }
 

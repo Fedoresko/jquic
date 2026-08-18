@@ -309,7 +309,10 @@ public class NonWrappingChunkedOutputStreamWithAmendmentsTest {
         ChunkedOutputStreamWithAmendments stream = ChunkedOutputStreamWithAmendments.createNonWrapping(myPool, 10, 0, (buf, offset, isFinal) -> buf.duplicate());
         
         List<PoolBuffer> consumed = new ArrayList<>();
-        stream.setChunkConsumer(consumed::add);
+        stream.setChunkConsumer(e-> {
+            consumed.add(e);
+            return 0;
+        });
         
         stream.write(pattern(15, 1));
         assertEquals(1, consumed.size());

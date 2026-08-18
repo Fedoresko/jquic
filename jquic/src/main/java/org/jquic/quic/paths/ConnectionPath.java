@@ -27,11 +27,13 @@ public class ConnectionPath {
     public long bytesLastBlocked;
     public byte[] challenge;
     public PathState state;
+    public final DatagramBuilder datagramBuilder;
 
-    public ConnectionPath(SocketAddress address, long now) {
+    public ConnectionPath(SocketAddress address, long now, DatagramBuilder datagramBuilder) {
         this.address = address;
         this.state = PathState.NEW;
         this.lastActive = now;
         this.createdAt = lastActive;
+        this.datagramBuilder = datagramBuilder;
     }
 }

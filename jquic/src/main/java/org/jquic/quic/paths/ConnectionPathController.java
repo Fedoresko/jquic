@@ -33,18 +33,26 @@ public class ConnectionPathController {
     public static final int MAX_PATH_ID = 3;
     public static final int PROBING_TIMEOUT = 1000;
     public static final int PATH_DEAD_TIMEOUT = 5000;
-    public static final int VERIFICATION_TIMEOUT = 10000;
+    public static final int VERIFICATION_TIMEOUT = 30000;
     private final QuicConnection connection;
     private final Map<SocketAddress, ConnectionPath> pathMap = new HashMap<>();
-    private final Deque<OutboundPacket> outboundQueue = new ArrayDeque<>();
-    private final Deque<OutboundPacket> ackOutboundQueue = new ArrayDeque<>();
+    private final Deque<DatagramBuilder.DatagramToSend> outboundQueue = new ArrayDeque<>();
+    private final Deque<DatagramBuilder.DatagramToSend> ackOutboundQueue = new ArrayDeque<>();
     private SocketAddress primaryAddress;
     private final static Logger logger = LoggerFactory.getLogger(ConnectionPathController.class);
 
     public  ConnectionPathController(QuicConnection connection, SocketAddress primaryAddress) {
         this.connection = connection;
         this.primaryAddress = primaryAddress;
-        pathMap.put(primaryAddress, new ConnectionPath(primaryAddress, connection.getCurrentTimestamp()));
+        DatagramBuilder datagramBuilder = new DatagramBuilder(
+                connection.connectionIdBytes, connection.getBufferPool(), this,
+                (connection.getCongestionControl() != null) ? connection.getCongestionControl().getEctMarking() : ECT.ECT_0,
+                primaryAddress, connection.connectionMetadata);
+        pathMap.put(primaryAddress, new ConnectionPath(primaryAddress, connection.getCurrentTimestamp(), datagramBuilder));
+    }
+
+    public void sendPacket(long currentTimestamp, PoolBuffer payload, PacketNumberSpace space, boolean isAck) {
+        pathMap.get(primaryAddress).datagramBuilder.sendPacket(currentTimestamp, payload, space, isAck);
     }
 
     public SocketAddress getRemoteAddress() {
@@ -66,8 +74,8 @@ public class ConnectionPathController {
         }
     }
 
-    public void appendPacket(OutboundPacket outboundPacket, boolean isAck) {
-        if (isAck) {
+    public void appendPacket(DatagramBuilder.DatagramToSend outboundPacket, boolean hasAck) {
+        if (hasAck) {
             ackOutboundQueue.offer(outboundPacket);
         } else {
             outboundQueue.offer(outboundPacket);
@@ -86,16 +94,35 @@ public class ConnectionPathController {
         OutboundPacket probePacket = checkConnectionPaths();
         if (probePacket != null) return probePacket;
 
-        OutboundPacket outboundPacket = getOutboundPacket(ackOutboundQueue); // Give priority to acks
+        DatagramBuilder.DatagramToSend outboundPacket = getOutboundDatagram(ackOutboundQueue); // Give priority to acks
         if (outboundPacket == null) {
-            outboundPacket = getOutboundPacket(outboundQueue);
+            outboundPacket = getOutboundDatagram(outboundQueue);
         }
-        return outboundPacket;
+
+        if (outboundPacket != null) {
+
+            DatagramBuilder.PacketToSend packetToSend;
+            while ( (packetToSend = outboundPacket.linkedPackets().poll()) != null) {
+                if ( (connection.getPeerState() == QuicConnection.State.ESTABLISHED && (packetToSend.space().phase == PacketNumberSpace.PacketPhase.INITIAL || packetToSend.space().phase == PacketNumberSpace.PacketPhase.HANDSHAKE)) ||
+                     (connection.getPeerState() == QuicConnection.State.HANDSHAKE && packetToSend.space().phase == PacketNumberSpace.PacketPhase.INITIAL) ) {
+                    packetToSend.payload().release();
+                } else {
+                    packetToSend.space().onPacketSent(packetToSend.timestamp(), packetToSend.packetNumber(), packetToSend.payload(), packetToSend.ackEliciting());
+                }
+            }
+            return new OutboundPacket(outboundPacket.packetSource(), outboundPacket.data(), outboundPacket.ectMarking(), outboundPacket.dest());
+        }
+        return null;
     }
 
-    private @Nullable OutboundPacket getOutboundPacket(Deque<OutboundPacket> queue) {
-        OutboundPacket outboundPacket = queue.peek();
-        if (outboundPacket == null) {
+    private DatagramBuilder.DatagramToSend getOutboundDatagram(Deque<DatagramBuilder.DatagramToSend> queue) {
+        DatagramBuilder.DatagramToSend datagram = queue.peek();
+        if (datagram == null) {
+            pathMap.values().forEach(f -> f.datagramBuilder.flushPacket());
+        }
+
+        datagram = queue.peek();
+        if (datagram == null) {
             return null;
         }
 
@@ -106,9 +133,9 @@ public class ConnectionPathController {
         ConnectionPath path = pathMap.get(primaryAddress);
         Iterator<ConnectionPath> iterator = pathMap.values().iterator();
 
-        while (path == null || (path.state == NEW && path.receivedBytes * 3 < path.sentBytes + outboundPacket.data().buf().remaining()) ) { // 3X Amplification limit
+        while (path == null || (path.state == NEW && path.receivedBytes * 3 < path.sentBytes + datagram.data().buf().remaining()) ) { // 3X Amplification limit
             if (path!= null && path.bytesLastBlocked != path.receivedBytes) {
-                logger.info("Blocked by amplification limit received: {} sent {} packet {}", path.receivedBytes, path.sentBytes, outboundPacket.data().buf().remaining());
+                logger.info("Blocked by amplification limit received: {} sent {} packet {}", path.receivedBytes, path.sentBytes, datagram.data().buf().remaining());
                 path.bytesLastBlocked = path.receivedBytes;
             }
             if (iterator.hasNext()) {
@@ -120,10 +147,10 @@ public class ConnectionPathController {
         }
 
         if (path != null) {
-            path.sentBytes += outboundPacket.data().buf().remaining();
-            logger.info("Sending more bytes: {} total sent: {}", outboundPacket.data().buf().remaining(), path.sentBytes);
+            path.sentBytes += datagram.data().buf().remaining();
+            logger.info("Sending more bytes: {} total sent: {}", datagram.data().buf().remaining(), path.sentBytes);
             queue.pollFirst();
-            return new OutboundPacket(outboundPacket.packetSource(), outboundPacket.data(), outboundPacket.ectMarking(), path.address);
+            return new DatagramBuilder.DatagramToSend(datagram.packetSource(), datagram.data(), datagram.ectMarking(), path.address, datagram.linkedPackets());
         }
 
         return null;
@@ -148,11 +175,7 @@ public class ConnectionPathController {
                     path.state = PROBING;
                     logger.info("Probing dangling path (connection {} path {})", connection.getConnectionId(), path.address);
                     path.probeSentAt = connection.getCurrentTimestamp();
-                    try {
-                        return new OutboundPacket(PacketSource.NEW, connection.build1RttPing(), ECT.ECT_1, path.address);
-                    } catch (QuicException e) {
-                        logger.error("Failed to build PING frame", e);
-                    }
+                    path.datagramBuilder.sendPing(connection.getApplicationSpace());
                 }
             }
             if (path.state == PROBING) {
@@ -163,14 +186,11 @@ public class ConnectionPathController {
                     logger.info("Dangling path declared dead (connection {} path {})", connection.getConnectionId(), path.address);
                 } else if (connection.getCurrentTimestamp() - path.probeSentAt > PROBING_TIMEOUT) {
                     path.probeSentAt = connection.getCurrentTimestamp();
-                    try {
-                        return new OutboundPacket(PacketSource.NEW, connection.build1RttPing(), ECT.ECT_1, path.address);
-                    } catch (QuicException e) {
-                        logger.error("Failed to build PING frame", e);
-                    }
+                    path.datagramBuilder.sendPing(connection.getApplicationSpace());
                 }
             }
             if (path.state == NEW && connection.getCurrentTimestamp() - path.createdAt > VERIFICATION_TIMEOUT) {
+                logger.info("Path removed UNVERIFIED Connection#{}, path {}", connection.getConnectionId(), path.address);
                 it.remove(); // Not verified yet.
             }
         }
@@ -182,11 +202,19 @@ public class ConnectionPathController {
 
         if (!pathMap.containsKey(sender)) {
             logger.error("New Sender address not found for CID {}: {}", connection.getConnectionId(), sender);
-            ConnectionPath path = new ConnectionPath(sender, connection.getCurrentTimestamp());
             if (pathMap.size() >= MAX_PATH_ID) {
                 connection.closeConnection(QuicTransportError.PROTOCOL_VIOLATION, "Too many active paths for CID: " + connection.getConnectionId());
                 return false;
             }
+            ConnectionPath currentPath = pathMap.get(primaryAddress);
+            if (currentPath != null) {
+                currentPath.datagramBuilder.flushPacket();
+            }
+            DatagramBuilder datagramBuilder = new DatagramBuilder(
+                    connection.connectionIdBytes, connection.getBufferPool(), this,
+                    (connection.getCongestionControl() != null) ? connection.getCongestionControl().getEctMarking() : ECT.ECT_0,
+                    sender, connection.connectionMetadata);
+            ConnectionPath path = new ConnectionPath(sender, connection.getCurrentTimestamp(), datagramBuilder);
             path.receivedBytes += packetSize;
             pathMap.put(sender, path);
             PoolBuffer buf = connection.getBufferPool().requestWriteBuffer();
@@ -199,11 +227,29 @@ public class ConnectionPathController {
         return true;
     }
 
-    public long getAmplificationLimit() {
-        return pathMap.get(primaryAddress).receivedBytes*3 - pathMap.get(primaryAddress).sentBytes;
-    }
-
     public int outboundQueueSize() {
         return outboundQueue.size() + ackOutboundQueue.size();
+    }
+
+    public void clear() {
+        for (Map.Entry<SocketAddress, ConnectionPath> entry : pathMap.entrySet()) {
+            entry.getValue().datagramBuilder.flushPacket();
+        }
+        pathMap.clear();
+
+        for (DatagramBuilder.DatagramToSend datagram : ackOutboundQueue) {
+            datagram.data().release();
+            for (DatagramBuilder.PacketToSend packet : datagram.linkedPackets()) {
+                packet.payload().release();
+            }
+        }
+        ackOutboundQueue.clear();
+        for (DatagramBuilder.DatagramToSend datagram : outboundQueue) {
+            datagram.data().release();
+            for (DatagramBuilder.PacketToSend packet : datagram.linkedPackets()) {
+                packet.payload().release();
+            }
+        }
+        outboundQueue.clear();
     }
 }

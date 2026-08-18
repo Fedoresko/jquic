@@ -126,16 +126,16 @@ class QuicConnectionTest {
         frameBuilderMock = Mockito.mockStatic(QuicFrameBuilder.class, Answers.CALLS_REAL_METHODS);
         selectorMock = mock(SelectorThread.class);
         when(selectorMock.getBufferPool()).thenReturn(pool);
-        connection = new QuicConnection(TEST_CID, QuicVersion.QUIC_VERSION_1, TEST_ADDRESS, new SpscLinkedQueue<>(), selectorMock);
+        connection = new QuicConnection(TEST_CID, QuicVersion.QUIC_VERSION_1, TEST_ADDRESS, new SpscLinkedQueue<>(), selectorMock, mockMetadata);
         Field streamEngineInternal = QuicEngine.class.getDeclaredField("streamEngineInternal");
         streamEngineInternal.setAccessible(true);
         QuicStreamEngineImpl value = new QuicStreamEngineImpl(0);
         value.registerProtocol(PROTOCOL);
         streamEngineInternal.set(QuicEngine.class, value);
         // Mock ClientHello processing
-        connection.connectionMetadata = mockMetadata;
-        connection.clientCid = ByteBuffer.allocate(8).putLong(TEST_CID).array();
+        connection.connectionMetadata.clientCid = ByteBuffer.allocate(8).putLong(TEST_CID).array();
         connection.setConnectionStreamManager(mock(ConnectionStreamManager.class));
+        connection.getConnectionPathController().updateIncomingLimits(TEST_ADDRESS, 5000);
     }
 
     private void updMeta(ConnectionMetadata mockMetadata) {
@@ -143,6 +143,7 @@ class QuicConnectionTest {
         mockMetadata.serverEphemeralPublicKey = new byte[32];
         mockMetadata.clientHandshakeCrypto = nCryptoMock;
         mockMetadata.serverHandshakeCrypto = nCryptoMock;
+        mockMetadata.clientMetadata = mock(ConnectionMetadata.ClientMetadataNegotiated.class);
         mockMetadata.clientInitialCrypto = new HashMap<>(Map.of(QuicVersion.QUIC_VERSION_1, nCryptoMock, QuicVersion.QUIC_VERSION_2, nCryptoMock));
         mockMetadata.serverInitialCrypto = new HashMap<>(Map.of(QuicVersion.QUIC_VERSION_1, nCryptoMock, QuicVersion.QUIC_VERSION_2, nCryptoMock));
         mockMetadata.clientApplicationCrypto = nCryptoMock;
@@ -249,7 +250,7 @@ class QuicConnectionTest {
     @Test
     @DisplayName("Test Handshake packet with failed Finished verification is silently discarded")
     void testHandshakePacketWithInvalidFinished() throws Exception {
-        connection.clientCid = ByteBuffer.allocate(8).putLong(TEST_CID).array();
+        connection.connectionMetadata.clientCid = ByteBuffer.allocate(8).putLong(TEST_CID).array();
         // Setup connection in HANDSHAKE state
         connection.setState(QuicConnection.State.HANDSHAKE);
         setupMockTlsMetadata();
@@ -787,25 +788,25 @@ class QuicConnectionTest {
     void testRetransmissionGeneratesNewPacketNumbers() throws Exception {
         // Setup connection in HANDSHAKE state
         connection.setState(QuicConnection.State.HANDSHAKE);
-        connection.clientCid = new byte[]{0x01};
+        connection.connectionMetadata.clientCid = new byte[]{0x01};
         setupMockTlsMetadata();
 
-        PacketNumberSpace initialSpace = connection.getInitialSpace();
+        PacketNumberSpace handshakeSpace = connection.getHandshakeSpace();
 
         // Send Initial packets 0, 1, 2, 3, 4
         for (int i = 0; i < 5; i++) {
             PoolBuffer mockPayload = createMockCryptoFramePayload();
-            initialSpace.allocatePacketNumber();
-            initialSpace.onPacketSent(0, i, mockPayload, true);
+            handshakeSpace.allocatePacketNumber();
+            handshakeSpace.onPacketSent(0, i, mockPayload, true);
         }
 
         // Verify next packet number before retransmission
-        long nextPnBefore = initialSpace.allocatePacketNumber();
+        long nextPnBefore = handshakeSpace.allocatePacketNumber();
         assertEquals(5L, nextPnBefore, "Next packet number should be 5 before retransmission");
 
         // Create Handshake packet with ACK that triggers retransmission of packet 0
         // ACK packets 2, 3, 4 (gap of 3 packets)
-        ByteBuffer handshakePacket = createMockHandshakePacketWithAck(4, new long[]{2, 3, 4}, (byte) initialSpace.allocatePacketNumber());
+        ByteBuffer handshakePacket = createMockHandshakePacketWithAck(4, new long[]{2, 3, 4}, (byte) handshakeSpace.allocatePacketNumber());
 
         // Process the ACK - should trigger retransmission of packet 0 with NEW packet number
         connection.processHandshakePacket(new RootPoolBuffer(handshakePacket, pool, false), 0);
@@ -815,7 +816,7 @@ class QuicConnectionTest {
         assertFalse(responses.isEmpty(), "Should generate retransmission packets");
 
         // Verify packet number space has been incremented (new packets were allocated)
-        long nextPnAfter = initialSpace.allocatePacketNumber();
+        long nextPnAfter = handshakeSpace.allocatePacketNumber();
         assertTrue(nextPnAfter > 5,
                 "Packet number should be > 5 after retransmission, indicating NEW packet numbers were used. Got: " + nextPnAfter);
 
@@ -880,7 +881,7 @@ class QuicConnectionTest {
 
         // Send packets 0-5
         for (int i = 0; i < 6; i++) {
-            PoolBuffer mockPayload = new RootPoolBuffer(ByteBuffer.wrap(new byte[]{0x00}), pool, false).borrow();
+            PoolBuffer mockPayload = new RootPoolBuffer(ByteBuffer.wrap(new byte[1200]), pool, false).borrow();
             appSpace.onPacketSent(0, i, mockPayload, true);
             appSpace.allocatePacketNumber();
         }
@@ -916,7 +917,7 @@ class QuicConnectionTest {
 
     private void setupEstablishedConnection() throws Exception {
         connection.setState(QuicConnection.State.ESTABLISHED);
-        connection.clientCid = ByteBuffer.allocate(8).putLong(TEST_CID).array();
+        connection.connectionMetadata.clientCid = ByteBuffer.allocate(8).putLong(TEST_CID).array();
         setupMockTlsMetadata();
     }
 

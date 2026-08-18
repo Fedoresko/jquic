@@ -112,4 +112,6 @@ public class QuicProperties {
     // Bootstrap & Monitoring
     public static final int BOOTSTRAP_PORT = getInt("quic.bootstrap.port", 443);
     public static final String MONITORING_BASE_DIR = getString("quic.monitoring.base_dir", "/home/fedoresko");
+
+    public static final boolean PREFER_V2 = Boolean.parseBoolean(getString("quic.prefer_v2", "true"));
 }
