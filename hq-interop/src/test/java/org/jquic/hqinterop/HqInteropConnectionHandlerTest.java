@@ -30,7 +30,7 @@ import static org.mockito.Mockito.*;
 class HqInteropConnectionHandlerTest {
  
     @Test
-    void testHandleGetRequest() throws IOException {
+    void testHandleGetRequest() throws IOException, InterruptedException {
         long streamId = 4L; // Client-initiated bidirectional stream
         HqInteropRequestHandler requestHandler = path -> ("Hello from jQuic hq-interop! Path: " + path + "\n").getBytes(StandardCharsets.UTF_8);
         HqInteropConnectionHandler handler = new HqInteropConnectionHandler(requestHandler);
@@ -46,6 +46,8 @@ class HqInteropConnectionHandlerTest {
         // 2. Receive request data "GET /index.html\n"
         byte[] request = "GET /index.html\n".getBytes(StandardCharsets.UTF_8);
         handler.onStreamDataReceived(streamId, control, request, true, null);
+
+        Thread.sleep(100);
  
         // 3. Verify response
         String response = out.toString(StandardCharsets.UTF_8);
@@ -57,7 +59,7 @@ class HqInteropConnectionHandlerTest {
     }
  
     @Test
-    void testIncompleteRequest() {
+    void testIncompleteRequest() throws Exception {
         long streamId = 4L;
         HqInteropRequestHandler requestHandler = path -> ("Path: " + path).getBytes(StandardCharsets.UTF_8);
         HqInteropConnectionHandler handler = new HqInteropConnectionHandler(requestHandler);
@@ -67,14 +69,18 @@ class HqInteropConnectionHandlerTest {
         DataOutputStream dataOut = new DataOutputStream(out);
  
         handler.onNewClientStreamAllocated(streamId, control, dataOut, QuicConnectionControl.StreamType.Bidirectional);
- 
+
+        Thread.sleep(100);
+
         // Receive part 1
         handler.onStreamDataReceived(streamId, control, "GET /".getBytes(StandardCharsets.UTF_8), false, null);
         assertEquals(0, out.size(), "Should not respond yet");
  
         // Receive part 2
         handler.onStreamDataReceived(streamId, control, "test\n".getBytes(StandardCharsets.UTF_8), true, null);
-        
+
+        Thread.sleep(100);
+
         String response = out.toString(StandardCharsets.UTF_8);
         assertTrue(response.contains("Path: /test"));
     }
