@@ -170,7 +170,7 @@ public class ConnectionPathController {
     public @Nullable OutboundPacket checkConnectionPaths() {
         for (Iterator<Map.Entry<SocketAddress, ConnectionPath>> it = pathMap.entrySet().iterator(); it.hasNext(); ) {
             ConnectionPath path = it.next().getValue();
-            if (path.state == VERIFIED) {
+            if (path.state == VERIFIED && !path.address.equals(primaryAddress)) {
                 if (connection.getCurrentTimestamp() - path.lastActive > PROBING_TIMEOUT) {
                     path.state = PROBING;
                     logger.info("Probing dangling path (connection {} path {})", connection.getConnectionId(), path.address);

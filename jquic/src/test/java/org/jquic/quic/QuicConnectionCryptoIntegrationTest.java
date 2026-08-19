@@ -49,10 +49,6 @@ class QuicConnectionCryptoIntegrationTest {
     private static final long TEST_CONNECTION_ID = 0x1234567890ABCDEFL;
     private static final InetSocketAddress TEST_ADDRESS = new InetSocketAddress("127.0.0.1", 4433);
     private static final byte[] TEST_CID = new byte[8];
-    private static final ByteBuffer TEST_CID_BUF;
-    static {
-        TEST_CID_BUF = ByteBuffer.wrap(TEST_CID).putLong(TEST_CONNECTION_ID).flip();
-    }
     private static final BufferPool pool = mock(BufferPool.class);
 
     private static MockedStatic<QuicCrypto> quicCryptoMock;
@@ -129,7 +125,7 @@ class QuicConnectionCryptoIntegrationTest {
 
         PoolBuffer initialPacket = QuicPacketBuilder.buildInitialPacket(QuicVersion.QUIC_VERSION_1, new NonReusableBuffer(1000),
                 destinationCid,
-            TEST_CID_BUF,
+            TEST_CID,
             0,
             0,
             cryptoFrame,
@@ -137,7 +133,7 @@ class QuicConnectionCryptoIntegrationTest {
         );
 
 
-        QuicConnection connection = new QuicConnection(TEST_CONNECTION_ID, QuicVersion.QUIC_VERSION_1, TEST_ADDRESS, new SpscLinkedQueue<>(), selectorMock);
+        QuicConnection connection = new QuicConnection(TEST_CONNECTION_ID, QuicVersion.QUIC_VERSION_1, TEST_ADDRESS, new SpscLinkedQueue<>(), selectorMock, new byte[8]);
         connection.getConnectionPathController().updateIncomingLimits(TEST_ADDRESS, 1200);
         connection.processInitialAndRespond(initialPacket, 0);
         List<ByteBuffer> responses = getOutboundPackets(connection);
@@ -169,7 +165,7 @@ class QuicConnectionCryptoIntegrationTest {
 
         PoolBuffer initialPacket = QuicPacketBuilder.buildInitialPacket(QuicVersion.QUIC_VERSION_1, new NonReusableBuffer(100),
                 destinationCid,
-            TEST_CID_BUF,
+            TEST_CID,
             0,
             0,
             framebuffer,
@@ -182,7 +178,7 @@ class QuicConnectionCryptoIntegrationTest {
         byte originalByte = tamperedBuf.get(lastBytePos);
         tamperedBuf.put(lastBytePos, (byte) (originalByte ^ 0xFF)); // Flip bits
 
-        QuicConnection connection = new QuicConnection(TEST_CONNECTION_ID, QuicVersion.QUIC_VERSION_1, TEST_ADDRESS, new SpscLinkedQueue<>(), selectorMock);
+        QuicConnection connection = new QuicConnection(TEST_CONNECTION_ID, QuicVersion.QUIC_VERSION_1, TEST_ADDRESS, new SpscLinkedQueue<>(), selectorMock, new byte[8]);
         // Ensure clientCid is NOT null so we don't fail later if we somehow continue
         try {
             java.lang.reflect.Field cidField = QuicConnection.class.getDeclaredField("clientCid");
@@ -219,7 +215,7 @@ class QuicConnectionCryptoIntegrationTest {
         ByteBuffer real1RttKey = b.flip();
 
         ConnectionMetadata meta1Rtt = make1RttMetadata(real1RttKey);
-        QuicConnection connection = new QuicConnection(TEST_CONNECTION_ID, QuicVersion.QUIC_VERSION_1, TEST_ADDRESS, new SpscLinkedQueue<>(), selectorMock, meta1Rtt);
+        QuicConnection connection = new QuicConnection(TEST_CONNECTION_ID, QuicVersion.QUIC_VERSION_1, TEST_ADDRESS, new SpscLinkedQueue<>(), selectorMock, meta1Rtt, new byte[8]);
 
         connection.getConnectionPathController().updateIncomingLimits(TEST_ADDRESS, 1200);
 
@@ -264,7 +260,7 @@ class QuicConnectionCryptoIntegrationTest {
         ByteBuffer real1RttKey = b.flip();
 
         ConnectionMetadata meta1Rtt = make1RttMetadata(real1RttKey);
-        QuicConnection connection = new QuicConnection(TEST_CONNECTION_ID, QuicVersion.QUIC_VERSION_1, TEST_ADDRESS, new SpscLinkedQueue<>(), selectorMock, meta1Rtt);
+        QuicConnection connection = new QuicConnection(TEST_CONNECTION_ID, QuicVersion.QUIC_VERSION_1, TEST_ADDRESS, new SpscLinkedQueue<>(), selectorMock, meta1Rtt, new byte[8]);
         // Manually set destination CID to avoid NPE during header measurement
         try {
             java.lang.reflect.Field cidField = QuicConnection.class.getDeclaredField("clientCid");
@@ -301,7 +297,7 @@ class QuicConnectionCryptoIntegrationTest {
     @Test
     @DisplayName("RFC 9001/8446: Full Handshake Flow (ClientHello -> ServerHello...Finished -> ClientFinished)")
     void testFullHandshakeSequenceEndToEnd() throws Exception {
-        QuicConnection connection = new QuicConnection(TEST_CONNECTION_ID, QuicVersion.QUIC_VERSION_1, TEST_ADDRESS, new SpscLinkedQueue<>(), selectorMock);
+        QuicConnection connection = new QuicConnection(TEST_CONNECTION_ID, QuicVersion.QUIC_VERSION_1, TEST_ADDRESS, new SpscLinkedQueue<>(), selectorMock, new byte[8]);
         // Set clientCid to avoid NPE during header parsing of client-sent packets (which server parses)
         setClientCid(connection, TEST_CID);
         
@@ -319,7 +315,7 @@ class QuicConnectionCryptoIntegrationTest {
         cryptoFrame.flip();
 
         PoolBuffer initialPacket = QuicPacketBuilder.buildInitialPacket(QuicVersion.QUIC_VERSION_1, new NonReusableBuffer(1000),
-                TEST_CID, TEST_CID_BUF, 0, 0, cryptoFrame, new NativeCrypto(initKeys[0], CipherMode.TLS_AES_128_GCM_SHA256_ID));
+                TEST_CID, TEST_CID, 0, 0, cryptoFrame, new NativeCrypto(initKeys[0], CipherMode.TLS_AES_128_GCM_SHA256_ID));
 
         connection.getConnectionPathController().updateIncomingLimits(TEST_ADDRESS, 1200);
 
@@ -354,7 +350,7 @@ class QuicConnectionCryptoIntegrationTest {
         finishedCryptoFrame.flip();
 
         PoolBuffer handshakePacket = QuicPacketBuilder.buildHandshakePacket(QuicVersion.QUIC_VERSION_1, new NonReusableBuffer(100),
-                TEST_CID, TEST_CID_BUF, 0, 0, finishedCryptoFrame, meta.clientHandshakeCrypto);
+                TEST_CID, TEST_CID, 0, 0, finishedCryptoFrame, meta.clientHandshakeCrypto);
 
         connection.processHandshakePacket(handshakePacket, 0);
 
@@ -406,7 +402,7 @@ class QuicConnectionCryptoIntegrationTest {
         int packetSize = 1200;
         PoolBuffer initialPacket = QuicPacketBuilder.buildInitialPacket(QuicVersion.QUIC_VERSION_1, new NonReusableBuffer(packetSize),
                 destinationCid,
-                TEST_CID_BUF,
+                TEST_CID,
                 0,
                 0,
                 cryptoFrame,
@@ -415,7 +411,7 @@ class QuicConnectionCryptoIntegrationTest {
         // Ensure the buffer actually has the requested size (padding)
         initialPacket.buf().limit(packetSize);
 
-        QuicConnection connection = new QuicConnection(TEST_CONNECTION_ID, QuicVersion.QUIC_VERSION_1, TEST_ADDRESS, new SpscLinkedQueue<>(), selectorMock);
+        QuicConnection connection = new QuicConnection(TEST_CONNECTION_ID, QuicVersion.QUIC_VERSION_1, TEST_ADDRESS, new SpscLinkedQueue<>(), selectorMock, new byte[8]);
         // We MUST NOT call connection.getConnectionPathController().updateIncomingLimits manually here
         // as processInitialAndRespond should do it (actually it seems it doesn't, let's check)
         // Wait, looking at QuicConnection.java, I don't see it calling updateIncomingLimits.
@@ -441,7 +437,7 @@ class QuicConnectionCryptoIntegrationTest {
             pingFrame.flip();
 
             PoolBuffer secondPacket = QuicPacketBuilder.buildInitialPacket(QuicVersion.QUIC_VERSION_1, new NonReusableBuffer(1200),
-                    destinationCid, TEST_CID_BUF, 1, 0, pingFrame, clientKeys);
+                    destinationCid, TEST_CID, 1, 0, pingFrame, clientKeys);
             secondPacket.buf().limit(1200);
             
             connection.processInitialAndRespond(secondPacket, 0);
@@ -464,7 +460,7 @@ class QuicConnectionCryptoIntegrationTest {
         ByteBuffer real1RttKey = b.flip();
 
         ConnectionMetadata meta1Rtt = make1RttMetadata(real1RttKey);
-        QuicConnection connection = new QuicConnection(TEST_CONNECTION_ID, QuicVersion.QUIC_VERSION_1, TEST_ADDRESS, new SpscLinkedQueue<>(), selectorMock, meta1Rtt);
+        QuicConnection connection = new QuicConnection(TEST_CONNECTION_ID, QuicVersion.QUIC_VERSION_1, TEST_ADDRESS, new SpscLinkedQueue<>(), selectorMock, meta1Rtt, new byte[8]);
         setClientCid(connection, TEST_CID);
         connection.setState(QuicConnection.State.ESTABLISHED);
         connection.getConnectionPathController().onConnectionEstablished(); // Marks initial path as VERIFIED
@@ -555,7 +551,7 @@ class QuicConnectionCryptoIntegrationTest {
         truncatedPacket.put(new byte[9]); // Only 9 bytes (< 16-byte GCM tag)
         truncatedPacket.flip();
 
-        QuicConnection connection = new QuicConnection(TEST_CONNECTION_ID, QuicVersion.QUIC_VERSION_1, TEST_ADDRESS, new SpscLinkedQueue<>(), selectorMock);
+        QuicConnection connection = new QuicConnection(TEST_CONNECTION_ID, QuicVersion.QUIC_VERSION_1, TEST_ADDRESS, new SpscLinkedQueue<>(), selectorMock, new byte[8]);
         PoolBuffer pb = new BorrowedPoolBuffer(mock(RootPoolBuffer.class), truncatedPacket);
         try {
             connection.processInitialAndRespond(pb, 0);

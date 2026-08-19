@@ -263,20 +263,48 @@ public class QuicPacketHeaderTest {
     @Test
     public void testParseSummary() {
         byte[] dcid = new byte[] {1, 2, 3, 4, 5, 6, 7, 8};
+        byte[] scid = new byte[] {8, 7, 6, 5, 4, 3, 2, 1};
         byte flags = (byte) 0xC0; // Long, Initial
         ByteBuffer buf = ByteBuffer.allocate(100);
         buf.put(flags);
         buf.putInt(1); // version
         buf.put((byte) dcid.length);
         buf.put(dcid);
-        buf.put((byte) 0); // scid length 0
+        buf.put((byte) scid.length);
+        buf.put(scid);
+        
+        byte[] token = new byte[] {0x11, 0x22, 0x33};
+        QuicVarint.write(buf, token.length);
+        buf.put(token);
         buf.flip();
 
         QuicPacketHeader.PacketSummary summary = QuicPacketHeader.parseSummary(buf);
         assertNotNull(summary);
         assertEquals(QuicPacketHeader.PacketType.INITIAL, summary.type());
         assertArrayEquals(dcid, summary.dcid());
+        assertArrayEquals(scid, summary.scid());
+        byte[] readToken = new byte[summary.token().remaining()];
+        summary.token().duplicate().get(readToken);
+        assertArrayEquals(token, readToken);
         
+        // Retry header
+        buf.clear();
+        flags = (byte) (0xC0 | (0x03 << 4)); // Long, Retry
+        buf.put(flags);
+        buf.putInt(1);
+        buf.put((byte) dcid.length).put(dcid);
+        buf.put((byte) scid.length).put(scid);
+        byte[] retryToken = new byte[] {0x44, 0x55, 0x66, 0x77};
+        buf.put(retryToken);
+        buf.flip();
+        
+        summary = QuicPacketHeader.parseSummary(buf);
+        assertNotNull(summary);
+        assertEquals(QuicPacketHeader.PacketType.RETRY, summary.type());
+        byte[] readRetryToken = new byte[summary.token().remaining()];
+        summary.token().duplicate().get(readRetryToken);
+        assertArrayEquals(retryToken, readRetryToken);
+
         // Short header
         buf.clear();
         flags = (byte) 0x40;
@@ -288,6 +316,7 @@ public class QuicPacketHeaderTest {
         assertNotNull(summary);
         assertEquals(QuicPacketHeader.PacketType.ONE_RTT, summary.type());
         assertArrayEquals(dcid, summary.dcid());
+        assertNull(summary.token());
     }
 
     @Test

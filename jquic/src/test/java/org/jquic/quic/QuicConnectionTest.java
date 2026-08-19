@@ -126,7 +126,7 @@ class QuicConnectionTest {
         frameBuilderMock = Mockito.mockStatic(QuicFrameBuilder.class, Answers.CALLS_REAL_METHODS);
         selectorMock = mock(SelectorThread.class);
         when(selectorMock.getBufferPool()).thenReturn(pool);
-        connection = new QuicConnection(TEST_CID, QuicVersion.QUIC_VERSION_1, TEST_ADDRESS, new SpscLinkedQueue<>(), selectorMock, mockMetadata);
+        connection = new QuicConnection(TEST_CID, QuicVersion.QUIC_VERSION_1, TEST_ADDRESS, new SpscLinkedQueue<>(), selectorMock, mockMetadata, new byte[8]);
         Field streamEngineInternal = QuicEngine.class.getDeclaredField("streamEngineInternal");
         streamEngineInternal.setAccessible(true);
         QuicStreamEngineImpl value = new QuicStreamEngineImpl(0);

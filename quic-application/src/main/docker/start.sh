@@ -23,7 +23,7 @@ strace -e bpf /app/loader &&
 
 # Start the Java application in the background and capture its PID
 su - fedoresko -c "cd /app && ${JAVA_HOME}/bin/java -XX:+UnlockDiagnosticVMOptions -XX:+DebugNonSafepoints -Djava.net.preferIPv4Stack=true\
-   --add-opens java.base/sun.nio.ch=ALL-UNNAMED --add-opens java.base/java.io=ALL-UNNAMED --enable-native-access=ALL-UNNAMED -Dlog.level=WARN\
+   -Dquic.defence.start_on=true --add-opens java.base/sun.nio.ch=ALL-UNNAMED --add-opens java.base/java.io=ALL-UNNAMED --enable-native-access=ALL-UNNAMED -Dlog.level=WARN\
    -agentpath:/opt/async-profiler/lib/libasyncProfiler.so=start,event=cpu,event=alloc,event=nativemem,alloc=2m,loop=1m,file=/home/fedoresko/profile-%t.jfr\
    -jar jquic.jar" &
 JAVA_PID=$!

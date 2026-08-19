@@ -18,9 +18,9 @@ package org.jquic.quic;
 import org.jquic.quic.buffers.BufferPool;
 import org.jquic.quic.buffers.PoolBuffer;
 import org.jquic.quic.crypto.NativeCrypto;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.jquic.quic.crypto.QuicCrypto;
 
+import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
 import java.security.SecureRandom;
 
@@ -58,13 +58,13 @@ public class QuicPacketBuilder {
      * @return Complete Initial packet ready to send
      * @throws QuicException if encryption fails
      */
-    public static PoolBuffer buildInitialPacket(QuicVersion quicVersion, PoolBuffer packet, byte [] destinationCid, ByteBuffer sourceCid,
+    public static PoolBuffer buildInitialPacket(QuicVersion quicVersion, PoolBuffer packet, byte [] destinationCid, byte[] sourceCid,
                                                 long packetNumber, long largestAcked, ByteBuffer packetBuffer, NativeCrypto crypto) throws QuicException {
         int encryptedPayloadSize = packetBuffer.remaining() + GCM_TAG_LENGTH;
         int pnLen = QuicPacketHeader.calculatePnLength(packetNumber, largestAcked);
 
         QuicPacketHeader header = new QuicPacketHeader(new QuicPacketHeader.PacketNumber(pnLen, packetNumber, (byte) 0x10),
-                quicVersion, destinationCid, sourceCid.array(), QuicPacketHeader.PacketType.INITIAL,
+                quicVersion, destinationCid, sourceCid, QuicPacketHeader.PacketType.INITIAL,
                 new byte[0], encryptedPayloadSize + pnLen, (byte)0
         );
 
@@ -96,14 +96,14 @@ public class QuicPacketBuilder {
      * @param crypto with encryption keys (RFC 9001 Section 5.4)
      * @throws QuicException if encryption fails
      */
-    public static PoolBuffer buildHandshakePacket(QuicVersion quicVersion, PoolBuffer packet, byte [] destinationCid, ByteBuffer sourceCid,
+    public static PoolBuffer buildHandshakePacket(QuicVersion quicVersion, PoolBuffer packet, byte [] destinationCid, byte[] sourceCid,
                                                   long packetNumber, long largestAcked, ByteBuffer payload, NativeCrypto crypto)
             throws QuicException {
         int encryptedPayloadSize = payload.remaining() + GCM_TAG_LENGTH; // + GCM tag
         int pnLen = QuicPacketHeader.calculatePnLength(packetNumber, largestAcked);
 
         QuicPacketHeader header = new QuicPacketHeader(new QuicPacketHeader.PacketNumber(pnLen, packetNumber, (byte) 0x10),
-            quicVersion, destinationCid, sourceCid.array(),
+            quicVersion, destinationCid, sourceCid,
             QuicPacketHeader.PacketType.HANDSHAKE, new byte[0], encryptedPayloadSize + pnLen, (byte)0 );
 
         return encryptAndProtectQuicPacket(packet, payload, header, crypto);
@@ -188,6 +188,68 @@ public class QuicPacketBuilder {
         ByteBuffer buf = packet.buf();
         writeVersionNegotioationPaketToBuffer(destinationCid, sourceCid, buf);
         return packet;
+    }
+
+    public static void buildRetryPacket(ByteBuffer buffer, QuicVersion quicVersion, byte[] destinationCid, byte[] sourceCid, byte[] originalDestinationCid, NativeCrypto integrityCrypto) throws QuicException {
+        // The token is currently at buffer.position() to buffer.limit()
+        int tokenStart = buffer.position();
+        int tokenLen = buffer.remaining();
+        int headerLen = 1 + 4 + 1 + destinationCid.length + 1 + sourceCid.length;
+        int pseudoHeaderLen = 1 + originalDestinationCid.length;
+        
+        int start = tokenStart - headerLen;
+        int pseudoStart = start - pseudoHeaderLen;
+        if (pseudoStart < 0) {
+            throw new QuicException("Not enough headroom in buffer to prepend Retry header and ODCID. Required: " + (headerLen + pseudoHeaderLen) + ", Available: " + tokenStart, QuicTransportError.INTERNAL_ERROR);
+        }
+
+        // Ensure buffer has enough capacity for the tag
+        if (buffer.capacity() < tokenStart + tokenLen + GCM_TAG_LENGTH) {
+            throw new QuicException("Buffer capacity too small for Retry packet tag. Required: " + (tokenStart + tokenLen + GCM_TAG_LENGTH) + ", Capacity: " + buffer.capacity(), QuicTransportError.INTERNAL_ERROR);
+        }
+
+        // Prepend ODCID for Pseudo-Packet calculation
+        buffer.position(pseudoStart);
+        buffer.put((byte) originalDestinationCid.length);
+        buffer.put(originalDestinationCid);
+
+        // Prepend Header
+        // Header Form (1) = 1, Fixed Bit (1) = 1, Type (2) = 0x03 (Retry), Unused (4) random
+        byte flags = (byte) (0xC0 | 0x30 | (SECURE_RANDOM.nextInt(16) & 0x0F));
+        buffer.put(flags);
+
+        // Version (32)
+        buffer.putInt(quicVersion.val);
+
+        // DCID
+        buffer.put((byte) destinationCid.length);
+        buffer.put(destinationCid);
+
+        // SCID
+        buffer.put((byte) sourceCid.length);
+        buffer.put(sourceCid);
+        
+        // Token is already there (at tokenStart)
+        
+        // Calculate Integrity Tag
+        // Pseudo-Packet: [ODCID length (1) + ODCID + Header + Token]
+        buffer.position(pseudoStart);
+        buffer.limit(tokenStart + tokenLen);
+        MemorySegment pseudoPacketSegment = MemorySegment.ofBuffer(buffer);
+        
+        buffer.position(tokenStart + tokenLen);
+        // Ensure limit allows writing the tag
+        buffer.limit(buffer.position() + GCM_TAG_LENGTH);
+        ByteBuffer tagOut = buffer.duplicate();
+        tagOut.limit(tagOut.position() + GCM_TAG_LENGTH);
+
+        QuicCrypto.writeRetryIntegrityTag(integrityCrypto, quicVersion, pseudoPacketSegment, tagOut);
+        
+        // Advance buffer position by tag length
+        buffer.position(buffer.position() + GCM_TAG_LENGTH);
+
+        buffer.limit(buffer.position());
+        buffer.position(start);
     }
 
     public static void writeVersionNegotioationPaketToBuffer(byte[] destinationCid, byte[] sourceCid, ByteBuffer buf) {

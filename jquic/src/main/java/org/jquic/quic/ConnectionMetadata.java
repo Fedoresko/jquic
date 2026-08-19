@@ -26,6 +26,7 @@ import javax.crypto.SecretKey;
 import java.nio.ByteBuffer;
 import java.security.GeneralSecurityException;
 import java.util.HashMap;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 
@@ -61,8 +62,10 @@ public class ConnectionMetadata {
     public QuicVersion quicInitialVersion;
     public QuicVersion quicVersion;
 
-    public byte[] originalDCid;
+    public byte[] originalDcid;
     public byte[] clientCid;
+    public byte[] initialDcid;
+    public byte[] retrySourceCid;
     public long negotiatedIdleTimeoutMs;
 
     /**
@@ -159,6 +162,15 @@ public class ConnectionMetadata {
 
             QuicCrypto.PacketProtectionKeysWithHP clientKeys = new QuicCrypto.PacketProtectionKeysWithHP(clientKeySeg, clientIv, clientHpKeySeg);
             QuicCrypto.PacketProtectionKeysWithHP serverKeys = new QuicCrypto.PacketProtectionKeysWithHP(serverKeySeg, serverIv, serverHpKeySeg);
+
+            logger.info("Client init key {}", HexFormat.of().formatHex(clientKey.getEncoded()));
+            logger.info("Client init IV {}", HexFormat.of().formatHex(clientIv));
+            logger.info("Client init HP {}", HexFormat.of().formatHex(clientHp));
+
+            logger.info("Server init key {}", HexFormat.of().formatHex(serverKey.getEncoded()));
+            logger.info("Server init IV {}", HexFormat.of().formatHex(serverIv));
+            logger.info("Server init HP {}", HexFormat.of().formatHex(serverHp));
+
 
             return new QuicCrypto.PacketProtectionKeysWithHP[] { clientKeys, serverKeys };
 
@@ -284,19 +296,19 @@ public class ConnectionMetadata {
         }
     }
 
-    public @Nullable Boolean initializeKeys(byte[] destinationCid) {
+    public @Nullable Boolean initializeKeys() {
         boolean isNewConnection = false;
         if (!clientInitialCrypto.containsKey(quicVersion)) {
-            originalDCid = destinationCid;
             isNewConnection = true;
             try {
+                logger.info("Initial client keys for CID: {} quic ver {}", initialDcid, quicVersion);
                 QuicCrypto.PacketProtectionKeysWithHP[] keys = deriveInitialKeys(quicVersion,
-                        destinationCid);
+                        initialDcid);
                 clientInitialCrypto.put(quicVersion, new NativeCrypto(keys[0], CipherMode.TLS_AES_128_GCM_SHA256_ID));
                 serverInitialCrypto.put(quicVersion, new NativeCrypto(keys[1], CipherMode.TLS_AES_128_GCM_SHA256_ID));
             } catch (QuicException e) {
                 // RFC 9000: Silently discard packets that fail key derivation
-                logger.warn("Failed to derive Initial keys for CID: {}, discarding packet", destinationCid);
+                logger.warn("Failed to derive Initial keys for CID: {}, discarding packet", initialDcid);
                 return null;
             }
         }

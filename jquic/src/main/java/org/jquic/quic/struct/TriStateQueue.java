@@ -42,7 +42,7 @@ public class TriStateQueue<T> {
             }
             count++;
             if (count < 10) {
-                Thread.yield();
+                Thread.onSpinWait();
             } else  {
                 if (System.nanoTime() - start > timeoutNs) {
                     throw new TimeoutException();

@@ -21,6 +21,8 @@ import org.jctools.queues.SpscArrayQueue;
 import org.jctools.queues.SpscLinkedQueue;
 import org.jquic.quic.buffers.BufferPool;
 import org.jquic.quic.buffers.PoolBuffer;
+import org.jquic.quic.crypto.NativeCrypto;
+import org.jquic.quic.crypto.QuicCrypto;
 import org.jquic.quic.linux.BpfRouting;
 import org.jquic.quic.linux.ECT;
 import org.jquic.quic.streamapi.impl.ApplicationData;
@@ -29,6 +31,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.DatagramChannel;
@@ -67,11 +70,14 @@ public class SelectorThread extends Thread {
     private long startIdlingTimeMs = 0;
     private long tickTimeEmaNs = 0;
 
-    private LinkedList<PacketToSend> packetsToSendPerConnection = new LinkedList<>();
+    private final ArrayList<PacketToSend> packetsToSendPerConnection = new ArrayList<>();
     private long sentPackets;
     private long retransmittedPackets;
     private long receivedPackets;
     private double retransmitRateEma = 0.0;
+
+    private NativeCrypto retryTokenCrypto;
+    private Map<QuicVersion, NativeCrypto> retryTokenIntegrityCryptos;
 
     public BufferPool getBufferPool() {
         return bufferPool;
@@ -151,6 +157,7 @@ public class SelectorThread extends Thread {
             long lastTime = System.nanoTime();
             while (!Thread.currentThread().isInterrupted()) {
 
+
                 long nowNs = System.nanoTime();
                 long now = System.currentTimeMillis();
                 tickTimeEmaNs = tickTimeEmaNs * 4 / 5 + (nowNs - lastTime) / 5;
@@ -179,7 +186,7 @@ public class SelectorThread extends Thread {
 
                 for (QuicDatagramChannel.ReceivedPacket packet : batch) {
                     if (packet.sender() != null) {
-                        processDatagram(now, packet.data().borrow(), packet.sender(), "socket", packet.ecnFlags());
+                        processDatagram(now, nowNs, packet.data().borrow(), packet.sender(), "socket", packet.ecnFlags());
                         hadWork = true;
                     }
                     packet.data().release();
@@ -191,7 +198,7 @@ public class SelectorThread extends Thread {
                 // Process forwarded packets
                 PacketData forwarded;
                 while ((receivedPackets - recievedPacketsAtStart) < MAX_RECIEVE_BATCH && (forwarded = forwardedPackets.poll()) != null) {
-                    processDatagram(now, forwarded.buffer, forwarded.sender, "forwarded", 0);
+                    processDatagram(now, nowNs, forwarded.buffer, forwarded.sender, "forwarded", 0);
                     hadWork = true;
                 }
                 if (receivedPackets != revPBeforeFwd) logger.info("Selector-{}: Processed {} packets from forward", threadId, (receivedPackets - revPBeforeFwd));
@@ -209,7 +216,7 @@ public class SelectorThread extends Thread {
 
                 for (TimerWheelScheduler.ScheduledEvent scheduledEvent : recordsToProcess) {
                     hadWork |= switch (scheduledEvent.eventType()) {
-                        case LOSS_DETECTION -> retransmitPackagesInConnection(scheduledEvent, nowNs);
+                        case LOSS_DETECTION -> retransmitPackagesInConnection(scheduledEvent, nowNs, now);
                     };
                 }
 
@@ -239,6 +246,9 @@ public class SelectorThread extends Thread {
                     if (idleCounter == 0) {
                         startIdlingTimeMs = now;
                     }
+                    if (idleCounter > 0) {
+                        Thread.onSpinWait();
+                    }
                     if (idleCounter > 100) {
                         Thread.yield();
                     }
@@ -260,27 +270,31 @@ public class SelectorThread extends Thread {
     private void sendAllCollectedPackets() throws IOException {
         if (!packetsToSendPerConnection.isEmpty()) logger.info("Selector-{}: Senging {} response packets", threadId, packetsToSendPerConnection.size());
         try {
-            List<PacketToSend> entries = packetsToSendPerConnection.subList(0, Math.min(packetsToSendPerConnection.size(), MAX_SEND_BATCH));
-            while (!entries.isEmpty()) {
+            int i = 0;
+            while (i < packetsToSendPerConnection.size()) {
+                int next = Math.min(packetsToSendPerConnection.size(), i + MAX_SEND_BATCH);
+                List<PacketToSend> entries = packetsToSendPerConnection.subList(i, next);
+
                 int res = channel.sendBatch(entries);
                 if (res < 0) {
                     throw new IOException("Error enqueueing application packets code: " + res);
                 }
-                entries = entries.subList(res, entries.size());
                 sentPackets += res;
+                i = next;
             }
         } finally {
             packetsToSendPerConnection.forEach(p->p.poolBuffer().release());
-            packetsToSendPerConnection = new LinkedList<>();
+            packetsToSendPerConnection.clear();
         }
     }
 
-    private boolean retransmitPackagesInConnection(TimerWheelScheduler.ScheduledEvent event, long nowNs) {
+    private boolean retransmitPackagesInConnection(TimerWheelScheduler.ScheduledEvent event, long nowNs, long now) {
         QuicConnection conn = activeConnections.get(event.connectionId());
         if (conn != null) {
+            conn.setCurrentTimestamp(now);
             conn.retransmitLostPackets();
             pollConnectionDataAndSend(conn);
-            timerWheelScheduler.scheduleAt(nowNs + 1_000_000, event);
+            timerWheelScheduler.scheduleAt(nowNs + 50_000_000, event);
             return true;
         }
         return false;
@@ -301,6 +315,7 @@ public class SelectorThread extends Thread {
         QuicConnection conn = appPacket.connection();
         logger.debug("Polled application data frame cid {}", conn.getConnectionId());
         conn.setCurrentTimestamp(now);
+        conn.updateTimeout();
 
         conn.send1RttPacket(appPacket.data());
         // Update timeout in heap after processing
@@ -316,7 +331,7 @@ public class SelectorThread extends Thread {
      * Processes a received datagram which may contain multiple coalesced packets.
      * Routes packets to appropriate connections based on CID.
      */
-    private void processDatagram(long now, PoolBuffer datagram, SocketAddress sender, String source, int ecnFlags) {
+    private void processDatagram(long now, long nowNs, PoolBuffer datagram, SocketAddress sender, String source, int ecnFlags) {
         try {
             int datagramSize = datagram.buf().remaining();
             // Process all coalesced packets in the datagram
@@ -332,6 +347,8 @@ public class SelectorThread extends Thread {
                 if (packetSummary == null || packetSummary.type() == QuicPacketHeader.PacketType.RETRY) {
                     break; //invalid data skip remaining
                 }
+
+                if (packetSummary.type() == QuicPacketHeader.PacketType.PADDING) continue;
 
                 if (packetSummary.type() != QuicPacketHeader.PacketType.ONE_RTT && packetSummary.version() == QuicVersion.UNKNOWN) {
                     logger.info("[Acceptor] Unsupported QUIC version. Sending Version Negotiation.");
@@ -370,7 +387,11 @@ public class SelectorThread extends Thread {
 
                 if (connection == null) {
                     logger.warn("Selector-{}: No connection found for CID: {}, discarding datagram", threadId, cid);
-                    cidToSelectorMap.remove(cid);
+                    if (packetSummary.type() == QuicPacketHeader.PacketType.INITIAL) {
+                        processHandshakeTask(now, nowNs, new HandshakeTask(datagram, sender, cid, packetSummary));
+                    } else {
+                        cidToSelectorMap.remove(cid);
+                    }
                     break;
                 }
 
@@ -428,18 +449,72 @@ public class SelectorThread extends Thread {
         }
     }
 
+    private NativeCrypto getRetryTokenCrypto() {
+        if (retryTokenCrypto == null) {
+             retryTokenCrypto = QuicCrypto.getRetryTokenCrypto();
+        }
+        return retryTokenCrypto;
+    }
+
+    private NativeCrypto getRetryTokenIntegrityCrypto(QuicVersion quicVersion) {
+        if (retryTokenIntegrityCryptos == null) {
+            retryTokenIntegrityCryptos = new ConcurrentHashMap<>(Map.of(
+                    QuicVersion.QUIC_VERSION_1, QuicCrypto.getRetryIntegrityCryptoV1(),
+                    QuicVersion.QUIC_VERSION_2, QuicCrypto.getRetryIntegrityCryptoV2()
+            ));
+        }
+        return retryTokenIntegrityCryptos.get(quicVersion);
+    }
+
     /**
      * Processes Initial packet from new connection.
      * Creates connection and sends Initial response (ServerHello).
      * Handshake will continue when client sends Handshake packet.
      */
-    private void processHandshakeTask(long now, long nowNs,  HandshakeTask task) {
+    private void processHandshakeTask(long now, long nowNs, HandshakeTask task) {
         try {
+            if (task.packetSummary.type() != QuicPacketHeader.PacketType.INITIAL) return;
+
             logger.warn("Selector-{}: Processing Initial packet for new CID: {}", threadId, task.allocatedCid);
+
+            byte [] originalDcid = task.packetSummary.dcid();
+            byte [] retrySourceCid = null;
+
+            if (QuicEngine.isDefenceModeOn(now)) {
+                logger.info("Selector in defence mode!");
+                if (task.packetSummary.token() != null && task.packetSummary.token().remaining() > 40) {
+                    logger.info("Verifying retry token");
+                    QuicCrypto.RetryTokenInfo retryTokenInfo = QuicCrypto.parseRetryToken(getRetryTokenCrypto(), task.packetSummary.token());
+                    InetSocketAddress sender = (InetSocketAddress) task.sender;
+                    if (!sender.getAddress().equals(retryTokenInfo.ip())) {
+                        throw new QuicException("IP address mismatch in retry token", QuicTransportError.INVALID_TOKEN);
+                    }
+                    if (now - retryTokenInfo.timestamp() > QuicProperties.RETRY_TOKEN_EXPIRATION) {
+                        throw new QuicException("Retry token is expired", QuicTransportError.INVALID_TOKEN);
+                    }
+                    logger.info("Verifyed retry token succesfully");
+                    originalDcid = retryTokenInfo.connectionId();
+                    retrySourceCid = task.packetSummary.dcid();
+                } else if (task.packetSummary.token() == null || task.packetSummary.token().remaining() == 0) {
+                    logger.info("Sending RETRY packet ODCID {} quic ver {}", originalDcid, task.packetSummary.version());
+                    PoolBuffer buffer = getBufferPool().requestWriteBuffer();
+                    QuicCrypto.generateRetryToken(getRetryTokenCrypto(), buffer.buf(), now, originalDcid, (InetSocketAddress) task.sender);
+                    QuicPacketBuilder.buildRetryPacket(buffer.buf(), task.packetSummary.version(), task.packetSummary.scid(),
+                            ByteBuffer.wrap(new byte[8]).putLong(task.allocatedCid).flip().array(), originalDcid,
+                            getRetryTokenIntegrityCrypto(task.packetSummary.version()) );
+                    channel.send(buffer.buf(), task.sender, ECT.ECT_0);
+                    buffer.release();
+                    return;
+                } else {
+                    return;
+                }
+            }
+
+            final byte [] odcid = originalDcid;
 
             QuicConnection connection = activeConnections.computeIfAbsent(task.allocatedCid,
                     _ -> {
-                        QuicConnection conn = new QuicConnection(task.allocatedCid, task.packetSummary.version(), task.sender, applicationWakeQueue, this);
+                        QuicConnection conn = new QuicConnection(task.allocatedCid, task.packetSummary.version(), task.sender, applicationWakeQueue, this, odcid);
                         timeoutHeap.insertOrUpdate(conn);
                         timerWheelScheduler.scheduleAt(nowNs + 1_000_000L,
                                 new TimerWheelScheduler.ScheduledEvent(TimerWheelScheduler.EventType.LOSS_DETECTION, task.allocatedCid));
@@ -447,13 +522,13 @@ public class SelectorThread extends Thread {
                     });
 
             connection.setCurrentTimestamp(now);
+            connection.connectionMetadata.retrySourceCid = retrySourceCid;
 
             assignConnectionToSelector(connection.getConnectionId());
 
             ByteBuffer dcidKey = ByteBuffer.wrap(task.packetSummary.dcid());
             initializingConnections.put(dcidKey, connection);
-
-            processDatagram(now, task.packet, task.sender, "initial", 0);
+            processDatagram(now, nowNs, task.packet, task.sender, "initial", 0);
 
             initializingConnections.remove(dcidKey);
 

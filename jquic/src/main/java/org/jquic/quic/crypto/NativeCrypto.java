@@ -171,12 +171,13 @@ public class NativeCrypto implements AutoCloseable {
         }
     }
 
-    private void decryptAeadInPlace(ByteBuffer encrypted, MemorySegment associatedData, ByteBuffer nonce) throws QuicException {
+    public void decryptAeadInPlace(ByteBuffer encrypted, MemorySegment associatedData, ByteBuffer nonce) throws QuicException {
         int ret = EVP_AEAD_CTX_open(aeadCtx,
                 MemorySegment.ofBuffer(encrypted), openOutLen, encrypted.remaining(),
                 MemorySegment.ofBuffer(nonce.rewind()), GCM_NONCE_LENGTH,
                 MemorySegment.ofBuffer(encrypted), encrypted.remaining(),
-                associatedData, associatedData.byteSize());
+                associatedData == null ? MemorySegment.NULL : associatedData, 
+                associatedData == null ? 0 : associatedData.byteSize());
 
         if (ret != 1) {
             logErrorAndThrow("Failed to open EVP_AEAD_CTX(" + ret + ") ");
@@ -184,15 +185,20 @@ public class NativeCrypto implements AutoCloseable {
         encrypted.limit(encrypted.position() + (int) openOutLen.get(ValueLayout.JAVA_LONG, 0));
     }
 
-    private void encryptAeadInPlace(ByteBuffer plaintext, MemorySegment associatedData, ByteBuffer nonce) throws QuicException {
+    public void encryptAead(ByteBuffer plaintext, ByteBuffer ciphertext, MemorySegment associatedData, ByteBuffer nonce) throws QuicException {
         if (EVP_AEAD_CTX_seal(aeadCtx,
-                MemorySegment.ofBuffer(plaintext), sealOutLen, plaintext.remaining() + QuicCrypto.GCM_TAG_LENGTH,
+                MemorySegment.ofBuffer(ciphertext), sealOutLen, plaintext.remaining() + QuicCrypto.GCM_TAG_LENGTH,
                 MemorySegment.ofBuffer(nonce.rewind()), GCM_NONCE_LENGTH,
                 MemorySegment.ofBuffer(plaintext), plaintext.remaining(),
-                associatedData, associatedData.byteSize()) != 1) {
+                associatedData == null ? MemorySegment.NULL : associatedData,
+                associatedData == null ? 0 : associatedData.byteSize()) != 1) {
             logErrorAndThrow("Failed to seal EVP_AEAD_CTX");
         }
-        plaintext.limit(plaintext.position() + (int) sealOutLen.get(ValueLayout.JAVA_LONG, 0));
+        ciphertext.limit(ciphertext.position() + (int) sealOutLen.get(ValueLayout.JAVA_LONG, 0));
+    }
+
+    public void encryptAeadInPlace(ByteBuffer plaintext, MemorySegment associatedData, ByteBuffer nonce) throws QuicException {
+        encryptAead(plaintext, plaintext, associatedData, nonce);
     }
 
 

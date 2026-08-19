@@ -589,9 +589,7 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
                             streamId, connectionId);
                     response.closeStream(streamId, Http3Server.H3_MESSAGE_ERROR); // H3_MESSAGE_ERROR
                     finishStream(streamId);
-                } else
-
-                    if (context.getRequestState() == Http3StreamContext.RequestProcessingState.WAITING_FOR_FIN) {
+                } else if (context.getRequestState() == Http3StreamContext.RequestProcessingState.WAITING_FOR_FIN) {
                     Http3Response httpResponse = requestHandler.handleRequest(context.getRequest());
                     // Send the response immediately - do not wait for stream FIN.
                     logger.debug("Sending HTTP/3 response on stream {} (connection {}) immediately after HEADERS",

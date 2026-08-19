@@ -113,5 +113,9 @@ public class QuicProperties {
     public static final int BOOTSTRAP_PORT = getInt("quic.bootstrap.port", 443);
     public static final String MONITORING_BASE_DIR = getString("quic.monitoring.base_dir", "/home/fedoresko");
 
-    public static final boolean PREFER_V2 = Boolean.parseBoolean(getString("quic.prefer_v2", "true"));
+    public static final boolean PREFER_V2 = Boolean.parseBoolean(getString("quic.prefer_v2", "false"));
+
+    public static final int DEFENCE_COOLDOWN = getInt("quic.defence.cooldown_ms", 30000);
+    public static final int RETRY_TOKEN_EXPIRATION = getInt("quic.defence.retry_token_expiration_ms", 3000);
+    public static final boolean START_IN_DEFENCE = Boolean.parseBoolean(getString("quic.defence.start_on", "false"));
 }

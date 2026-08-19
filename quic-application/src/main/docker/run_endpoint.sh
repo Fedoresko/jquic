@@ -48,6 +48,12 @@ if [ "$TESTCASE" == "v2" ]; then
     QUIC_V2_PREFERENCE="true"
 fi
 
+QUIC_DEFENCE_DEFAULT="false"
+if [ "$TESTCASE" == "retry" ]; then
+  QUIC_DEFENCE_DEFAULT="true"
+fi
+
 exec ${JAVA_HOME}/bin/java -Djava.net.preferIPv4Stack=false\
    --add-opens java.base/sun.nio.ch=ALL-UNNAMED --add-opens java.base/java.io=ALL-UNNAMED --enable-native-access=ALL-UNNAMED -Dlog.level=INFO\
-   -Dquic.prefer_v2=$QUIC_V2_PREFERENCE -Dquic.port=443 -Dquic.keystore_type=PEM -Dquic.cert_path=/certs/cert.pem -Dquic.key_path=/certs/priv.key -jar jquic.jar
+   -Dquic.prefer_v2=$QUIC_V2_PREFERENCE -Dquic.defence.start_on=$QUIC_DEFENCE_DEFAULT -Dquic.port=443 -Dquic.keystore_type=PEM\
+   -Dquic.cert_path=/certs/cert.pem -Dquic.key_path=/certs/priv.key -jar jquic.jar

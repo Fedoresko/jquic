@@ -72,7 +72,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
     private static final long MAX_IDLE_TIMEOUT_MS = 600_000; // 10 minutes
 
     private final long connectionId;
-    public final ByteBuffer connectionIdBytes;
+    public final byte [] connectionIdBytes;
 
     private final AtomicReference<State> state = new AtomicReference<>(INITIAL);
     private State peerState = INITIAL;
@@ -106,10 +106,10 @@ public class QuicConnection implements TimeoutHeap.Entry {
     private final SelectorThread selector;
     private CongestionControl congestionControl;
 
-    public QuicConnection(long connectionId, QuicVersion version, SocketAddress remoteAddress, MessagePassingQueue<TriStateQueue<ApplicationData>> wakeQueue, SelectorThread selector, ConnectionMetadata metadata) {
+    public QuicConnection(long connectionId, QuicVersion version, SocketAddress remoteAddress, MessagePassingQueue<TriStateQueue<ApplicationData>> wakeQueue, SelectorThread selector, ConnectionMetadata metadata, byte[] originalDcid) {
         this.connectionMetadata = metadata;
         this.connectionId = connectionId;
-        this.connectionIdBytes = ByteBuffer.allocate(8).putLong(connectionId);
+        this.connectionIdBytes = ByteBuffer.allocate(8).putLong(connectionId).array();
         this.wakeQueue = wakeQueue;
         this.state.set(INITIAL);
         this.currentTimestamp = System.currentTimeMillis();
@@ -117,13 +117,14 @@ public class QuicConnection implements TimeoutHeap.Entry {
         this.selector = selector;
         this.connectionMetadata.quicVersion = version;
         this.connectionMetadata.quicInitialVersion = version;
+        this.connectionMetadata.originalDcid = originalDcid;
         this.connectionPathController = new ConnectionPathController(this, remoteAddress);
         statelessResetToken = QuicCrypto.generateStatelessResetToken(ByteBuffer.allocate(8).putLong(connectionId).array());
         logger.info("Connection {} initial timeout set to {}", connectionId, timeoutTimestamp);
     }
 
-    public QuicConnection(long connectionId, QuicVersion version, SocketAddress remoteAddress, MessagePassingQueue<TriStateQueue<ApplicationData>> wakeQueue, SelectorThread selector) {
-        this(connectionId, version, remoteAddress, wakeQueue, selector, new ConnectionMetadata());
+    public QuicConnection(long connectionId, QuicVersion version, SocketAddress remoteAddress, MessagePassingQueue<TriStateQueue<ApplicationData>> wakeQueue, SelectorThread selector, byte[] originalDcid) {
+        this(connectionId, version, remoteAddress, wakeQueue, selector, new ConnectionMetadata(), originalDcid);
     }
 
     public BufferPool getBufferPool() {
@@ -372,7 +373,8 @@ public class QuicConnection implements TimeoutHeap.Entry {
         // They carry no per-connection secret, so there is no need to store them as fields.
         QuicPacketHeader.PacketSummary packetSummary = QuicPacketHeader.parseSummary(packet.buf());
 
-        Boolean isNewConnection = connectionMetadata.initializeKeys(packetSummary.dcid());
+        connectionMetadata.initialDcid = packetSummary.dcid();
+        Boolean isNewConnection = connectionMetadata.initializeKeys();
         
         if (isNewConnection == null) return null;
 
@@ -398,11 +400,11 @@ public class QuicConnection implements TimeoutHeap.Entry {
 
         long packetLen = header.payloadLength + packet.buf().position() - start;
 
-        initialSpace.onPacketReceived(currentTimestamp, header.packetNumber, ecnFlags);
-
         int remaining = packet.buf().remaining();
         try {
-            return decryptAeadInPlace(packet, header, (int) header.payloadLength - header.pnLength, connectionMetadata.clientInitialCrypto.get(packetSummary.version()));
+            PoolBuffer buffer = decryptAeadInPlace(packet, header, (int) header.payloadLength - header.pnLength, connectionMetadata.clientInitialCrypto.get(packetSummary.version()));
+            initialSpace.onPacketReceived(currentTimestamp, header.packetNumber, ecnFlags);
+            return buffer;
         } catch (Exception e) {
             // RFC 9000: Silently discard packets that fail decryption or tag verification
             logger.warn("Initial packet decryption/authentication failed for CID: {}, size: {} pn {} payloadLen {} issue stateless reset",
@@ -884,6 +886,14 @@ public class QuicConnection implements TimeoutHeap.Entry {
             return;
         }
 
+        if (state.get() != INITIAL) {
+            // drop packet
+            logger.warn("Received Initial packet for CID: {} in invalid state: {}, discarding",
+                    connectionId, state);
+            SelectorThread.skipPacket(datagram.buf());
+            return;
+        }
+
         logger.debug("Processing Initial packet for CID: {} in state: {}", connectionId, state);
 
         // Step 1: Process Initial packet
@@ -949,7 +959,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
                 if (connectionMetadata.clientMetadata.availableVersions.contains(QuicVersion.QUIC_VERSION_2.val)
                         && connectionMetadata.quicVersion != QuicVersion.QUIC_VERSION_2 && QuicProperties.PREFER_V2) {
                     connectionMetadata.quicVersion = QuicVersion.QUIC_VERSION_2;
-                    connectionMetadata.initializeKeys(connectionMetadata.originalDCid);
+                    connectionMetadata.initializeKeys();
                 }
 
                 if (needAck) {
@@ -1319,13 +1329,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
             logger.warn("Detected {} lost packets in connection {}, retransmitting with NEW packet numbers", lostPackets.size(), connectionId);
 
             for (Map.Entry<Long, PacketNumberSpace.SentPacket> entry : lostPackets.entrySet()) {
-                long originalPn = entry.getKey();
                 PacketNumberSpace.SentPacket sentPacket = entry.getValue();
-
-                // Allocate a BRAND NEW packet number for retransmission
-                logger.info("Retransmitting lost packet {} as new packet (phase: {})",
-                        originalPn, sentPacket.packetPhase);
-
                 connectionPathController.sendPacket(currentTimestamp, sentPacket.unencryptedPayload, space, false);
             }
         }

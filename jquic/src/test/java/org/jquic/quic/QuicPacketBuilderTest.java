@@ -37,18 +37,16 @@ import static org.mockito.Mockito.*;
  */
 class QuicPacketBuilderTest {
 
-    public static final ByteBuffer SCID = ByteBuffer.wrap(new byte[8]).putLong(0x5678L).flip();
+    public static final byte[] SCID = ByteBuffer.wrap(new byte[8]).putLong(0x5678L).array();
     private static final byte[] MOCK_IV = new byte[12];
     private static final ByteBuffer MOCK_HP = null; // Set to 0 to skip HP in QuicPacketBuilder
     private static final ByteBuffer MOCK_KEY = ByteBuffer.wrap(new byte[16]);
-    private static final QuicCrypto.PacketProtectionKeysWithHP MOCK_KEYS_HP = new QuicCrypto.PacketProtectionKeysWithHP(MOCK_KEY, MOCK_IV, MOCK_HP);
-    private static final QuicCrypto.PacketProtectionKeys MOCK_KEYS = new QuicCrypto.PacketProtectionKeys(MOCK_KEY, MOCK_IV);
     private static final NativeCrypto MOCK_CRYPTO = mock(NativeCrypto.class);
     private static final BufferPool pool = mock(BufferPool.class);
 
     @BeforeAll
     static void init() throws QuicException {
-        when(pool.requestWriteBuffer()).thenAnswer((a) -> new RootPoolBuffer(ByteBuffer.allocate(2000).position(100), pool, true) );
+        when(pool.requestWriteBuffer()).thenAnswer((_) -> new RootPoolBuffer(ByteBuffer.allocate(2000).position(100), pool, true) );
         doAnswer(
                 invocation -> {
                     ByteBuffer f = invocation.getArgument(0);
@@ -62,7 +60,7 @@ class QuicPacketBuilderTest {
     void testBuildInitialPacket_HeaderStructure() throws QuicException {
         // Arrange
         long destinationCid = 0x1234567890ABCDEFL;
-        ByteBuffer sourceCid = ByteBuffer.wrap(new byte[8]).putLong(0xFEDCBA0987654321L).flip();
+        byte [] sourceCid = ByteBuffer.wrap(new byte[8]).putLong(0xFEDCBA0987654321L).array();
         long packetNumber = 5;
         ByteBuffer payload = ByteBuffer.wrap(new byte[]{0x01, 0x02, 0x03, 0x04});
         int payloadSize = payload.remaining();
@@ -105,7 +103,7 @@ class QuicPacketBuilderTest {
 
         // Check SCID value
         long scid = packet.getLong();
-        assertEquals(sourceCid.duplicate().getLong(), scid, "Source CID should match");
+        assertEquals(0xFEDCBA0987654321L, scid, "Source CID should match");
 
         // Check token length (should be 0 for server Initial)
         byte tokenLen = packet.get();
@@ -128,7 +126,7 @@ class QuicPacketBuilderTest {
     void testBuildHandshakePacket_HeaderStructure() throws QuicException {
         // Arrange
         long destinationCid = 0xAAAABBBBCCCCDDDDL;
-        ByteBuffer sourceCid = ByteBuffer.wrap(new byte[8]).putLong(0x1111222233334444L).flip();
+        byte[] sourceCid = ByteBuffer.wrap(new byte[8]).putLong(0x1111222233334444L).array();
         long packetNumber = 10;
         ByteBuffer payload = ByteBuffer.wrap(new byte[100]);
 
@@ -163,7 +161,7 @@ class QuicPacketBuilderTest {
         byte scidLen = packet.get();
         assertEquals(8, scidLen);
         long scid = packet.getLong();
-        assertEquals(sourceCid.duplicate().getLong(), scid);
+        assertEquals(0x1111222233334444L, scid);
 
         // Check length
         long length = readVarint(packet);

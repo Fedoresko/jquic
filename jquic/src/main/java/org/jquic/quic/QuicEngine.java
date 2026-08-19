@@ -23,6 +23,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 import java.net.InetSocketAddress;
 import java.net.SocketOption;
 import java.net.StandardSocketOptions;
@@ -44,6 +46,26 @@ public class QuicEngine {
     private static final Logger logger = LoggerFactory.getLogger(QuicEngine.class);
     private static ArrayList<SelectorThread> selectorThreads;
     private static Thread acceptorThread;
+
+    private static volatile boolean defenceModeOn;
+    private static long defenceModeLastSet;
+
+    private static final VarHandle FLAG_HANDLE;
+
+    static {
+        try {
+            FLAG_HANDLE = MethodHandles.lookup()
+                    .findStaticVarHandle(QuicEngine.class, "defenceModeOn", boolean.class);
+        } catch (ReflectiveOperationException e) {
+            throw new Error(e);
+        }
+    }
+
+    static {
+        if (QuicProperties.START_IN_DEFENCE) {
+            setDefenceModeOn(System.currentTimeMillis());
+        }
+    }
 
     /**
      * Gets the static QuicStreamEngineInternal instance.
@@ -85,6 +107,22 @@ public class QuicEngine {
 
         channel.bind(new InetSocketAddress(PORT));
         return channel;
+    }
+
+    public static boolean isDefenceModeOn(long timestamp) {
+        boolean defenceModeOn = (boolean) FLAG_HANDLE.getOpaque();
+
+        if (defenceModeOn && timestamp - defenceModeLastSet > QuicProperties.DEFENCE_COOLDOWN) {
+            logger.info("Defence mode is OFF at {}", timestamp);
+            FLAG_HANDLE.setOpaque(false);
+        }
+        return defenceModeOn;
+    }
+
+    public static void setDefenceModeOn(long timestamp) {
+        logger.info("Defence mode is ON at {}", timestamp);
+        FLAG_HANDLE.setOpaque(true);
+        defenceModeLastSet = timestamp;
     }
 
     public static void init() throws Exception {

@@ -26,6 +26,7 @@ import org.slf4j.LoggerFactory;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.DatagramChannel;
+import java.util.HexFormat;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -104,7 +105,7 @@ class AcceptorThread implements Runnable {
                     }
 
                     byte[] dcid = packetSummary.dcid();
-                    logger.debug("[Acceptor] Received {} packet, DCID: {}", packetSummary.type(), dcid);
+                    logger.debug("[Acceptor] Received {} packet, DCID: {}, SCID {}", packetSummary.type(), dcid == null ? "null" : HexFormat.of().formatHex(dcid), packetSummary.scid() == null ? "null" : HexFormat.of().formatHex(packetSummary.scid()));
 
                     SelectorCID assignedSelectorId = initialSelectorMap.get(ByteBuffer.wrap(dcid));
                     if (assignedSelectorId != null) {

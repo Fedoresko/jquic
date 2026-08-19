@@ -30,7 +30,7 @@ import java.util.LinkedList;
 
 public class DatagramBuilder {
     private static final Logger logger = LoggerFactory.getLogger(DatagramBuilder.class);
-    private final ByteBuffer connectionIdBytes;
+    private final byte[] connectionIdBytes;
     private final WriteBufferPool writeBufferPool;
     private final ConnectionPathController connectionPathController;
     private final ECT ectMarking;
@@ -49,7 +49,7 @@ public class DatagramBuilder {
     }
 
 
-    public DatagramBuilder(ByteBuffer connectionIdBytes, WriteBufferPool writeBufferPool, ConnectionPathController connectionPathController, ECT ectMarking, SocketAddress dest, ConnectionMetadata connectionMetadata) {
+    public DatagramBuilder(byte [] connectionIdBytes, WriteBufferPool writeBufferPool, ConnectionPathController connectionPathController, ECT ectMarking, SocketAddress dest, ConnectionMetadata connectionMetadata) {
         this.connectionIdBytes = connectionIdBytes;
         this.writeBufferPool = writeBufferPool;
         this.connectionPathController = connectionPathController;
@@ -122,21 +122,21 @@ public class DatagramBuilder {
                 case INITIAL -> QuicPacketBuilder.buildInitialPacket(
                         connectionMetadata.quicVersion,
                         packet.data,
-                        connectionMetadata.clientCid,      // DCID = connection ID
-                        connectionIdBytes,      // SCID = connection ID (server uses same)
+                        connectionMetadata.clientCid,   // DCID = connection ID
+                        connectionIdBytes,              // SCID = connection ID (server uses same)
                         packetNumber,
                         space.getLargestAckedPacketNumber(),
-                        payload.buf().duplicate(),            // Plaintext payload
+                        payload.buf().duplicate(),      // Plaintext payload
                         connectionMetadata.serverInitialCrypto.get(connectionMetadata.quicVersion)
                 );
                 case HANDSHAKE -> QuicPacketBuilder.buildHandshakePacket(
                         connectionMetadata.quicVersion,
                         packet.data,
-                        connectionMetadata.clientCid,      // DCID = connection ID
-                        connectionIdBytes,      // SCID = connection ID (server uses same)
+                        connectionMetadata.clientCid,   // DCID = connection ID
+                        connectionIdBytes,              // SCID = connection ID (server uses same)
                         packetNumber,
                         space.getLargestAckedPacketNumber(),
-                        payload.buf().duplicate(),            // Plaintext payload
+                        payload.buf().duplicate(),      // Plaintext payload
                         connectionMetadata.serverHandshakeCrypto
                 );
                 case APPLICATION -> QuicPacketBuilder.build1RttPacket(
@@ -145,7 +145,7 @@ public class DatagramBuilder {
                         connectionMetadata.clientCid,
                         packetNumber,
                         space.getLargestAckedPacketNumber(),
-                        payload.buf().duplicate(),          // Plaintext payload
+                        payload.buf().duplicate(),       // Plaintext payload
                         connectionMetadata.serverApplicationCrypto,
                         connectionMetadata.currentPhase
                 );

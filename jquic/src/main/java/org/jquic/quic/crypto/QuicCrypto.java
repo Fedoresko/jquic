@@ -29,6 +29,7 @@ import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.security.*;
 import java.util.*;
@@ -83,6 +84,41 @@ public class QuicCrypto {
     public static final int GCM_TAG_LENGTH = 16;
     public static final int GCM_NONCE_LENGTH = 12;
 
+    public static final byte[] QUIC_VERSION_1_RETRY_KEY = {
+            (byte) 0xbe, (byte) 0x0c, (byte) 0x69, (byte) 0x0b, (byte) 0x9f, (byte) 0x66, (byte) 0x57, (byte) 0x5a,
+            (byte) 0x1d, (byte) 0x76, (byte) 0x6b, (byte) 0x54, (byte) 0xe3, (byte) 0x68, (byte) 0xc8, (byte) 0x4e
+    };
+    public static final byte[] QUIC_VERSION_1_RETRY_NONCE = {
+            (byte) 0x46, (byte) 0x15, (byte) 0x99, (byte) 0xd3, (byte) 0x5d, (byte) 0x63, (byte) 0x2b, (byte) 0xf2,
+            (byte) 0x23, (byte) 0x98, (byte) 0x25, (byte) 0xbb
+    };
+
+    public static final byte[] QUIC_VERSION_2_RETRY_KEY = {
+            (byte) 0x8f, (byte) 0xb4, (byte) 0xb0, (byte) 0x1b, (byte) 0x56, (byte) 0xac, (byte) 0x48, (byte) 0xe2,
+            (byte) 0x60, (byte) 0xfb, (byte) 0xcb, (byte) 0xce, (byte) 0xad, (byte) 0x7c, (byte) 0xcc, (byte) 0x92
+    };
+    public static final byte[] QUIC_VERSION_2_RETRY_NONCE = {
+            (byte) 0xd8, (byte) 0x69, (byte) 0x69, (byte) 0xbc, (byte) 0x2d, (byte) 0x7c, (byte) 0x6d, (byte) 0x99,
+            (byte) 0x90, (byte) 0xef, (byte) 0xb0, (byte) 0x4a
+    };
+
+    private static final ByteBuffer V1_RETRY_KEY_BUF;
+    private static final ByteBuffer V1_RETRY_NONCE_BUF;
+    private static final ByteBuffer V2_RETRY_KEY_BUF;
+    private static final ByteBuffer V2_RETRY_NONCE_BUF;
+
+    static {
+        V1_RETRY_KEY_BUF = ByteBuffer.allocateDirect(QUIC_VERSION_1_RETRY_KEY.length);
+        V1_RETRY_KEY_BUF.put(QUIC_VERSION_1_RETRY_KEY).flip();
+        V1_RETRY_NONCE_BUF = ByteBuffer.allocateDirect(QUIC_VERSION_1_RETRY_NONCE.length);
+        V1_RETRY_NONCE_BUF.put(QUIC_VERSION_1_RETRY_NONCE).flip();
+
+        V2_RETRY_KEY_BUF = ByteBuffer.allocateDirect(QUIC_VERSION_2_RETRY_KEY.length);
+        V2_RETRY_KEY_BUF.put(QUIC_VERSION_2_RETRY_KEY).flip();
+        V2_RETRY_NONCE_BUF = ByteBuffer.allocateDirect(QUIC_VERSION_2_RETRY_NONCE.length);
+        V2_RETRY_NONCE_BUF.put(QUIC_VERSION_2_RETRY_NONCE).flip();
+    }
+
     /**
      * Packet protection keys with the header protection key for a specific encryption level.
      */
@@ -106,7 +142,73 @@ public class QuicCrypto {
     private static KeystoreManager keystoreManager;
     public static  byte[] certChainBytes;
 
+    private static ByteBuffer retryTokenKeyBuf;
 
+    public static ByteBuffer retryTokenKeyBuf() {
+        return retryTokenKeyBuf;
+    }
+
+    public static NativeCrypto getRetryTokenCrypto() {
+        try {
+            PacketProtectionKeysWithHP keys = new PacketProtectionKeysWithHP(
+                    retryTokenKeyBuf(),
+                    null,
+                    null
+            );
+            return new NativeCrypto(keys, CipherMode.TLS_AES_128_GCM_SHA256_ID);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to initialize retry token crypto", e);
+        }
+    }
+
+    public static NativeCrypto getRetryIntegrityCryptoV1() {
+        PacketProtectionKeysWithHP keys = new PacketProtectionKeysWithHP(
+                V1_RETRY_KEY_BUF.duplicate(), QUIC_VERSION_1_RETRY_NONCE, null
+        );
+        try {
+            return new NativeCrypto(keys, CipherMode.TLS_AES_128_GCM_SHA256_ID);
+        } catch (QuicException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public static NativeCrypto getRetryIntegrityCryptoV2() {
+        PacketProtectionKeysWithHP keys = new PacketProtectionKeysWithHP(
+                V2_RETRY_KEY_BUF.duplicate(), QUIC_VERSION_2_RETRY_NONCE, null
+        );
+        try {
+            return new NativeCrypto(keys, CipherMode.TLS_AES_128_GCM_SHA256_ID);
+        } catch (QuicException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * Calculates the Retry Integrity Tag as defined in RFC 9001 Section 5.8.
+     *
+     * @param integrityCrypto The NativeCrypto instance configured for Retry integrity.
+     * @param version The QUIC version.
+     * @param pseudoPacket The pseudo-packet memory segment.
+     * @param tagOut The output buffer where the 16-byte tag will be written.
+     * @throws QuicException if tag calculation fails.
+     */
+    public static void writeRetryIntegrityTag(NativeCrypto integrityCrypto, QuicVersion version, java.lang.foreign.MemorySegment pseudoPacket, ByteBuffer tagOut) throws QuicException {
+        ByteBuffer nonceBuf = switch (version) {
+            case QUIC_VERSION_1 -> V1_RETRY_NONCE_BUF.duplicate();
+            case QUIC_VERSION_2 -> V2_RETRY_NONCE_BUF.duplicate();
+            default -> throw new QuicException("Unsupported version for Retry packet", QuicTransportError.PROTOCOL_VIOLATION);
+        };
+
+        try {
+            // Plaintext is empty for Retry Integrity Tag. Use a zero-length slice of tagOut 
+            // to avoid shared static buffers and extra allocations.
+            ByteBuffer emptyPlaintext = tagOut.duplicate().limit(tagOut.position());
+            integrityCrypto.encryptAead(emptyPlaintext, tagOut, pseudoPacket, nonceBuf);
+        } catch (Exception e) {
+            if (e instanceof QuicException) throw (QuicException) e;
+            throw new QuicException("Failed to calculate Retry Integrity Tag", e);
+        }
+    }
 
     public static void initKeystore() {
         // Install Conscrypt as the preferred security provider
@@ -117,6 +219,13 @@ public class QuicCrypto {
             QuicServerConfig config = QuicServerConfig.createDefault();
             keystoreManager = new KeystoreManager(config);
             certChainBytes = encodeCertificateChain();
+
+            byte[] keyBytes = sha256(getKeystoreManager().getPrivateKey().getEncoded());
+            byte[] retryTokenKey = Arrays.copyOf(keyBytes, 16);
+
+            retryTokenKeyBuf = ByteBuffer.allocateDirect(16);
+            retryTokenKeyBuf.put(retryTokenKey).flip();
+
             logger.info("Initialized KeystoreManager with default configuration");
         } catch (Exception e) {
             logger.warn("Failed to initialize KeystoreManager, will use mock certificates: {}", e.getMessage());
@@ -751,10 +860,10 @@ public class QuicCrypto {
         int tpStart = output.getPos();
 
         // original_destination_connection_id (param id 0x00, RFC 9000 В§18.2)
-        if (metadata.originalDCid != null && metadata.originalDCid.length > 0) {
+        if (metadata.originalDcid != null && metadata.originalDcid.length > 0) {
             QuicVarint.write(output, 0x00);                         // param id
-            QuicVarint.write(output, metadata.originalDCid.length); // param length
-            output.write(metadata.originalDCid);                      // param value
+            QuicVarint.write(output, metadata.originalDcid.length); // param length
+            output.write(metadata.originalDcid);                      // param value
         }
 
         // max_idle_timeout (param id 0x01)
@@ -818,6 +927,13 @@ public class QuicCrypto {
         QuicVarint.write(output, 0x0f);
         QuicVarint.write(output, 8);
         output.writeLong(cid);
+
+        // retry_source_connection_id (param id 0x0f)
+        if (metadata.retrySourceCid != null) {
+            QuicVarint.write(output, 0x10);
+            QuicVarint.write(output, metadata.retrySourceCid.length);
+            output.write(metadata.retrySourceCid);
+        }
 
 //        // version_information
         QuicVarint.write(output, 0x11);
@@ -1216,5 +1332,141 @@ public class QuicCrypto {
             throw new IllegalStateException("Failed to compute Stateless Reset Token", e);
         }
     }
+
+    /**
+     * Generates a retry token as per RFC 9000.
+     * The token consists of a timestamp, CID, and IP address, AEAD protected.
+     *
+     * @param crypto The NativeCrypto instance to use.
+     * @param buffer A pre-allocated direct ByteBuffer to use for encryption. 
+     *               Must have enough space for the token and 12-byte IV.
+     * @param timestamp The timestamp to include in the token.
+     * @param connectionId The connection ID (1 to 20 bytes).
+     * @param address The client's IP address.
+     * @return The AEAD-protected retry token length.
+     * @throws QuicException if generation fails.
+     */
+    public static int generateRetryToken(NativeCrypto crypto, ByteBuffer buffer, long timestamp, byte[] connectionId, InetSocketAddress address) throws QuicException {
+        if (connectionId.length < 1 || connectionId.length > 20) {
+            throw new QuicException("Invalid CID length for retry token: " + connectionId.length, QuicTransportError.INTERNAL_ERROR);
+        }
+        try {
+            byte[] ipBytes = address.getAddress().getAddress();
+            int port = address.getPort();
+
+            int start = buffer.position();
+
+            // Store IV at the beginning of the buffer
+            byte[] iv = new byte[GCM_NONCE_LENGTH];
+            secureRandom.get().nextBytes(iv);
+            buffer.put(iv);
+
+            // Plaintext: timestamp (8) + CID length (1) + CID (variable) + IP (variable) + Port (2)
+            int plaintextStart = buffer.position();
+            buffer.putLong(timestamp);
+            buffer.put((byte) connectionId.length);
+            buffer.put(connectionId);
+            buffer.put(ipBytes);
+            buffer.putShort((short) port);
+            int plaintextEnd = buffer.position();
+
+            buffer.position(plaintextStart);
+            buffer.limit(plaintextEnd);
+
+            // Prepare IV buffer for NativeCrypto
+            ByteBuffer ivBuf = ByteBuffer.allocateDirect(GCM_NONCE_LENGTH);
+            ivBuf.put(iv).flip();
+
+            crypto.encryptAeadInPlace(buffer, null, ivBuf);
+
+            int finalLength = buffer.limit() - start;
+            buffer.position(start);
+
+            return finalLength;
+        } catch (Exception e) {
+            if (e instanceof QuicException) throw (QuicException) e;
+            e.printStackTrace();
+            throw new QuicException("Failed to generate retry token", QuicTransportError.INTERNAL_ERROR);
+        }
+    }
+
+    /**
+     * Parses and decrypts a retry token.
+     *
+     * @param crypto The NativeCrypto instance to use.
+     * @param token The AEAD-protected retry token (IV + Ciphertext).
+     * @return The original timestamp and connection ID if valid.
+     * @throws QuicException if decryption or validation fails.
+     */
+    public static RetryTokenInfo parseRetryToken(NativeCrypto crypto, ByteBuffer token) throws QuicException {
+        // Min length: IV(12) + Tag(16) + Timestamp(8) + CIDLen(1) + CID(1) + IP(4) + Port(2) = 44
+        if (token.remaining() < GCM_NONCE_LENGTH + GCM_TAG_LENGTH + 8 + 1 + 1 + 4 + 2) {
+            throw new QuicException("Token too short", QuicTransportError.INVALID_TOKEN);
+        }
+
+        int start = token.position();
+        int limit = token.limit();
+
+        ByteBuffer ivBuf = ByteBuffer.allocateDirect(GCM_NONCE_LENGTH);
+        for (int i = 0; i < GCM_NONCE_LENGTH; i++) {
+            ivBuf.put(token.get());
+        }
+        ivBuf.flip();
+
+        int encryptedStart = token.position();
+
+        try {
+            crypto.decryptAeadInPlace(token, null, ivBuf);
+        } catch (QuicException e) {
+            throw new QuicException("Failed to decrypt retry token", QuicTransportError.INVALID_TOKEN);
+        }
+
+        if (token.remaining() < 8 + 1) {
+            token.position(start);
+            throw new QuicException("Token payload too short", QuicTransportError.INVALID_TOKEN);
+        }
+
+        RetryTokenInfo info;
+        try {
+            long timestamp = token.getLong();
+            int cidLength = token.get() & 0xFF;
+            if (cidLength < 1 || cidLength > 20 || token.remaining() < cidLength) {
+                throw new QuicException("Invalid CID length in token", QuicTransportError.INVALID_TOKEN);
+            }
+            byte[] connectionId = new byte[cidLength];
+            token.get(connectionId);
+
+            byte[] parsedIp = new byte[token.remaining() - 2];
+            token.get(parsedIp);
+
+            int parsedPort = Short.toUnsignedInt(token.getShort());
+            info = new RetryTokenInfo(timestamp, connectionId, java.net.InetAddress.getByAddress(parsedIp), parsedPort);
+        } catch (java.net.UnknownHostException | QuicException e) {
+            // Re-encrypt even on failure to maintain buffer state if possible
+            // but for simplicity and security, we just throw after re-encrypting if we can.
+            throw (e instanceof QuicException) ? (QuicException) e : new QuicException("Invalid IP address in token", QuicTransportError.INVALID_TOKEN);
+        } finally {
+            // Re-encrypt in place
+            int decryptedLimit = token.limit();
+            int plaintextLength = decryptedLimit - encryptedStart;
+            ivBuf.rewind();
+            try {
+                // Restore limit to original so we can slice correctly
+                token.limit(limit);
+                // We use slice to avoid messing with token's position/limit during encryption
+                ByteBuffer plaintextView = token.slice(encryptedStart, plaintextLength);
+                ByteBuffer ciphertextView = token.slice(encryptedStart, plaintextLength + GCM_TAG_LENGTH);
+                crypto.encryptAead(plaintextView, ciphertextView, null, ivBuf);
+            } catch (Exception e) {
+                // This shouldn't happen if decryption succeeded
+            }
+            token.limit(limit);
+            token.position(start);
+        }
+
+        return info;
+    }
+
+    public record RetryTokenInfo(long timestamp, byte[] connectionId, java.net.InetAddress ip, int port) {}
 }
 

@@ -68,6 +68,10 @@ public class AppDataPriorityQueue {
         heap.insertOrUpdate(new Entry(applicationDataQueue, data, timeToSend));
     }
 
+    public int getSize() {
+        return heap.size();
+    }
+
     /**
      * Return the nearest time in the queue.
      * @return timestamp in nanos.

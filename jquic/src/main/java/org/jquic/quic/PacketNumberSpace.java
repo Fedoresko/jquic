@@ -33,8 +33,8 @@ public class PacketNumberSpace {
     // RFC 9002: Loss detection constants
     private static final double K_TIME_THRESHOLD = 9.0 / 8.0; // 1.125
     private static final int K_PACKET_THRESHOLD = 3; // Packet reordering threshold
-    private static final int K_GRANULARITY_MS = 1; // Timer granularity: 1ms
     private static final int K_INITIAL_RTT_MS = 333; // Initial RTT estimate: 333ms
+    public static final int MIN_LOSS_TIMEOUT = 100;
 
     public final PacketPhase phase; // For logging: "Initial", "Handshake", "Application"
 
@@ -79,9 +79,6 @@ public class PacketNumberSpace {
     long bytesLostInWindow = 0;
     long bytesLostInLastRtt = 0;
 
-    // Min-heap ordered by per-packet loss deadline for O(log n) loss detection.
-    private final TimeoutHeap<SentPacket> lossHeap = new TimeoutHeap<>(SentPacket.class);
-
     public PacketNumberSpace(PacketPhase phase) {
         this.phase = phase;
     }
@@ -123,12 +120,9 @@ public class PacketNumberSpace {
         sentPackets.put(packetNumber, packet);
 
         // Insert into the loss heap with an initial deadline based on the current RTT estimate.
-        long initialLossDelay = Math.max(
-                (long) (K_TIME_THRESHOLD * Math.max(smoothedRtt, latestRtt)),
-                K_GRANULARITY_MS);
+        long initialLossDelay = Math.max((long) (K_TIME_THRESHOLD * Math.max(smoothedRtt, latestRtt)), MIN_LOSS_TIMEOUT);
 
         packet.lossDeadline = sentTime + initialLossDelay;
-        lossHeap.insertOrUpdate(packet);
     }
 
     /**
@@ -238,7 +232,6 @@ public class PacketNumberSpace {
                     ackCallback.onPacketAcknowledged(pn, packet);
                 }
                 packet.getUnencryptedPayload().release();
-                lossHeap.remove(packet);
             }
             logger.debug("{}: Packet {} acked and removed", phase, pn);
         }
@@ -317,10 +310,6 @@ public class PacketNumberSpace {
      * Detects lost packets using time and packet thresholds (RFC 9002 Section 6.1).
      * Returns map of lost packet numbers to their SentPacket metadata for retransmission.
      * The caller will re-wrap the unencrypted payload with a NEW packet number.
-     *
-     * <p>Uses {@link #lossHeap} to find time-threshold candidates in O(log n) rather than
-     * scanning all unacked packets. The packet-number threshold is still checked for every
-     * candidate polled from the heap, and separately for all packets below the threshold.</p>
      */
     public java.util.Map<Long, SentPacket> detectLostPackets(long timestampMs) {
         java.util.Map<Long, SentPacket> lostPackets = new HashMap<>();
@@ -331,48 +320,24 @@ public class PacketNumberSpace {
             return lostPackets;
         }
 
-        // Calculate loss delay: max(time_threshold * max(smoothedRtt, latestRtt), kGranularity)
-        long lossDelay = (long) (K_TIME_THRESHOLD * Math.max(smoothedRtt, latestRtt));
-        lossDelay = Math.max(lossDelay, K_GRANULARITY_MS);
-
         // Packet threshold: declare lost if far enough below largest acked
         long lostPacketThreshold = largestAckedPacketNumber - K_PACKET_THRESHOLD;
 
         // --- Packet-threshold pass ---
         // headMap(lostPacketThreshold) returns only the entries with pn < lostPacketThreshold,
         // so we visit exactly the candidates without scanning the rest of the map.
-        for (Map.Entry<Long, SentPacket> entry : sentPackets.headMap(lostPacketThreshold).entrySet()) {
-            long pn = entry.getKey();
-            SentPacket packet = entry.getValue();
-            lostPackets.put(pn, packet);
-            logger.info("{}: Packet {} declared lost (packet threshold: {} below largest acked {})",
-                    phase, pn, largestAckedPacketNumber - pn, largestAckedPacketNumber);
-        }
 
-        // --- Time-threshold pass: poll heap entries whose deadline has passed ---
-        // Each packet's deadline was fixed at send time using the RTT estimate current then.
-        while (!lossHeap.isEmpty() && lossHeap.peek().getTimeoutTimestamp() <= timestampMs) {
-            SentPacket packet = lossHeap.poll();
-            // Guard: skip if already removed (acked) or above the ackable threshold.
-            if (!sentPackets.containsKey(packet.packetNumber)) continue;
-            if (packet.packetNumber >= largestAckedPacketNumber) continue;
-            lostPackets.put(packet.packetNumber, packet);
-            logger.info("{}: Packet {} declared lost (time threshold: sent {}ms ago, threshold: {}ms)",
-                    phase, packet.packetNumber, timestampMs - packet.sentTime, lossDelay);
-        }
-
-        // Remove lost packets from tracking (heap entries already removed by poll above;
-        // packet-threshold losses need explicit heap removal).
-        for (Map.Entry<Long, SentPacket> entry : lostPackets.entrySet()) {
-            sentPackets.remove(entry.getKey());
-            if (entry.getValue().getTimeoutHeapIndex() != -1) {
-                lossHeap.remove(entry.getValue());
+        while (!sentPackets.isEmpty()) {
+            Map.Entry<Long, SentPacket> entry = sentPackets.firstEntry();
+            if (entry.getKey() < lostPacketThreshold ||
+                entry.getValue().getTimeoutTimestamp() < timestampMs
+            ) {
+                lostPackets.put(sentPackets.pollFirstEntry().getKey(), entry.getValue());
+                lossTime = timestampMs;
+            } else {
+                break;
             }
         }
-
-        // Update loss time: the next expiry is simply the heap minimum - O(1).
-        SentPacket next = lossHeap.peek();
-        lossTime = (next != null) ? next.getTimeoutTimestamp() : 0;
 
         for (SentPacket packet : lostPackets.values()) {
             lostWindow[(int)(timestampMs % timeWindowMs)] += packet.unencryptedPayload.buf().remaining();

@@ -23,7 +23,7 @@ import org.slf4j.LoggerFactory;
 import java.util.concurrent.locks.LockSupport;
 
 public class ApplicationWorker extends StreamWorker {
-    private static Logger logger = LoggerFactory.getLogger(ApplicationWorker.class);
+    private static final Logger logger = LoggerFactory.getLogger(ApplicationWorker.class);
     private static final int FRAME_QUEUE_CAPACITY = 65536; // Power of 2 for performance
     private static final int ACK_QUEUE_CAPACITY = 16384; // Power of 2 for performance
 
@@ -55,7 +55,7 @@ public class ApplicationWorker extends StreamWorker {
 
     public void enqueueAck(StreamManager manager, long streamId, long offset, long length) {
         // Transfer ownership of the ByteBuffer to the worker thread via the queue
-        ackQueue.relaxedOffer(new AckTask(manager, streamId, offset, length));
+        ackQueue.offer(new AckTask(manager, streamId, offset, length));
 
         if (isParked) {
             parkCounter++;

@@ -17,6 +17,7 @@ package org.jquic.quic.linux;
 
 import org.jquic.quic.QuicDatagramChannel;
 import org.jquic.quic.SelectorThread;
+import org.jquic.quic.buffers.BufferPool;
 import org.jquic.quic.buffers.PoolBuffer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -53,7 +54,6 @@ public class LinuxEcnSocket implements AutoCloseable {
         MethodHandle mh_send_batch = null;
         MethodHandle mh_send_batch_ecn = null;
         MethodHandle mh_send_ecn = null;
-        MethodHandle mh3 = null;
         try {
             NativeUtil.loadLib("libquic_ecn");
             SymbolLookup lookup = SymbolLookup.loaderLookup();
@@ -222,15 +222,13 @@ public class LinuxEcnSocket implements AutoCloseable {
     private List<QuicDatagramChannel.ReceivedPacket> receiveBatchImpl(PoolBuffer[] buffers, MethodHandle handle) throws IOException {
         int maxCount = buffers.length;
         try {
-            int maxLen = 0;
+            int maxLen = BufferPool.READ_BUFFER_SIZE;
             for (int i = 0; i < maxCount; i++) {
                 ByteBuffer buf = buffers[i].buf().clear();
                 MemorySegment seg = buf.isDirect()
                         ? MemorySegment.ofBuffer(buf)
                         : MemorySegment.ofArray(buf.array()).asSlice(buf.arrayOffset() + buf.position(), buf.remaining());
                 dataPtrsRcv.setAtIndex(ValueLayout.ADDRESS, i, seg);
-
-                maxLen = Math.max(maxLen, buf.remaining());
             }
 
             int received = (int) handle.invokeExact(fd, dataPtrsRcv, maxLen, batchMetadata, maxCount);

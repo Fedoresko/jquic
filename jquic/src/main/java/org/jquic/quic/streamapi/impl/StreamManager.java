@@ -402,7 +402,7 @@ public class StreamManager implements ConnectionStreamManager {
         boolean needWake = queue.put(new ApplicationData(connection, flightControl, streamId, data), 10_000L,
                 1_000_000_000L);
         if (needWake) {
-            wakeQueue.relaxedOffer(queue);
+            wakeQueue.offer(queue);
         }
     }
 

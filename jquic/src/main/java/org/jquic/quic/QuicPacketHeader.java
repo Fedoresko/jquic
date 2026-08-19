@@ -21,10 +21,6 @@ import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.crypto.Cipher;
-import java.lang.foreign.Arena;
-import java.lang.foreign.MemorySegment;
-import java.lang.foreign.ValueLayout;
 import java.nio.ByteBuffer;
 import java.util.Objects;
 
@@ -190,6 +186,10 @@ public class QuicPacketHeader {
             int pos = packet.position();
             byte flags = packet.get();
 
+            if (flags == 0x00) {
+                return new PacketSummary(PacketType.PADDING, null, null, null, null);
+            }
+
             if ((flags & 0x40) == 0) {
                 log.info("Not valid QUIC packet");
                 return null; //not valid QIUC packet
@@ -200,7 +200,7 @@ public class QuicPacketHeader {
                 packet.get(destinationCid);
 
                 packet.position(pos);
-                return new PacketSummary(PacketType.ONE_RTT, QuicVersion.UNKNOWN, destinationCid, null); // Not long header
+                return new PacketSummary(PacketType.ONE_RTT, QuicVersion.UNKNOWN, destinationCid, null, null); // Not long header
             }
 
             QuicVersion version = QuicVersion.of(packet.getInt());
@@ -215,14 +215,25 @@ public class QuicPacketHeader {
             byte[] sourceCid = new byte[scidLen];
             packet.get(sourceCid);
 
+            PacketType type = fromFlags(version, flags);
+            ByteBuffer token = null;
+            if (type == PacketType.INITIAL) {
+                long tokenLen = QuicVarint.read(packet);
+                token = packet.slice().limit((int) tokenLen);
+                packet.position(packet.position() + (int) tokenLen);
+            } else if (type == PacketType.RETRY) {
+                token = packet.slice();
+                packet.position(packet.limit());
+            }
+
             packet.position(pos);
-            return new PacketSummary(fromFlags(version, flags), version, destinationCid, sourceCid);
+            return new PacketSummary(type, version, destinationCid, sourceCid, token);
         } catch (Exception e) {
             return null;
         }
     }
 
-    public record PacketSummary(PacketType type, QuicVersion version, byte[] dcid, byte[] scid) {}
+    public record PacketSummary(PacketType type, QuicVersion version, byte[] dcid, byte[] scid, ByteBuffer token) {}
 
     private static PacketType fromFlags(QuicVersion quicVersion, byte flags) {
         int typeField = (flags & 0x30) >> 4;
@@ -404,7 +415,8 @@ public class QuicPacketHeader {
         ZERO_RTT,
         HANDSHAKE,
         RETRY,
-        ONE_RTT;
+        ONE_RTT,
+        PADDING;
 
         public boolean isLongHeader() {
             return this != ONE_RTT;
