@@ -13,13 +13,30 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.jquic.quic.streamapi;
+package org.jquic.quic.paths;
 
-import org.jquic.quic.packets.PacketNumberSpace;
-import org.jquic.quic.streamapi.frames.ProtocolFrame;
+import org.jctools.queues.MpscArrayQueue;
 
-public interface ConnectionStreamManager extends PacketNumberSpace.AckCallback {
-    void onProtocolFrame(ProtocolFrame frame);
-    void onConnectionClose();
+public class SimpleFrameQueue implements FrameSource {
+    public static final int CAPACITY = 1000;
+    private final MpscArrayQueue<Frame> poolBuffers = new MpscArrayQueue<>(CAPACITY);
+
+    public void offer(Frame data) {
+        poolBuffers.add(data);
+    }
+
+    @Override
+    public Frame poll() {
+        return poolBuffers.poll();
+    }
+
+    @Override
+    public boolean isEmpty() {
+        return poolBuffers.isEmpty();
+    }
+
+    public void clear() {
+        poolBuffers.drain(f->f.data().release());
+    }
 }
 

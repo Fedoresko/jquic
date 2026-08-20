@@ -13,13 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.jquic.quic.streamapi;
+package org.jquic.quic.paths;
 
-import org.jquic.quic.packets.PacketNumberSpace;
-import org.jquic.quic.streamapi.frames.ProtocolFrame;
+import org.jquic.quic.buffers.PoolBuffer;
+import org.jquic.quic.packets.PacketPhase;
 
-public interface ConnectionStreamManager extends PacketNumberSpace.AckCallback {
-    void onProtocolFrame(ProtocolFrame frame);
-    void onConnectionClose();
-}
-
+public record Frame(PoolBuffer data, PacketPhase phase, boolean ackEliciting) {}

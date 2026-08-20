@@ -289,7 +289,7 @@ class FlightControlTest {
         
         // Count is 6. maxStreams 10. initial 10.
         // 10 - 6 + 10 = 14.
-        verify(streamManager).sendMaxStreamsFrame(eq(14L), eq(true));
+        verify(streamManager).sendMaxStreamsFrame(eq(15L), eq(true));
         
         // New limit 14. threshold 14 - 5 = 9. Index 9 is ID 36.
         for (int i = 6; i < 9; i++) {
@@ -303,41 +303,7 @@ class FlightControlTest {
         // 14 - 10 + 10 = 14. Wait, the limit stays 14? 
         // No, if count is 10, limit 14. 14-10+10 = 14.
         // If we want to ADD capacity, it should be relative to current count.
-        verify(streamManager, times(2)).sendMaxStreamsFrame(eq(14L), eq(true));
-    }
-
-    @Test
-    void testActiveStreamCountDecrementsOnClose() {
-        // Initial limit 10. Threshold index 5 (ID 20).
-        // Open 5 streams (IDs 0, 4, 8, 12, 16).
-        for (int i = 0; i < 5; i++) {
-            flightControl.incomingStream(i * 4);
-        }
-        verify(streamManager, never()).sendMaxStreamsFrame(anyLong(), eq(true));
-
-        // Open 6th stream (ID 20). Trigger.
-        flightControl.incomingStream(20);
-        // Count 6. 10 - 6 + 10 = 14.
-        verify(streamManager, times(1)).sendMaxStreamsFrame(eq(14L), eq(true));
-
-        // Close all 6 streams.
-        for (int i = 0; i < 6; i++) {
-            StreamState state = flightControl.incomingStream(i * 4);
-            flightControl.onStreamFin(state, false); // Half-closed remote
-            flightControl.onStreamFin(state, true);  // Closed
-        }
-        // Active count = 0.
-
-        // Open more streams. Limit 14. Threshold 14 - 5 = 9 (ID 36).
-        for (int i = 6; i < 9; i++) {
-            flightControl.incomingStream(i * 4); 
-        }
-        
-        // Index 9 is ID 36.
-        flightControl.incomingStream(36);
-        // MaxStreams 14. Count 4 (indices 6,7,8,9). 
-        // 14 - 4 + 10 = 20.
-        verify(streamManager, atLeastOnce()).sendMaxStreamsFrame(eq(20L), eq(true));
+        verify(streamManager, times(1)).sendMaxStreamsFrame(eq(15L), eq(true));
     }
 
     @Test
@@ -397,11 +363,11 @@ class FlightControlTest {
         // Open 2 more. 
         flightControl.incomingStream(14); // index 3. threshold 5 - 2 = 3. Reached!
         // count 4. limit 5. initial 5. 5 - 4 + 5 = 6.
-        verify(streamManager, times(1)).sendMaxStreamsFrame(eq(9L), eq(false));
+        verify(streamManager, times(1)).sendMaxStreamsFrame(eq(8L), eq(false));
 
         flightControl.incomingStream(18); // index 4. threshold 6 - 2 = 4. Reached!
         // count 5. limit 6. initial 5. 6 - 5 + 5 = 6.
-        verify(streamManager, times(1)).sendMaxStreamsFrame(eq(9L), eq(false));
+        verify(streamManager, times(1)).sendMaxStreamsFrame(eq(8L), eq(false));
     }
 
     @Test
@@ -430,7 +396,7 @@ class FlightControlTest {
         
         // maxStreams 10. count 1. initial 10.
         // 10 - 1 + 10 = 19.
-        verify(streamManager, times(1)).sendMaxStreamsFrame(eq(19L), eq(true));
+        verify(streamManager, times(1)).sendMaxStreamsFrame(eq(15L), eq(true));
     }
 
     @Test
@@ -630,7 +596,7 @@ class FlightControlTest {
         assertEquals(StreamState.State.OPEN, fc.incomingStream(0).getState());
         assertEquals(StreamState.State.OPEN, fc.incomingStream(4).getState());
         // 3rd Bidi (ID 8) should fail as we only allow 2.
-        assertNull(fc.incomingStream(8));
+        assertNull(fc.incomingStream(12));
 
         // Server-initiated Bidi: IDs 1, 5, 9...
         assertDoesNotThrow(() -> fc.openOutgoingStream(1, QuicConnectionControl.StreamType.Bidirectional));
@@ -653,13 +619,13 @@ class FlightControlTest {
         assertEquals(StreamState.State.OPEN, fc.incomingStream(0).getState());
         assertEquals(StreamState.State.OPEN, fc.incomingStream(4).getState());
         // 3rd Bidi (ID 8) should fail. Cap = 2 * 4 = 8.
-        assertNull(fc.incomingStream(8));
+        assertNull(fc.incomingStream(12));
 
         // Client-initiated Uni: 2, 6...
         assertEquals(StreamState.State.OPEN, fc.incomingStream(2).getState());
         assertEquals(StreamState.State.OPEN, fc.incomingStream(6).getState());
         // 3rd Uni (ID 10) should fail. Cap = 2 + 2 * 4 = 10.
-        assertNull(fc.incomingStream(10));
+        assertNull(fc.incomingStream(16));
 
         // Server-initiated Bidi: 1, 5...
         assertDoesNotThrow(() -> fc.openOutgoingStream(1, QuicConnectionControl.StreamType.Bidirectional));

@@ -15,10 +15,10 @@
  */
 package org.jquic.quic.streamapi.impl;
 
-import org.jctools.queues.MessagePassingQueue;
 import org.jquic.quic.*;
 import org.jquic.quic.buffers.ChunkedOutputStreamWithAmendments;
 import org.jquic.quic.buffers.PoolBuffer;
+import org.jquic.quic.packets.PacketNumberSpace;
 import org.jquic.quic.streamapi.*;
 import org.jquic.quic.streamapi.frames.*;
 import org.jquic.quic.struct.TriStateQueue;
@@ -49,7 +49,7 @@ public class StreamManager implements ConnectionStreamManager {
     private static final Logger logger = LoggerFactory.getLogger(StreamManager.class);
     public static final int STREAM_BUFFER_CAPACITY = 50_000;
     public static final int DATAGRAM_FRAMES = -1;
-    public static final int SERVICE_DATA = -2;
+    public static final int EXPECTED_ACKS_SPACE = 60;
     private final QuicStreamResponseImpl datagramConnectionControl = new QuicStreamResponseImpl(null);
 
     private final QuicConnection connection;
@@ -60,9 +60,6 @@ public class StreamManager implements ConnectionStreamManager {
     // Stream management
     private final Map<Long, StreamBuffer> streamBuffers = new HashMap<>();
     private final Map<Long, ChunkedOutputStreamWithAmendments> streamOutputs = new HashMap<>();
-    private final MessagePassingQueue<TriStateQueue<ApplicationData>> wakeQueue;
-
-    private final TriStateQueue<ApplicationData> serviceQueue = new TriStateQueue<>(ApplicationData.EMPTY, ApplicationData.PROCESSED);
 
     // Stream counters - server always uses odd stream IDs
     private long nextServerBidiStreamId = 1;
@@ -70,12 +67,11 @@ public class StreamManager implements ConnectionStreamManager {
 
     public StreamManager(QuicConnection connection,
                          QuicApplicationProtocol protocol,
-                         ApplicationWorker streamWorker, MessagePassingQueue<TriStateQueue<ApplicationData>> wakeQueue) {
+                         ApplicationWorker streamWorker) {
         this.connection = connection;
         this.streamWorker = streamWorker;
         flightControl = new FlightControl(connection.connectionMetadata.serverInitialLimits,
                 connection.connectionMetadata.clientMetadata.initialStreamLimits, this);
-        this.wakeQueue = wakeQueue;
 
         handler = protocol.getConnectionHandler().apply(connection.getConnectionId());
         handler.setOutgoingDatagramStream(createOutputStream(new StreamState(DATAGRAM_FRAMES, QuicConnectionControl.StreamType.Bidirectional, Long.MAX_VALUE, Long.MAX_VALUE)));
@@ -295,9 +291,7 @@ public class StreamManager implements ConnectionStreamManager {
         }
 
         private void handleFrame(StreamsBlockedFrameData frame) {
-            long limit = frame.limit;
-            logger.debug("Peer is blocked on {} streams at limit {}",
-                    frame.bidirectional ? "bidi" : "uni", limit);
+            flightControl.onStreamsBlocked(frame.limit, frame.bidirectional);
         }
 
         /**
@@ -345,7 +339,10 @@ public class StreamManager implements ConnectionStreamManager {
     private @NonNull ChunkedOutputStreamWithAmendments createOutputStream(StreamState state) {
         long streamId = state.getStreamId();
         ChunkedOutputStreamWithAmendments out = ChunkedOutputStreamWithAmendments.createNonWrapping(connection.getBufferPool(),
-                (int) connection.connectionMetadata.clientMetadata.maxUdpPayloadSize - GCM_TAG_LENGTH - QuicFrameBuilder.MAX_SHORT_HEADER_LENGTH,
+                (int) connection.connectionMetadata.clientMetadata.maxUdpPayloadSize
+                        - GCM_TAG_LENGTH
+                        - QuicFrameBuilder.MAX_SHORT_HEADER_LENGTH
+                        - EXPECTED_ACKS_SPACE,
                 GCM_TAG_LENGTH + QuicFrameBuilder.MAX_SHORT_HEADER_LENGTH,
                 (buf, offset, fin) -> (streamId == DATAGRAM_FRAMES) ?
                         StreamFrameWriter.encodeDatagramFrame(buf.duplicate(), true)
@@ -375,7 +372,7 @@ public class StreamManager implements ConnectionStreamManager {
         int dataSize = data.buf().remaining();
 
         while (streamId != DATAGRAM_FRAMES && !flightControl.canSend(state, dataSize)) {
-            long smoothedRtt = connection.getApplicationSpace().getSmoothedRtt();
+            long smoothedRtt = connection.getConnectionPathController().getSmoothedRtt();
             LockSupport.parkNanos(smoothedRtt * 1_000_000L);
             if (connection.getState() != QuicConnection.State.ESTABLISHED) {
                 data.release();
@@ -400,9 +397,9 @@ public class StreamManager implements ConnectionStreamManager {
 
     private void trySendData(TriStateQueue<ApplicationData> queue, long streamId, PoolBuffer data) throws TimeoutException {
         boolean needWake = queue.put(new ApplicationData(connection, flightControl, streamId, data), 10_000L,
-                1_000_000_000L);
+                60_000_000_000L);
         if (needWake) {
-            wakeQueue.offer(queue);
+            connection.getConnectionPathController().appendsAppData(queue);
         }
     }
 
@@ -440,7 +437,7 @@ public class StreamManager implements ConnectionStreamManager {
     void sendMaxStreamsFrame(long maximumStreams, boolean bidirectional) {
         PoolBuffer frame = StreamFrameWriter.encodeMaxStreamsFrame(connection.getBufferPool(), maximumStreams, bidirectional);
         try {
-            trySendData(serviceQueue, SERVICE_DATA, frame);
+            connection.send1RttPacket(frame);
             logger.debug("Sent MAX_STREAMS frame: maxStreams={}, bidirectional={}", maximumStreams, bidirectional);
         } catch (Exception e) {
             logger.error("Failed to send MAX_STREAMS frame", e);
@@ -450,7 +447,7 @@ public class StreamManager implements ConnectionStreamManager {
     void sendMaxStreamDataFrame(long streamId, long maximumData) {
         PoolBuffer frame = StreamFrameWriter.encodeMaxStreamDataFrame(connection.getBufferPool(), streamId, maximumData);
         try {
-            trySendData(serviceQueue, SERVICE_DATA, frame);
+            connection.send1RttPacket(frame);
         } catch (Exception e) {
             logger.warn("Failed to send MAX_STREAM_DATA frame", e);
         }
@@ -459,7 +456,7 @@ public class StreamManager implements ConnectionStreamManager {
     void sendMaxDataFrame(long maximumData) {
         PoolBuffer frame = StreamFrameWriter.encodeMaxDataFrame(connection.getBufferPool(), maximumData);
         try {
-            trySendData(serviceQueue, SERVICE_DATA, frame);
+            connection.send1RttPacket(frame);
             logger.warn("Sent MAX_DATA frame: maxData={}", maximumData);
         } catch (Exception e) {
             logger.error("Failed to send MAX_DATA frame", e);
@@ -469,7 +466,7 @@ public class StreamManager implements ConnectionStreamManager {
     void sendResetStreamFrame(long streamId, long errorCode, long finalSize) {
         PoolBuffer frame = StreamFrameWriter.encodeResetStreamFrame(connection.getBufferPool(), streamId, errorCode, finalSize);
         try {
-            trySendData(serviceQueue, SERVICE_DATA, frame);
+            connection.send1RttPacket(frame);
         } catch (Exception e) {
             logger.error("Failed to send RESET_STREAM frame", e);
         }
@@ -478,7 +475,7 @@ public class StreamManager implements ConnectionStreamManager {
     void sendStopSendingFrame(long streamId, long errorCode) {
         PoolBuffer frame = StreamFrameWriter.encodeStopSendingFrame(connection.getBufferPool(), streamId, errorCode);
         try {
-            trySendData(serviceQueue, SERVICE_DATA, frame);
+            connection.send1RttPacket(frame);
         } catch (Exception e) {
             logger.error("Failed to send STOP_SENDING frame", e);
         }
@@ -487,7 +484,7 @@ public class StreamManager implements ConnectionStreamManager {
     void sendStreamDataBlockedFrame(long streamId, long limit) {
         PoolBuffer frame = StreamFrameWriter.encodeStreamDataBlockedFrame(connection.getBufferPool(), streamId, limit);
         try {
-            trySendData(serviceQueue, SERVICE_DATA, frame);
+            connection.send1RttPacket(frame);
         } catch (Exception e) {
             logger.error("Failed to send STREAM_DATA_BLOCKED frame", e);
         }
@@ -503,7 +500,7 @@ public class StreamManager implements ConnectionStreamManager {
     void sendDataBlockedFrame(long limit) {
         PoolBuffer frame = StreamFrameWriter.encodeDataBlockedFrame(connection.getBufferPool(), limit);
         try {
-            trySendData(serviceQueue, SERVICE_DATA, frame);
+            connection.send1RttPacket(frame);
             logger.debug("Sent DATA_BLOCKED frame: limit={}", limit);
         } catch (Exception e) {
             logger.error("Failed to send DATA_BLOCKED frame", e);

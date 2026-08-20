@@ -18,50 +18,76 @@ package org.jquic.quic.paths;
 import org.jquic.quic.*;
 import org.jquic.quic.buffers.PoolBuffer;
 import org.jquic.quic.buffers.WriteBufferPool;
-import org.jquic.quic.crypto.QuicCrypto;
 import org.jquic.quic.linux.ECT;
+import org.jquic.quic.packets.PacketNumberSpace;
+import org.jquic.quic.packets.PacketPhase;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.net.SocketAddress;
+import java.net.InetSocketAddress;
+import java.nio.BufferOverflowException;
 import java.nio.ByteBuffer;
-import java.util.Deque;
-import java.util.LinkedList;
+import java.util.*;
+
+import static org.jquic.quic.crypto.QuicCrypto.GCM_TAG_LENGTH;
 
 public class DatagramBuilder {
     private static final Logger logger = LoggerFactory.getLogger(DatagramBuilder.class);
     private final byte[] connectionIdBytes;
     private final WriteBufferPool writeBufferPool;
-    private final ConnectionPathController connectionPathController;
-    private final ECT ectMarking;
-    private final SocketAddress dest;
+    private ECT ectMarking;
     private final ConnectionMetadata connectionMetadata;
-    private DatagramToSend packet;
-    private boolean hasAck;
-    private boolean hasInitial = false;
+    private final List<Frame> framesToSend = new ArrayList<>();
+    private DatagramToSend readyPacket;
+    private int framesToSendSumLen;
+    private final PacketNumberSpace space;
 
-    public record DatagramToSend(PacketSource packetSource, PoolBuffer data, ECT ectMarking, SocketAddress dest,
-                                 Deque<PacketToSend> linkedPackets) {
+    public void setEct(ECT ectMarking) {
+        this.ectMarking = ectMarking;
     }
 
-    public record PacketToSend(long timestamp, long packetNumber, PoolBuffer payload, boolean ackEliciting,
-                               PacketNumberSpace space) {
-    }
-
-
-    public DatagramBuilder(byte [] connectionIdBytes, WriteBufferPool writeBufferPool, ConnectionPathController connectionPathController, ECT ectMarking, SocketAddress dest, ConnectionMetadata connectionMetadata) {
+    public DatagramBuilder(byte [] connectionIdBytes, WriteBufferPool writeBufferPool, ECT ectMarking, ConnectionMetadata connectionMetadata, PacketNumberSpace space) {
         this.connectionIdBytes = connectionIdBytes;
         this.writeBufferPool = writeBufferPool;
-        this.connectionPathController = connectionPathController;
         this.ectMarking = ectMarking;
-        this.dest = dest;
         this.connectionMetadata = connectionMetadata;
+        this.space = space;
     }
 
-    public void flushPacket() {
-        if (packet != null && packet.data.buf().remaining() > 0) {
-            if (hasInitial) {
-                ByteBuffer buf = packet.data.buf();
+    public DatagramToSend getPacket(long currentTimeMs, InetSocketAddress dest, boolean forceBuffered, FrameSource frameSource) {
+        if (readyPacket == null) {
+            while (readyPacket == null && !frameSource.isEmpty()) {
+                enqueueOneMoreFrame(currentTimeMs, dest, frameSource.poll());
+            }
+            if (forceBuffered && readyPacket == null) {
+                flushPacket(currentTimeMs, dest);
+            }
+        }
+        DatagramToSend res = readyPacket;
+        readyPacket = null;
+        return res;
+    }
+
+    public void clear() {
+        if (readyPacket != null) {
+            readyPacket.data().release();
+            readyPacket = null;
+        }
+        for (Frame frame : framesToSend) {
+            frame.data().release();
+        }
+        framesToSend.clear();
+    }
+
+    public void flushPacket(long currentTimeMs, InetSocketAddress dest) {
+        if (readyPacket != null) {
+            throw new IllegalStateException("Packet already flushed");
+        }
+
+        PoolBuffer packet = wrapPacket(currentTimeMs, dest);
+        if (packet != null) {
+            if (space.phase == PacketPhase.INITIAL) {
+                ByteBuffer buf = packet.buf();
                 int size = buf.remaining();
                 if (size < 1200) { // Zero padding
                     int start = buf.position();
@@ -71,57 +97,74 @@ public class DatagramBuilder {
                     buf.limit(buf.position());
                     buf.position(start);
                 }
-                hasInitial = false;
             }
-            connectionPathController.appendPacket(packet, hasAck);
-            packet = null;
+            readyPacket = new DatagramToSend(PacketSource.NEW, packet, ectMarking, dest);
         }
     }
 
-    public void sendPing(PacketNumberSpace space) {
-        PoolBuffer poolBuffer = writeBufferPool.requestWriteBuffer();
+    private void enqueueOneMoreFrame(long currentTimeMs, InetSocketAddress dest, Frame frame) {
+        int maxHeaderLen = (space.phase == PacketPhase.APPLICATION) ? QuicFrameBuilder.MAX_SHORT_HEADER_LENGTH : QuicFrameBuilder.MAX_LONG_HEADER_LENGTH;
+        int remaining = (int) connectionMetadata.clientMetadata.maxUdpPayloadSize - GCM_TAG_LENGTH - maxHeaderLen - framesToSendSumLen;
 
-        int start = poolBuffer.buf().position();
-        byte[] packet = new byte[16];
-        packet[0] = (byte) 0x01;
-        poolBuffer.buf().put(packet);
-        poolBuffer.buf().limit(poolBuffer.buf().position());
-        poolBuffer.buf().position(start);
+        if (remaining < frame.data().buf().remaining() || (space.phase == PacketPhase.HANDSHAKE))
+        {
+            flushPacket(currentTimeMs, dest);
+        }
 
-        sendPacket(System.currentTimeMillis(), poolBuffer, space, false);
+        framesToSendSumLen += frame.data().buf().remaining();
+        framesToSend.add(frame);
     }
 
-    public void sendPacket(long currentTimestamp, PoolBuffer payload, PacketNumberSpace space, boolean isAck) {
-        if (packet == null) {
-            packet = new DatagramToSend(PacketSource.NEW, writeBufferPool.requestWriteBuffer(), ectMarking, dest, new LinkedList<>());
-            packet.data.buf().limit(packet.data.buf().position());
-            hasAck = false;
-        }
+    public PoolBuffer wrapPacket(long currentTimestamp, InetSocketAddress dest) {
+        if (framesToSend.isEmpty())
+            return null;
 
-        long packetNumber = space.allocatePacketNumber();
-        hasInitial |= space.phase == PacketNumberSpace.PacketPhase.INITIAL;
+        PoolBuffer payload = writeBufferPool.requestWriteBuffer();
 
-        int remaining = (int) connectionMetadata.clientMetadata.maxUdpPayloadSize - packet.data.buf().limit() + packet.data.buf().position();
+        boolean ackEliciting = false;
+        int start = payload.buf().position();
+        while (! framesToSend.isEmpty()) {
+            Frame frame = framesToSend.removeFirst();
+            ackEliciting |= frame.ackEliciting();
+            int reminder = payload.buf().remaining();
+            try {
+                payload.buf().put(frame.data().buf());
+            } catch (BufferOverflowException e) {
+                int maxHeaderLen = (space.phase == PacketPhase.APPLICATION) ? QuicFrameBuilder.MAX_SHORT_HEADER_LENGTH : QuicFrameBuilder.MAX_LONG_HEADER_LENGTH;
+                int remaining = (int) connectionMetadata.clientMetadata.maxUdpPayloadSize - GCM_TAG_LENGTH - maxHeaderLen;
 
-        if (remaining - payload.buf().remaining() < QuicCrypto.GCM_TAG_LENGTH || (!hasInitial && space.phase == PacketNumberSpace.PacketPhase.HANDSHAKE)) {
-            flushPacket();
-            packet = new DatagramToSend(PacketSource.NEW, writeBufferPool.requestWriteBuffer(), ectMarking, dest, new LinkedList<>());
-            packet.data.buf().limit(packet.data.buf().position());
-            hasAck = false;
-        }
+                logger.error("Strange overflow UDP max {} pack lim {} payload reminder {} (cap {}), frame size {} (send sum: {}, init start {})",
+                        connectionMetadata.clientMetadata.maxUdpPayloadSize, remaining, reminder, payload.buf().capacity(), frame.data().buf().remaining(),
+                        framesToSendSumLen, start);
+                throw e;
+            }
+            frame.data().release();
+        } //coalescing
 
-        hasAck |= isAck;
+        payload.buf().limit(payload.buf().position());
+        payload.buf().position(start);
+        framesToSendSumLen = 0;
 
-        int start = packet.data.buf().position();
+        return makePacket(currentTimestamp, dest, payload, ackEliciting);
+    }
 
+    public DatagramToSend makeDatagram(long currentTimestamp, InetSocketAddress dest, PoolBuffer payload, boolean ackEliciting) {
+        return new DatagramToSend(PacketSource.NEW,
+                makePacket(currentTimestamp, dest, payload, ackEliciting),
+                ectMarking,
+                dest
+                );
+    }
+
+    private PoolBuffer makePacket(long currentTimestamp, InetSocketAddress dest, PoolBuffer payload, boolean ackEliciting) {
+        PoolBuffer datagram = writeBufferPool.requestWriteBuffer();
         try {
-            packet.data.buf().position(packet.data.buf().limit());
-            packet.data.buf().limit(packet.data.buf().capacity());
+            long packetNumber = space.allocatePacketNumber();
 
             switch (space.phase) {
                 case INITIAL -> QuicPacketBuilder.buildInitialPacket(
                         connectionMetadata.quicVersion,
-                        packet.data,
+                        datagram,
                         connectionMetadata.clientCid,   // DCID = connection ID
                         connectionIdBytes,              // SCID = connection ID (server uses same)
                         packetNumber,
@@ -131,7 +174,7 @@ public class DatagramBuilder {
                 );
                 case HANDSHAKE -> QuicPacketBuilder.buildHandshakePacket(
                         connectionMetadata.quicVersion,
-                        packet.data,
+                        datagram,
                         connectionMetadata.clientCid,   // DCID = connection ID
                         connectionIdBytes,              // SCID = connection ID (server uses same)
                         packetNumber,
@@ -141,7 +184,7 @@ public class DatagramBuilder {
                 );
                 case APPLICATION -> QuicPacketBuilder.build1RttPacket(
                         connectionMetadata.quicVersion,
-                        packet.data,
+                        datagram,
                         connectionMetadata.clientCid,
                         packetNumber,
                         space.getLargestAckedPacketNumber(),
@@ -151,10 +194,13 @@ public class DatagramBuilder {
                 );
             }
 
-            packet.data.buf().position(start);
-            packet.linkedPackets.offer(new PacketToSend(currentTimestamp, packetNumber, payload, !isAck, space));
+            space.onPacketSent(currentTimestamp, packetNumber, payload, ackEliciting, dest);
+            return datagram;
         } catch (QuicException e) {
+            datagram.release();
+            payload.release();
             logger.error("Failed to build packet", e);
         }
+        return null;
     }
 }

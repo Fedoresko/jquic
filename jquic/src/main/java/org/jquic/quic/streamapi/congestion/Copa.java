@@ -32,7 +32,6 @@ public class Copa implements CongestionControl {
     private static final double DEFAULT_DELTA = 0.5;
 
     private long cwnd = INITIAL_CWND;
-    private double delta = DEFAULT_DELTA;
     private int velocity = 1;
     
     private int lastDirection = 0; // 1 for increase, -1 for decrease
@@ -42,7 +41,7 @@ public class Copa implements CongestionControl {
     private long lastUpdateTimeMs = -1;
 
     @Override
-    public long getDelay(long currentTimeMs, long dataSize, long connectionId, long streamId, long smoothedRtt, long lastRtt, long minRtt,
+    public long getDelay(long currentTimeMs, long dataSize, long connectionId, long smoothedRtt, long lastRtt, long minRtt,
                          long bytesAckedInRtt, long bytesLostInRtt, long bytesAckedInWindow, long bytesLostInWindow, long packetsAckedInWindow,
                          long lastLostTimeMs, long inFlightData, long receiveBufferRemaining, long sendBufferSize,
                          long ceCounter, long cePacketsInWindow) {
@@ -52,11 +51,11 @@ public class Copa implements CongestionControl {
         }
 
         // 1. Loss handling (Optional for Copa but good for robustness)
-        if (bytesLostInWindow > 0 && lastLostTimeMs > lastUpdateTimeMs) {
+//        if (bytesLostInWindow > 0 && lastLostTimeMs > lastUpdateTimeMs) {
             // Copa is delay-based, but we can do a small backoff on loss to be safe
             // However, pure Copa relies on delay. Let's add a mild backoff.
             // cwnd = Math.max(MIN_CWND, (long)(cwnd * 0.9));
-        }
+//        }
 
         // 2. Window update logic
         if (bytesAckedInWindow > 0 && minRtt > 0 && lastRtt > 0) {
@@ -70,6 +69,7 @@ public class Copa implements CongestionControl {
                     long queuingDelay = Math.max(0, lastRtt - minRtt);
 
                     long targetCwnd;
+                    double delta = DEFAULT_DELTA;
                     if (queuingDelay == 0) {
                         targetCwnd = Long.MAX_VALUE;
                     } else {

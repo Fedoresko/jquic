@@ -13,13 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.jquic.quic.streamapi;
+package org.jquic.quic.paths;
 
-import org.jquic.quic.packets.PacketNumberSpace;
-import org.jquic.quic.streamapi.frames.ProtocolFrame;
+import org.jquic.quic.PacketSource;
+import org.jquic.quic.buffers.PoolBuffer;
+import org.jquic.quic.linux.ECT;
 
-public interface ConnectionStreamManager extends PacketNumberSpace.AckCallback {
-    void onProtocolFrame(ProtocolFrame frame);
-    void onConnectionClose();
+import java.net.SocketAddress;
+
+public record DatagramToSend(PacketSource packetSource, PoolBuffer data, ECT ectMarking, SocketAddress dest) {
 }
-

@@ -13,14 +13,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.jquic.quic;
+package org.jquic.quic.packets;
 
 import org.jquic.quic.buffers.PoolBuffer;
+import org.jquic.quic.paths.ConnectionPathController;
 import org.jquic.quic.struct.SortedIntervals;
-import org.jquic.quic.struct.TimeoutHeap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.net.InetSocketAddress;
+import java.net.SocketAddress;
 import java.util.*;
 
 /**
@@ -33,8 +35,7 @@ public class PacketNumberSpace {
     // RFC 9002: Loss detection constants
     private static final double K_TIME_THRESHOLD = 9.0 / 8.0; // 1.125
     private static final int K_PACKET_THRESHOLD = 3; // Packet reordering threshold
-    private static final int K_INITIAL_RTT_MS = 333; // Initial RTT estimate: 333ms
-    public static final int MIN_LOSS_TIMEOUT = 100;
+    public static final int MIN_LOSS_TIMEOUT = 200;
 
     public final PacketPhase phase; // For logging: "Initial", "Handshake", "Application"
 
@@ -51,36 +52,20 @@ public class PacketNumberSpace {
     private final TreeMap<Long, SentPacket> sentPackets = new TreeMap<>();
     private long largestAckedPacketNumber = -1;
 
-    // Bytes acked during last RTT tracking
-    private long bytesAckedInLastRtt = 0;
-    private int[] ackWindow = new int[32];
-    private int[] lostWindow = new int[32];
-    private long[] packetWindowCE = new long[32];
-    private long lastTimeIdx = 0;
+    private ConnectionPathController connectionPathController;
 
-    private long serverCeCounter = -1;
+    public long clientEctCeCounter = 0;
+    public long clientEct0Counter = 0;
+    public long clientEct1Counter = 0;
 
-    // RTT tracking (RFC 9002 Section 5)
-    private int smoothedRtt = K_INITIAL_RTT_MS;
-    private int rttVar = K_INITIAL_RTT_MS / 2;
-    private int minRtt = Integer.MAX_VALUE;
-    private int latestRtt = 0;
-    private int timeWindowMs = 32;
-
-    // Loss detection
-    private long lossTime = 0; // Time at which next packet will be considered lost
-
-    long clientEctCeCounter = 0;
-    long clientEct0Counter = 0;
-    long clientEct1Counter = 0;
-    long intervalCePacketsThisWindow = 0;
-    long bytesAckedThisWindow = 0;
-    long packetsAckedThisWindow = 0;
-    long bytesLostInWindow = 0;
-    long bytesLostInLastRtt = 0;
+    private boolean isClosed = false;
 
     public PacketNumberSpace(PacketPhase phase) {
         this.phase = phase;
+    }
+
+    public void setConnectionPathController(ConnectionPathController connectionPathController) {
+        this.connectionPathController = connectionPathController;
     }
 
     /**
@@ -88,18 +73,6 @@ public class PacketNumberSpace {
      */
     public synchronized long allocatePacketNumber() {
         return nextPacketNumber++;
-    }
-
-    public void setTimeWindowMs(int timeWindowMs) {
-        if (timeWindowMs > 100) {
-            throw  new IllegalArgumentException("timeWindowMs can't be greater than 100ms");
-        }
-        if (timeWindowMs > 32) {
-            ackWindow = new int[timeWindowMs];
-            lostWindow = new int[timeWindowMs];
-            packetWindowCE = new long[timeWindowMs];
-            this.timeWindowMs = timeWindowMs;
-        }
     }
 
     /**
@@ -112,17 +85,38 @@ public class PacketNumberSpace {
      * @param packetNumber       The packet number
      * @param unencryptedPayload The unencrypted QUIC frames (for retransmission)
      * @param ackEliciting       Whether this packet requires an ACK
+     * @param destinationAddress peer address
      */
-    public void onPacketSent(long sentTime, long packetNumber, PoolBuffer unencryptedPayload, boolean ackEliciting) {
+    public void onPacketSent(long sentTime, long packetNumber, PoolBuffer unencryptedPayload, boolean ackEliciting, InetSocketAddress destinationAddress) {
+        if (isClosed) {
+            unencryptedPayload.release();
+            logger.warn("PacketNumberSpace is already closed");
+            return;
+        }
+
+        if (!ackEliciting) {
+            unencryptedPayload.release();
+            return;
+        }
         // Duplicate the buffer to preserve it for retransmission
         SentPacket packet = new SentPacket(packetNumber, sentTime, unencryptedPayload,
-                phase, ackEliciting);
+                phase, destinationAddress);
         sentPackets.put(packetNumber, packet);
 
-        // Insert into the loss heap with an initial deadline based on the current RTT estimate.
-        long initialLossDelay = Math.max((long) (K_TIME_THRESHOLD * Math.max(smoothedRtt, latestRtt)), MIN_LOSS_TIMEOUT);
+        long initialLossDelay = MIN_LOSS_TIMEOUT;
+        WindowedStatCounter windowedStatCounter = getWindowedStatCounter(destinationAddress);
+        if (windowedStatCounter != null) {
+            windowedStatCounter.totalSentBytes += packet.getSize();
+
+            // Insert into the loss heap with an initial deadline based on the current RTT estimate.
+            initialLossDelay = Math.max((long) (K_TIME_THRESHOLD * Math.max(windowedStatCounter.smoothedRtt, windowedStatCounter.latestRtt)), MIN_LOSS_TIMEOUT);
+        }
 
         packet.lossDeadline = sentTime + initialLossDelay;
+    }
+
+    public WindowedStatCounter getWindowedStatCounter(InetSocketAddress destinationAddress) {
+        return connectionPathController == null ? null : connectionPathController.getConnectionPath(destinationAddress).windowedStatCounter;
     }
 
     /**
@@ -136,25 +130,15 @@ public class PacketNumberSpace {
             largestReceivedPacketTimestamp = timestampMs;
         }
 
-        boolean isCe   = (ecnFlags & (1)) != 0;
+        boolean isCe = (ecnFlags & (1)) != 0;
         boolean isEct1 = (ecnFlags & (1 << 1)) != 0;
         boolean isEct0 = (ecnFlags & (1 << 2)) != 0;
 
-        if (isCe)   clientEctCeCounter++;
+        if (isCe) clientEctCeCounter++;
         if (isEct1) clientEct1Counter++;
         if (isEct0) clientEct0Counter++;
 
         logger.debug("{}: Received packet {}, largest: {}", phase, packetNumber, largestReceivedPacketNumber);
-    }
-
-    /**
-     * Packet type enumeration for identifying different QUIC .
-     * Used for retransmission to re-wrap payloads with correct headers.
-     */
-    public enum PacketPhase {
-        INITIAL,      // Initial packet (long header)
-        HANDSHAKE,    // Handshake packet (long header)
-        APPLICATION   // 1-RTT packet (short header)
     }
 
     /**
@@ -174,22 +158,14 @@ public class PacketNumberSpace {
      * @param ackDelay     ACK delay in microseconds
      * @param ackCallback  Optional callback invoked for each acked packet before removal
      * @param ceCounter    ECN contingency event counter
+     * @param sender       peer address
      */
-    public void onAckReceived(long timestampMs, long largestAcked, List<AckRange> ackRanges, long ackDelay, AckCallback ackCallback, long ceCounter) {
+    public int onAckReceived(long timestampMs, long largestAcked, List<AckRange> ackRanges, long ackDelay, AckCallback ackCallback, long ceCounter, SocketAddress sender) {
         logger.debug("{}: ACK received for largest: {}, ranges: {}", phase, largestAcked, ackRanges.size());
 
-        if (serverCeCounter == -1) {
-            serverCeCounter = ceCounter;
-        }
-
-        clearOldTimeBuckets(timestampMs);
-        if (ceCounter > serverCeCounter) {
-            long ceDelta = ceCounter - serverCeCounter;
-            for (int i = 0; i < ceDelta; i++) {
-                packetWindowCE[(int)(timestampMs % timeWindowMs)]++;
-                intervalCePacketsThisWindow++;
-            }
-            serverCeCounter = ceCounter;
+        WindowedStatCounter windowedStatCounter = getWindowedStatCounter((InetSocketAddress) sender);
+        if (windowedStatCounter != null) {
+            windowedStatCounter.onAckReceived(timestampMs, ceCounter);
         }
 
         // Update largest acked
@@ -210,14 +186,14 @@ public class PacketNumberSpace {
 
         if (newlyAcked.isEmpty()) {
             logger.debug("{}: No newly acked packets", phase);
-            return;
+            return 0;
         }
 
         // Update RTT if largest acked is newly acked
         if (newlyAcked.contains(largestAcked)) {
             SentPacket packet = sentPackets.get(largestAcked);
-            if (packet != null && packet.ackEliciting) {
-                updateRtt(timestampMs, packet.sentTime, ackDelay);
+            if (windowedStatCounter != null) {
+                windowedStatCounter.updateRtt(timestampMs, packet.getSentTime(), ackDelay);
             }
         }
 
@@ -236,69 +212,17 @@ public class PacketNumberSpace {
             logger.debug("{}: Packet {} acked and removed", phase, pn);
         }
 
-        // Update bytesAckedInLastRtt
-        if (newlyAckedBytes > 0) {
-            ackWindow[(int)(timestampMs % timeWindowMs)] += newlyAckedBytes;
-            bytesAckedThisWindow += newlyAckedBytes;
-            bytesAckedInLastRtt += newlyAckedBytes;
-            packetsAckedThisWindow += newlyAcked.size();
+        if (windowedStatCounter != null) {
+            windowedStatCounter.updateAckStats(timestampMs, newlyAckedBytes, newlyAcked);
         }
+
+        return newlyAckedBytes;
     }
 
-    private void clearOldTimeBuckets(long timeIndex) {
-        if (lastTimeIdx == 0) lastTimeIdx = timeIndex;
-        if (lastTimeIdx != timeIndex) {
-            for (long i = lastTimeIdx+1; i <= timeIndex; i++) {
-                int rttEndIndex = (int)( (timeWindowMs + i - Math.min(smoothedRtt, timeWindowMs)) % timeWindowMs);
-                bytesAckedInLastRtt -= ackWindow[rttEndIndex];
-                bytesAckedThisWindow -= ackWindow[(int)(i % timeWindowMs)];
-                bytesLostInLastRtt -= lostWindow[rttEndIndex];
-                bytesLostInWindow -= lostWindow[(int)(i % timeWindowMs)];
-                intervalCePacketsThisWindow -= packetWindowCE[(int)(i % timeWindowMs)];
-                ackWindow[(int)(i % timeWindowMs)] = 0;
-                lostWindow[(int)(i % timeWindowMs)] = 0;
-                packetWindowCE[(int)(i % timeWindowMs)] = 0;
-            }
-            lastTimeIdx = timeIndex;
-        }
-    }
-
-    /**
-     * Updates RTT estimates based on ACK (RFC 9002 Section 5).
-     * 
-     * @param packetSentTime When the acked packet was sent
-     * @param ackDelay ACK delay reported by peer (in microseconds)
-     */
-    private void updateRtt(long timestampMs, long packetSentTime, long ackDelay) {
-        latestRtt = (int)(timestampMs - packetSentTime);
-
-        // Adjust for ack delay (convert from microseconds to milliseconds)
-        int adjustedRtt = latestRtt;
-        if (latestRtt > minRtt + (ackDelay / 1000)) {
-            adjustedRtt = latestRtt - (int)(ackDelay / 1000);
-        }
-
-        // Update min RTT
-        if (latestRtt < minRtt) {
-            minRtt = latestRtt;
-        }
-
-        // First RTT sample
-        if (smoothedRtt == K_INITIAL_RTT_MS) {
-            smoothedRtt = latestRtt;
-            rttVar = latestRtt / 2;
-        } else {
-            // EWMA smoothing (RFC 9002 Section 5.3)
-            int rttVarSample = Math.abs(smoothedRtt - adjustedRtt);
-            rttVar = (3 * rttVar + rttVarSample) / 4;
-            smoothedRtt = (7 * smoothedRtt + adjustedRtt) / 8;
-        }
-
-        logger.debug("{}: RTT updated - latest: {}ms, smoothed: {}ms, var: {}ms, min: {}ms",
-                phase, latestRtt, smoothedRtt, rttVar, minRtt);
-    }
 
     public void discardSentPackets() {
+        isClosed = true;
+
         logger.info("Discarding sent packets {}", phase);
         for (SentPacket packet : sentPackets.values()) {
             packet.getUnencryptedPayload().release();
@@ -314,7 +238,9 @@ public class PacketNumberSpace {
     public java.util.Map<Long, SentPacket> detectLostPackets(long timestampMs) {
         java.util.Map<Long, SentPacket> lostPackets = new HashMap<>();
 
-        clearOldTimeBuckets(timestampMs);
+        if (connectionPathController != null) {
+            connectionPathController.clearOlderStats(timestampMs);
+        }
 
         if (sentPackets.isEmpty()) {
             return lostPackets;
@@ -330,19 +256,18 @@ public class PacketNumberSpace {
         while (!sentPackets.isEmpty()) {
             Map.Entry<Long, SentPacket> entry = sentPackets.firstEntry();
             if (entry.getKey() < lostPacketThreshold ||
-                entry.getValue().getTimeoutTimestamp() < timestampMs
+                    entry.getValue().getTimeoutTimestamp() < timestampMs
             ) {
                 lostPackets.put(sentPackets.pollFirstEntry().getKey(), entry.getValue());
-                lossTime = timestampMs;
             } else {
                 break;
             }
         }
 
-        for (SentPacket packet : lostPackets.values()) {
-            lostWindow[(int)(timestampMs % timeWindowMs)] += packet.unencryptedPayload.buf().remaining();
-            bytesLostInWindow += packet.unencryptedPayload.buf().remaining();
-            bytesAckedInLastRtt += packet.unencryptedPayload.buf().remaining();
+        if (connectionPathController != null) {
+            for (SentPacket packet : lostPackets.values()) {
+                getWindowedStatCounter(packet.getDestinationAddress()).onLostPacket(timestampMs, packet.getSize());
+            }
         }
 
         return lostPackets;
@@ -370,50 +295,6 @@ public class PacketNumberSpace {
 
     public long getLargestAckedPacketNumber() {
         return largestAckedPacketNumber;
-    }
-
-    public long getPTO() {
-        return smoothedRtt + 4L * rttVar;
-    }
-
-    public long getSmoothedRtt() {
-        return smoothedRtt;
-    }
-
-    public long getLatestRtt() {
-        return latestRtt;
-    }
-
-    public long getMinRtt() {
-        return minRtt;
-    }
-
-    public long getLossTime() {
-        return lossTime;
-    }
-
-    public long getServerCeCounter() {
-        return serverCeCounter;
-    }
-
-    public record WindowedStats(
-            long intervalCePackets,
-            long bytesAcked,
-            long packetsAcked,
-            long bytesLost,
-            long bytesAckedInLastRtt,
-            long bytesLostInLastRtt
-    ) {}
-
-    public WindowedStats getWindowedStats() {
-        return new WindowedStats(
-                intervalCePacketsThisWindow,
-                bytesAckedThisWindow,
-                packetsAckedThisWindow,
-                bytesLostInWindow,
-                smoothedRtt <= timeWindowMs ? bytesAckedInLastRtt : (bytesAckedInLastRtt / timeWindowMs) * smoothedRtt,
-                smoothedRtt <= timeWindowMs ? bytesLostInLastRtt : (bytesLostInLastRtt / timeWindowMs) * smoothedRtt
-        );
     }
 
     public boolean hasUnackedPackets() {
@@ -446,44 +327,44 @@ public class PacketNumberSpace {
      * Metadata about a sent packet for loss detection and retransmission.
      * FIELD EXPLANATION (RFC 9002):
      * 1. packetNumber: The original packet number when this packet was first sent.
-     *    - Used for: ACK matching, loss detection thresholds, tracking
-     *    - NOT used for: Retransmission (retransmissions get NEW packet numbers)
+     * - Used for: ACK matching, loss detection thresholds, tracking
+     * - NOT used for: Retransmission (retransmissions get NEW packet numbers)
      * 2. sentTime: Timestamp when packet was sent (milliseconds).
-     *    - Used for: RTT calculation, time-based loss detection
-     *    - Per RFC 9002 Section 6.1.2: packets sent before (now - loss_delay) are declared lost
+     * - Used for: RTT calculation, time-based loss detection
+     * - Per RFC 9002 Section 6.1.2: packets sent before (now - loss_delay) are declared lost
      * 3. unencryptedPayload: The QUIC frames BEFORE encryption (CRYPTO, STREAM, ACK, etc.).
-     *    - Used for: Retransmission with a NEW packet number and NEW encryption
-     *    - Per RFC 9002 Section 6.2: "Packets that are declared lost are not retransmitted whole.
-     *      The same applies to frames that are never declared lost. Instead, the information
-     *      that might be carried in frames is sent again in new frames as needed."
-     *    - We store the frames (payload) so we can wrap them in a new packet with new PN
+     * - Used for: Retransmission with a NEW packet number and NEW encryption
+     * - Per RFC 9002 Section 6.2: "Packets that are declared lost are not retransmitted whole.
+     * The same applies to frames that are never declared lost. Instead, the information
+     * that might be carried in frames is sent again in new frames as needed."
+     * - We store the frames (payload) so we can wrap them in a new packet with new PN
      * 4. packetType: Type of packet (INITIAL, HANDSHAKE, APPLICATION).
-     *    - Used for: Selecting correct encryption keys and header format during retransmission
-     *    - Different packet types use different key materials and header structures
+     * - Used for: Selecting correct encryption keys and header format during retransmission
+     * - Different packet types use different key materials and header structures
      * 5. ackEliciting: Whether this packet requires an ACK from peer.
-     *    - Used for: RTT measurement (only ack-eliciting packets update RTT)
-     *    - Per RFC 9002 Section 5: ACK-only packets don't trigger ACKs or RTT updates
-     * 
+     * - Used for: RTT measurement (only ack-eliciting packets update RTT)
+     * - Per RFC 9002 Section 5: ACK-only packets don't trigger ACKs or RTT updates
+     *
      */
-    public static class SentPacket implements TimeoutHeap.Entry {
-        final long packetNumber;
-        final long sentTime;
+    public static class SentPacket {
+        private final long packetNumber;
+        private final long sentTime;
         final PoolBuffer unencryptedPayload;  // Frames BEFORE encryption (for retransmission)
-        final PacketPhase packetPhase;  // Packet type for re-wrapping
-        final boolean ackEliciting;
+        private final PacketPhase packetPhase;  // Packet type for re-wrapping
+        private final InetSocketAddress destinationAddress;
 
-        /** Absolute loss deadline (ms since epoch): sentTime + lossDelay at insertion time. */
+        /**
+         * Absolute loss deadline (ms since epoch): sentTime + lossDelay at insertion time.
+         */
         long lossDeadline;
-        /** Position in the {@link TimeoutHeap}; -1 when not currently in the heap. */
-        private int heapIndex = -1;
 
         SentPacket(long packetNumber, long sentTime, PoolBuffer unencryptedPayload,
-                   PacketPhase packetPhase, boolean ackEliciting) {
+                   PacketPhase packetPhase, InetSocketAddress destinationAddress) {
             this.packetNumber = packetNumber;
             this.sentTime = sentTime;
             this.unencryptedPayload = unencryptedPayload;
             this.packetPhase = packetPhase;
-            this.ackEliciting = ackEliciting;
+            this.destinationAddress = destinationAddress;
         }
 
         public PoolBuffer getUnencryptedPayload() {
@@ -494,22 +375,24 @@ public class PacketNumberSpace {
             return unencryptedPayload.buf().remaining();
         }
 
-        // ---- TimeoutHeap.Entry ----
-
-        @Override
-        public int getTimeoutHeapIndex() {
-            return heapIndex;
-        }
-
-        @Override
-        public void setTimeoutHeapIndex(int idx) {
-            this.heapIndex = idx;
-        }
-
-        /** Returns the loss deadline used to order this packet in the {@link TimeoutHeap}. */
-        @Override
         public long getTimeoutTimestamp() {
             return lossDeadline;
+        }
+
+        public long getPacketNumber() {
+            return packetNumber;
+        }
+
+        public long getSentTime() {
+            return sentTime;
+        }
+
+        public PacketPhase getPacketPhase() {
+            return packetPhase;
+        }
+
+        public InetSocketAddress getDestinationAddress() {
+            return destinationAddress;
         }
     }
 }

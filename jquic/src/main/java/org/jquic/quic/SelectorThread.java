@@ -15,8 +15,6 @@
  */
 package org.jquic.quic;
 
-import org.jctools.queues.MessagePassingQueue;
-import org.jctools.queues.MpscArrayQueue;
 import org.jctools.queues.SpscArrayQueue;
 import org.jctools.queues.SpscLinkedQueue;
 import org.jquic.quic.buffers.BufferPool;
@@ -25,7 +23,7 @@ import org.jquic.quic.crypto.NativeCrypto;
 import org.jquic.quic.crypto.QuicCrypto;
 import org.jquic.quic.linux.BpfRouting;
 import org.jquic.quic.linux.ECT;
-import org.jquic.quic.streamapi.impl.ApplicationData;
+import org.jquic.quic.paths.DatagramToSend;
 import org.jquic.quic.struct.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -43,7 +41,6 @@ import java.util.concurrent.ConcurrentHashMap;
 // =========================================================================
 public class SelectorThread extends Thread {
     private static final Logger logger = LoggerFactory.getLogger(SelectorThread.class);
-    public static final int OUTBOUND_APP_QUEUE_SIZE = QuicProperties.OUTBOUND_APP_QUEUE_SIZE;
     public static final int HANDSHAKE_QUEUE_CAP = QuicProperties.HANDSHAKE_QUEUE_CAP;
     public static final int MAX_RECIEVE_BATCH = QuicProperties.MAX_RECIEVE_BATCH;
     public static final int MAX_SEND_BATCH = QuicProperties.MAX_SEND_BATCH;
@@ -53,8 +50,7 @@ public class SelectorThread extends Thread {
     private final DatagramChannel socket;
     private final SpscLinkedQueue<PacketData> forwardedPackets;
     private final SpscArrayQueue<HandshakeTask> handshakeQueue = new SpscArrayQueue<>(HANDSHAKE_QUEUE_CAP);
-    private final MessagePassingQueue<TriStateQueue<ApplicationData>> applicationWakeQueue = new MpscArrayQueue<>(OUTBOUND_APP_QUEUE_SIZE);
-    private final AppDataPriorityQueue appDataPriorityQueue = new AppDataPriorityQueue();
+    private final PathPriorityQueue appDataPriorityQueue = new PathPriorityQueue();
     private final ConcurrentHashMap<Long, Integer> cidToSelectorMap;
     private final Map<Long, QuicConnection> activeConnections;
     private final Map<ByteBuffer, QuicConnection> initializingConnections = new HashMap<>();
@@ -222,14 +218,18 @@ public class SelectorThread extends Thread {
 
                 int currentSendQueueSize = packetsToSendPerConnection.size();
 
-                applicationWakeQueue.drain(rec -> appDataPriorityQueue.add(rec, nowNs));
-
                 int i = currentSendQueueSize;
                 if (currentSendQueueSize != 0) logger.info("Selector-{}: Have {} response packets before taking application pkts", threadId, currentSendQueueSize);
 
-                while (appDataPriorityQueue.nextTimestamp() < nowNs && i < MAX_RECIEVE_BATCH) {
-                    ApplicationData data = appDataPriorityQueue.poll(nowNs);
-                    processApplicationPacket(data, now);
+                while (appDataPriorityQueue.nextTimestamp() < nowNs && i < MAX_SEND_BATCH) {
+                    DatagramToSend outbound = appDataPriorityQueue.poll(now, nowNs);
+                    if (outbound == null) { break; }
+
+                    packetsToSendPerConnection.add(new PacketToSend(outbound.dest(), outbound.data(), outbound.ectMarking()));
+                    switch (outbound.packetSource()) {
+                        case NEW -> sentPackets++;
+                        case RETRANSMISSION -> retransmittedPackets++;
+                    }
                     i++;
                     hadWork = true;
                 }
@@ -293,39 +293,36 @@ public class SelectorThread extends Thread {
         if (conn != null) {
             conn.setCurrentTimestamp(now);
             conn.retransmitLostPackets();
-            pollConnectionDataAndSend(conn);
+//            pollConnectionDataAndSend(conn);
             timerWheelScheduler.scheduleAt(nowNs + 50_000_000, event);
             return true;
         }
         return false;
     }
 
-    private void pollConnectionDataAndSend(QuicConnection conn) {
-        OutboundPacket outbound;
-        while ((outbound = conn.getConnectionPathController().pollOutbound()) != null) {
-            packetsToSendPerConnection.add(new PacketToSend(outbound.dest(), outbound.data(), outbound.ectMarking()));
-            switch (outbound.packetSource()) {
-                case NEW -> sentPackets++;
-                case RETRANSMISSION -> retransmittedPackets++;
-            }
-        }
-    }
-
-    private void processApplicationPacket(ApplicationData appPacket, long now) {
-        QuicConnection conn = appPacket.connection();
-        logger.debug("Polled application data frame cid {}", conn.getConnectionId());
-        conn.setCurrentTimestamp(now);
-        conn.updateTimeout();
-
-        conn.send1RttPacket(appPacket.data());
-        // Update timeout in heap after processing
-        timeoutHeap.insertOrUpdate(conn);
-
-        if (conn.getConnectionPathController().outboundQueueSize() > 0) {
-            logger.debug("Selector-{}: Connection CID: {} sending {} response packets.", threadId, conn.getConnectionId(), conn.getConnectionPathController().outboundQueueSize());
-        }
-        pollConnectionDataAndSend(conn);
-    }
+//    private void pollConnectionDataAndSend(QuicConnection conn) {
+//        OutboundPacket outbound;
+//        while ((outbound = conn.getConnectionPathController().pollOutbound()) != null) {
+//            packetsToSendPerConnection.add(new PacketToSend(outbound.dest(), outbound.data(), outbound.ectMarking()));
+//            switch (outbound.packetSource()) {
+//                case NEW -> sentPackets++;
+//                case RETRANSMISSION -> retransmittedPackets++;
+//            }
+//        }
+//    }
+//
+//    private void processApplicationPacket(ApplicationData appPacket, long now) {
+//        QuicConnection conn = appPacket.connection();
+//        logger.debug("Polled application data frame cid {}", conn.getConnectionId());
+//        conn.setCurrentTimestamp(now);
+//        conn.updateTimeout();
+//
+//        conn.send1RttPacket(appPacket.data());
+//        // Update timeout in heap after processing
+//        timeoutHeap.insertOrUpdate(conn);
+//
+//        pollConnectionDataAndSend(conn);
+//    }
 
     /**
      * Processes a received datagram which may contain multiple coalesced packets.
@@ -414,11 +411,11 @@ public class SelectorThread extends Thread {
                     switch (packetSummary.type()) {
                         case INITIAL -> {
                             logger.debug("Selector-{}: Processing Initial packet for CID: {}", threadId, cid);
-                            connection.processInitialAndRespond(datagram, ecnFlags);
+                            connection.processInitialAndRespond(datagram, ecnFlags, sender);
                         }
                         case HANDSHAKE ->  { // Handshake packet (0b10)
                             logger.debug("Selector-{}: Processing Handshake packet for CID: {}", threadId, cid);
-                            connection.processHandshakePacket(datagram, ecnFlags);
+                            connection.processHandshakePacket(datagram, ecnFlags, sender);
                         }
                         case ONE_RTT -> {
                             logger.debug("Selector-{}: Processing 1-RTT packet for CID: {} from: {}", threadId, cid, sender);
@@ -432,11 +429,7 @@ public class SelectorThread extends Thread {
                     // Update timeout in heap after processing (remove-add pattern)
                     timeoutHeap.insertOrUpdate(connection);
 
-                    // Drain any packets the connection produced internally (e.g. early-1RTT
-                    // replay triggered by the ESTABLISHED transition, or sendFrame() calls).
-                    logger.debug("Selector-{}: Connection CID: {} sending {} response packets.", threadId, cid, connection.getConnectionPathController().outboundQueueSize());
-
-                    pollConnectionDataAndSend(connection);
+//                    pollConnectionDataAndSend(connection);
                 } catch (Exception e) {
                     logger.error("Selector-{}: Failed to process packet for CID: {}", threadId, cid, e);
                     break;
@@ -514,12 +507,14 @@ public class SelectorThread extends Thread {
 
             QuicConnection connection = activeConnections.computeIfAbsent(task.allocatedCid,
                     _ -> {
-                        QuicConnection conn = new QuicConnection(task.allocatedCid, task.packetSummary.version(), task.sender, applicationWakeQueue, this, odcid);
+                        QuicConnection conn = new QuicConnection(task.allocatedCid, task.packetSummary.version(), task.sender, this, odcid);
                         timeoutHeap.insertOrUpdate(conn);
                         timerWheelScheduler.scheduleAt(nowNs + 1_000_000L,
                                 new TimerWheelScheduler.ScheduledEvent(TimerWheelScheduler.EventType.LOSS_DETECTION, task.allocatedCid));
+                        appDataPriorityQueue.add(conn.getConnectionPathController());
                         return  conn;
                     });
+
 
             connection.setCurrentTimestamp(now);
             connection.connectionMetadata.retrySourceCid = retrySourceCid;
@@ -590,19 +585,20 @@ public class SelectorThread extends Thread {
      */
     private void evictConnection(long connectionId) {
         try {
-
             // Remove from active connections
             QuicConnection removed = activeConnections.remove(connectionId);
+
 
             if (removed != null) {
                 logger.info("Selector-{}: Evicted connection CID: {} from activeConnections", 
                           threadId, connectionId);
 
+                appDataPriorityQueue.remove(removed.getConnectionPathController());
+
                 // Update connection state to CLOSED
                 removed.setState(QuicConnection.State.CLOSED);
                 timeoutHeap.remove(removed);
             }
-
 
             // Remove from CID-to-Selector mapping
             cidToSelectorMap.remove(connectionId);

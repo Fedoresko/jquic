@@ -16,8 +16,10 @@
 package org.jquic.quic;
 
 import org.jquic.quic.buffers.ChunkedOutputStreamWithAmendments;
+import org.jquic.quic.buffers.PoolBuffer;
 import org.jquic.quic.crypto.CipherMode;
 import org.jquic.quic.crypto.QuicCrypto;
+import org.jquic.quic.packets.PacketNumberSpace;
 import org.jquic.quic.struct.SortedIntervals;
 
 import java.io.IOException;
@@ -84,12 +86,6 @@ public class QuicFrameBuilder {
 
         out.limit(out.position());
         out.position(start);
-    }
-
-    public static void prependPingFrame(ByteBuffer data) {
-        data.position(data.position() - 1);
-        data.put((byte) 0x01);
-        data.position(data.position() - 1);
     }
 
     public static void prependCryptoFrameHeader(long offset, ByteBuffer data) {
@@ -313,6 +309,15 @@ public class QuicFrameBuilder {
         out.put(data);
         out.limit(out.position());
         out.position(start);
+    }
+
+    public static void writePingFrame(PoolBuffer poolBuffer) {
+        int start = poolBuffer.buf().position();
+        byte[] packet = new byte[16];
+        packet[0] = (byte) 0x01;
+        poolBuffer.buf().put(packet);
+        poolBuffer.buf().limit(poolBuffer.buf().position());
+        poolBuffer.buf().position(start);
     }
 }
 

@@ -187,7 +187,7 @@ public class QuicPacketHeader {
             byte flags = packet.get();
 
             if (flags == 0x00) {
-                return new PacketSummary(PacketType.PADDING, null, null, null, null);
+                return new PacketSummary(PacketType.PADDING, null, new byte[0], new byte[0], null);
             }
 
             if ((flags & 0x40) == 0) {
@@ -233,7 +233,7 @@ public class QuicPacketHeader {
         }
     }
 
-    public record PacketSummary(PacketType type, QuicVersion version, byte[] dcid, byte[] scid, ByteBuffer token) {}
+    public record PacketSummary(PacketType type, QuicVersion version, byte @NonNull [] dcid, byte @Nullable [] scid, ByteBuffer token) {}
 
     private static PacketType fromFlags(QuicVersion quicVersion, byte flags) {
         int typeField = (flags & 0x30) >> 4;

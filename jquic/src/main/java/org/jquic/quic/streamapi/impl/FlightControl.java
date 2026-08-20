@@ -55,8 +55,8 @@ public class FlightControl {
     private long bidirectionalIncomingStreamCap;
     private long unidirectionalIncomingStreamCap;
 
-    private long currentIncomingBidiStreamsCount = 0;
-    private long currentIncomingUniStreamsCount = 0;
+    private long currentIncomingBidiMaxStreamId = 0;
+    private long currentIncomingUniMaxStreamId = 0;
 
     private final InitialStreamLimits serverInitialLimits;
     private final InitialStreamLimits clientInitialLimits;
@@ -252,27 +252,14 @@ public class FlightControl {
             }
         } else {
             if (streamState.getState() == StreamState.State.OPEN) {
-                decrementActiveStreamCount(streamState.getStreamId());
                 streamState.setState(StreamState.State.HALF_CLOSED_REMOTE);
             } else if (streamState.getState() == StreamState.State.HALF_CLOSED_LOCAL) {
-                decrementActiveStreamCount(streamState.getStreamId());
                 streamState.setState(CLOSED);
             }
         }
 
         if (prevState != CLOSED && streamState.getState() == CLOSED) {
             streams.remove(streamState.getStreamId());
-        }
-    }
-
-    private void decrementActiveStreamCount(long streamId) {
-        if ((streamId & 0x01) == 0) { // client initiated
-            QuicConnectionControl.StreamType type = StreamManager.getStreamType(streamId);
-            if (type == Bidirectional) {
-                currentIncomingBidiStreamsCount--;
-            } else {
-                currentIncomingUniStreamsCount--;
-            }
         }
     }
 
@@ -304,22 +291,22 @@ public class FlightControl {
         if (isNew) {
             long streamIndex = streamId / 4;
             if (isBidi) {
-                currentIncomingBidiStreamsCount++;
-                long maxStreams = bidirectionalIncomingStreamCap / 4;
-                if (streamIndex >= maxStreams - maxBidirectionalStreams / 2) {
-                    long newMaxStreams = maxStreams - currentIncomingBidiStreamsCount + maxBidirectionalStreams;
-                    logger.debug("Sending bidirectional MAX_STREAMS frame because stream index {} exceeds threshold {} new value would be {}", streamIndex, maxStreams - maxBidirectionalStreams / 2, newMaxStreams);
-                    bidirectionalIncomingStreamCap = newMaxStreams * 4;
-                    streamManager.sendMaxStreamsFrame(newMaxStreams, true);
+                if (currentIncomingBidiMaxStreamId < streamId) {
+                    currentIncomingBidiMaxStreamId = streamId;
+                }
+                if (currentIncomingBidiMaxStreamId  >= bidirectionalIncomingStreamCap - maxBidirectionalStreams * 2L) {
+                    bidirectionalIncomingStreamCap = currentIncomingBidiMaxStreamId + maxBidirectionalStreams * 4L;
+                    logger.debug("Sending bidirectional MAX_STREAMS frame because stream index {} exceeds threshold {} new value would be {}", streamIndex, bidirectionalIncomingStreamCap / 4 - maxBidirectionalStreams / 2, bidirectionalIncomingStreamCap / 4);
+                    streamManager.sendMaxStreamsFrame(bidirectionalIncomingStreamCap / 4, true);
                 }
             } else {
-                currentIncomingUniStreamsCount++;
-                long maxStreams = (unidirectionalIncomingStreamCap - 2) / 4;
-                if (streamIndex >= maxStreams - maxUnidirectionalStreams / 2) {
-                    long newMaxStreams = maxStreams - currentIncomingUniStreamsCount + maxUnidirectionalStreams;
-                    logger.debug("Sending unidirectional MAX_STREAMS frame because stream index {} exceeds threshold {} new value would be {}", streamIndex, maxStreams - maxUnidirectionalStreams / 2, newMaxStreams);
-                    unidirectionalIncomingStreamCap = 2 + newMaxStreams * 4;
-                    streamManager.sendMaxStreamsFrame(newMaxStreams, false);
+                if (currentIncomingUniMaxStreamId < streamId) {
+                    currentIncomingUniMaxStreamId = streamId;
+                }
+                if (currentIncomingUniMaxStreamId >= unidirectionalIncomingStreamCap - maxUnidirectionalStreams * 2L) {
+                    unidirectionalIncomingStreamCap = currentIncomingUniMaxStreamId + maxUnidirectionalStreams * 4L;
+                    logger.debug("Sending unidirectional MAX_STREAMS frame because stream index {} exceeds threshold {} new value would be {}", streamIndex,  unidirectionalIncomingStreamCap / 4 - maxUnidirectionalStreams / 2, unidirectionalIncomingStreamCap /4);
+                    streamManager.sendMaxStreamsFrame(unidirectionalIncomingStreamCap / 4, false);
                 }
             }
         }
@@ -364,7 +351,6 @@ public class FlightControl {
         }
 
         if (state.getState() == CLOSED && prevState != CLOSED) {
-             decrementActiveStreamCount(streamId);
              streams.remove(streamId);
         }
 
@@ -398,7 +384,6 @@ public class FlightControl {
         streamManager.sendResetStreamFrame(streamId, errorCode, state.getMaxSentOffset());
 
         if (state.getState() == CLOSED && prevState != CLOSED) {
-            decrementActiveStreamCount(streamId);
             streams.remove(streamId);
         }
     }
@@ -454,6 +439,18 @@ public class FlightControl {
         streamState.setRemoteMaxStreamData(received + freeQueue);
     }
 
+    public void onStreamsBlocked(long limit, boolean isBidi) {
+        logger.warn("Peer is blocked on total {} {} streams", limit, isBidi ? "bidirectional" : "unidirectional");
+
+        if (isBidi) {
+            bidirectionalIncomingStreamCap = (limit + maxBidirectionalStreams) * 4 ;
+            streamManager.sendMaxStreamsFrame(bidirectionalIncomingStreamCap / 4, isBidi);
+        } else {
+            unidirectionalIncomingStreamCap = (limit + maxUnidirectionalStreams) * 4 + 2;
+            streamManager.sendMaxStreamsFrame(unidirectionalIncomingStreamCap / 4, isBidi);
+        }
+    }
+
     /**
      * Stream data sent into a stream. Used to update byte counts.
      * @param offset - new offset
@@ -504,7 +501,6 @@ public class FlightControl {
                 logger.warn("Received ack for STREAM_RESET in state {} for stream {}", streamState.getState(), streamId);
             }
             streamState.setState(StreamState.State.RESET_ACK_RECEIVED);
-            decrementActiveStreamCount(streamId);
             streams.remove(streamId);
         }
     }

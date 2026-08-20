@@ -15,25 +15,32 @@
  */
 package org.jquic.quic.paths;
 
-import java.net.SocketAddress;
+import org.jquic.quic.packets.WindowedStatCounter;
+import org.jquic.quic.streamapi.CongestionControl;
+
+import java.net.InetSocketAddress;
 
 public class ConnectionPath {
-    public final SocketAddress address;
+    public final InetSocketAddress address;
     public long lastActive;
     public long probeSentAt;
     public long receivedBytes;
     public long sentBytes;
     public long createdAt;
     public long bytesLastBlocked;
+    public long bytesAcked;
+    public long nextSendSchedNs;
     public byte[] challenge;
     public PathState state;
-    public final DatagramBuilder datagramBuilder;
+    public DatagramToSend nextDatagram;
+    public CongestionControl congestionControl;
+    public WindowedStatCounter windowedStatCounter;
 
-    public ConnectionPath(SocketAddress address, long now, DatagramBuilder datagramBuilder) {
+    public ConnectionPath(InetSocketAddress address, long now, int timeWindowMs) {
         this.address = address;
         this.state = PathState.NEW;
         this.lastActive = now;
         this.createdAt = lastActive;
-        this.datagramBuilder = datagramBuilder;
+        this.windowedStatCounter = new WindowedStatCounter(timeWindowMs);
     }
 }
