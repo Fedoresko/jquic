@@ -42,10 +42,7 @@ import org.mockito.Mockito;
 import java.lang.reflect.Field;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
@@ -105,15 +102,15 @@ class QuicConnectionTest {
 
     private QuicConnection connection;
     private MockedStatic<QuicCrypto> cryptoMock;
-//    private MockedStatic<ConnectionMetadata> mockedConnectionMetadata;
+    //    private MockedStatic<ConnectionMetadata> mockedConnectionMetadata;
     private NativeCrypto nCryptoMock;
     private MockedStatic<QuicFrameBuilder> frameBuilderMock;
     private ConnectionMetadata mockMetadata;
     private static final BufferPool pool = mock(BufferPool.class);
-    
+
     @BeforeEach
     void setUp() throws Exception {
-        when(pool.requestWriteBuffer()).thenAnswer((_) -> new RootPoolBuffer(ByteBuffer.allocateDirect(2000).position(100), pool, true).borrow() );
+        when(pool.requestWriteBuffer()).thenAnswer((_) -> new RootPoolBuffer(ByteBuffer.allocateDirect(2000).position(100), pool, true).borrow());
         nCryptoMock = mockNCrypto();
 
         mockMetadata = new ConnectionMetadata();
@@ -247,7 +244,7 @@ class QuicConnectionTest {
 
     @Test
     @DisplayName("Test Handshake packet with failed Finished verification is silently discarded")
-    void testHandshakePacketWithInvalidFinished() throws Exception {
+    void testHandshakePacketWithInvalidFinished() {
         connection.connectionMetadata.clientCid = ByteBuffer.allocate(8).putLong(TEST_CID).array();
         // Setup connection in HANDSHAKE state
         connection.setState(QuicConnection.State.HANDSHAKE);
@@ -283,14 +280,14 @@ class QuicConnectionTest {
 
     @Test
     @DisplayName("Test stream data delivery to payload listener")
-    void testStreamDataDelivery() throws Exception {
+    void testStreamDataDelivery() {
         // Setup connection in ESTABLISHED state
         setupEstablishedConnection();
 
         // Capture delivered stream data
         AtomicReference<ProtocolFrame> receivedData = new AtomicReference<>();
 
-        connection.setConnectionStreamManager( createStreamFrameListener(receivedData::set) );
+        connection.setConnectionStreamManager(createStreamFrameListener(receivedData::set));
 
         // Create 1-RTT packet with STREAM frame
         ByteBuffer packet = createMock1RttPacketWithStreamData(4L, "Hello QUIC".getBytes());
@@ -311,7 +308,7 @@ class QuicConnectionTest {
 
     @Test
     @DisplayName("Test 1-RTT packet rejected in wrong state")
-    void test1RttPacketInWrongState() throws Exception {
+    void test1RttPacketInWrongState() {
         // Connection in HANDSHAKE state (wrong state for 1-RTT)
         connection.setState(QuicConnection.State.HANDSHAKE);
         setupMockTlsMetadata();
@@ -329,7 +326,7 @@ class QuicConnectionTest {
 
     @Test
     @DisplayName("Test CONNECTION_CLOSE transitions to CLOSING state")
-    void testConnectionCloseTransition() throws Exception {
+    void testConnectionCloseTransition() {
         // Setup connection in ESTABLISHED state
         setupEstablishedConnection();
 
@@ -348,7 +345,7 @@ class QuicConnectionTest {
 
     @Test
     @DisplayName("Test stream data ignored in CLOSING state")
-    void testStreamDataIgnoredInClosingState() throws Exception {
+    void testStreamDataIgnoredInClosingState() {
         // Setup connection in CLOSING state
         setupEstablishedConnection();
         connection.setState(QuicConnection.State.CLOSING);
@@ -356,7 +353,7 @@ class QuicConnectionTest {
         // Track if payload listener is called
         AtomicInteger callCount = new AtomicInteger(0);
 
-        connection.setConnectionStreamManager( createStreamFrameListener(_ -> callCount.incrementAndGet()) );
+        connection.setConnectionStreamManager(createStreamFrameListener(_ -> callCount.incrementAndGet()));
 
         // Try to send stream data
         ByteBuffer packet = createMock1RttPacketWithStreamData(0L, "test".getBytes());
@@ -387,7 +384,7 @@ class QuicConnectionTest {
 
     @Test
     @DisplayName("Test 1-RTT packets rejected in CLOSED state")
-    void test1RttPacketRejectedInClosedState() throws Exception {
+    void test1RttPacketRejectedInClosedState() {
         // Set connection to CLOSED state
         connection.setState(QuicConnection.State.CLOSED);
         setupMockTlsMetadata();
@@ -405,7 +402,7 @@ class QuicConnectionTest {
 
     @Test
     @DisplayName("Test out-of-order 1-RTT packet tracking")
-    void testOutOfOrder1RttPackets() throws Exception {
+    void testOutOfOrder1RttPackets() {
         // Setup connection in ESTABLISHED state
         setupEstablishedConnection();
 
@@ -429,7 +426,7 @@ class QuicConnectionTest {
 
     @Test
     @DisplayName("Test: key phase bit flip triggers rotateApplicationKeys")
-    void testKeyPhaseChangeTriggersKeyRotation() throws Exception {
+    void testKeyPhaseChangeTriggersKeyRotation() {
         setupEstablishedConnection();
 
         NativeCrypto keyBeforeRotation = connection.getTlsMetadata().clientApplicationCrypto;
@@ -462,7 +459,7 @@ class QuicConnectionTest {
 
     @Test
     @DisplayName("Test: same key phase does NOT trigger key rotation")
-    void testSameKeyPhaseDoesNotTriggerRotation() throws Exception {
+    void testSameKeyPhaseDoesNotTriggerRotation() {
         setupEstablishedConnection();
 
         NativeCrypto keyBefore = connection.getTlsMetadata().clientApplicationCrypto;
@@ -478,7 +475,7 @@ class QuicConnectionTest {
 
     @Test
     @DisplayName("Test: after key rotation subsequent packets use new (current) keys")
-    void testSubsequentPacketsAfterRotationUseNewKeys() throws Exception {
+    void testSubsequentPacketsAfterRotationUseNewKeys() {
         setupEstablishedConnection();
         NativeCrypto originalKey = connection.getTlsMetadata().clientApplicationCrypto;
 
@@ -504,14 +501,14 @@ class QuicConnectionTest {
 
     @Test
     @DisplayName("Test: late (out-of-order) packet with old key phase uses previous keys")
-    void testLatePacketWithOldKeyPhaseUsesPreviousKeys() throws Exception {
+    void testLatePacketWithOldKeyPhaseUsesPreviousKeys() {
         // Capture which SecretKey is passed to decryptAead for each call
         setupEstablishedConnection();
 
         // Step 1: Trigger rotation with packet number 20, key phase bit = 1.
         // The real rotateApplicationKeys saves prevClientApplicationKeys and derives new ones.
         ByteBuffer rotationPacket = createMock1RttPacketWithKeyPhase(20L, new byte[]{0x01}, true);
-         connection.process1RttPacket(new RootPoolBuffer(rotationPacket, pool, false), 0, null);
+        connection.process1RttPacket(new RootPoolBuffer(rotationPacket, pool, false), 0, null);
 
         NativeCrypto prevKey = connection.getTlsMetadata().prevClientApplicationCrypto;
         NativeCrypto currentKey = connection.getTlsMetadata().clientApplicationCrypto;
@@ -526,7 +523,7 @@ class QuicConnectionTest {
 
     @Test
     @DisplayName("Test: second key phase rotation updates lastPhaseSwitchPacketNumber again")
-    void testSecondKeyRotationUpdatesPacketNumber() throws Exception {
+    void testSecondKeyRotationUpdatesPacketNumber() {
         setupEstablishedConnection();
 
         // First rotation: phase 0 -> 1, at packet 10
@@ -551,7 +548,7 @@ class QuicConnectionTest {
 
     @Test
     @DisplayName("Test ACK not generated for non-ack-eliciting frames")
-    void testNoAckForPaddingFrame() throws Exception {
+    void testNoAckForPaddingFrame() {
         // Setup connection in ESTABLISHED state
         setupEstablishedConnection();
 
@@ -565,7 +562,7 @@ class QuicConnectionTest {
 
     @Test
     @DisplayName("Test ACK generated for ack-eliciting frames")
-    void testAckGeneratedForStreamFrame() throws Exception {
+    void testAckGeneratedForStreamFrame() {
         // Setup connection in ESTABLISHED state
         setupEstablishedConnection();
 
@@ -583,7 +580,7 @@ class QuicConnectionTest {
 
     @Test
     @DisplayName("Test retransmission triggered by packet threshold (3 packets lost)")
-    void testRetransmissionPacketThreshold() throws Exception {
+    void testRetransmissionPacketThreshold() {
         // Setup connection in HANDSHAKE state (easier to test Initial space retransmission)
         connection.setState(QuicConnection.State.HANDSHAKE);
         setupMockTlsMetadata();
@@ -601,13 +598,14 @@ class QuicConnectionTest {
         ackRanges.add(new PacketNumberSpace.AckRange(2, 4)); // Packets 2-4
 
         initialSpace.onAckReceived(0, 4, ackRanges, 0, null, 0, TEST_ADDRESS);
-        java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = initialSpace.detectLostPackets(0);
+        Deque<PacketNumberSpace.SentPacket> lostPackets = new ArrayDeque<>();
+        initialSpace.detectLostPackets(0, lostPackets::offer);
 
         // Verify packet 0 was declared lost (4 - 3 = 1, so packets < 1 are lost)
         assertFalse(lostPackets.isEmpty(), "Should detect lost packets");
-        assertTrue(lostPackets.containsKey(0L), "Packet 0 should be declared lost");
 
-        PacketNumberSpace.SentPacket lostPacket = lostPackets.get(0L);
+        PacketNumberSpace.SentPacket lostPacket = lostPackets.poll();
+        assertEquals(0, lostPacket.getPacketNumber(), "Lost packet should be 0");
         assertNotNull(lostPacket, "Lost packet 0 should have SentPacket metadata");
         assertNotNull(lostPacket.getUnencryptedPayload(), "Lost packet should have unencrypted payload");
         assertEquals(INITIAL, lostPacket.getPacketPhase(), "Packet type should be INITIAL");
@@ -615,7 +613,7 @@ class QuicConnectionTest {
 
     @Test
     @DisplayName("Test retransmission SentPacket contains unencrypted payload and packet type")
-    void testRetransmissionPacketContent() throws Exception {
+    void testRetransmissionPacketContent() {
         // Setup connection in HANDSHAKE state
         connection.setState(QuicConnection.State.HANDSHAKE);
         setupMockTlsMetadata();
@@ -639,30 +637,28 @@ class QuicConnectionTest {
         List<PacketNumberSpace.AckRange> ackRanges = new ArrayList<>();
         ackRanges.add(new PacketNumberSpace.AckRange(2, 4));
         initialSpace.onAckReceived(0, 4, ackRanges, 0, null, 0, TEST_ADDRESS);
-        java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = initialSpace.detectLostPackets(0);
+        Deque<PacketNumberSpace.SentPacket> lostPackets = new ArrayDeque<>();
+        initialSpace.detectLostPackets(0, lostPackets::offer);
 
         // Retrieve SentPacket for retransmission
-        assertTrue(lostPackets.containsKey(0L), "Packet 0 should be in lost packets");
-        PacketNumberSpace.SentPacket sentPacket = lostPackets.get(0L);
-
-        assertNotNull(sentPacket, "Should retrieve SentPacket for retransmission");
-        assertNotNull(sentPacket.getUnencryptedPayload(), "SentPacket should have unencrypted payload");
-        assertEquals(INITIAL, sentPacket.getPacketPhase(), "Packet type should be INITIAL");
-        assertEquals(0L, sentPacket.getPacketNumber(), "Original packet number should be preserved");
+        PacketNumberSpace.SentPacket lostPacket = lostPackets.poll();
+        assertNotNull(lostPacket.getUnencryptedPayload(), "SentPacket should have unencrypted payload");
+        assertEquals(INITIAL, lostPacket.getPacketPhase(), "Packet type should be INITIAL");
+        assertEquals(0L, lostPacket.getPacketNumber(), "Original packet number should be preserved");
 
         // Verify unencrypted payload content matches original
-        assertEquals(expectedBytes.length, sentPacket.getUnencryptedPayload().buf().remaining(),
+        assertEquals(expectedBytes.length, lostPacket.getUnencryptedPayload().buf().remaining(),
                 "Unencrypted payload should have same size as original");
 
-        byte[] payloadBytes = new byte[sentPacket.getUnencryptedPayload().buf().remaining()];
-        sentPacket.getUnencryptedPayload().buf().duplicate().get(payloadBytes);
+        byte[] payloadBytes = new byte[lostPacket.getUnencryptedPayload().buf().remaining()];
+        lostPacket.getUnencryptedPayload().buf().duplicate().get(payloadBytes);
         assertArrayEquals(expectedBytes, payloadBytes,
                 "Unencrypted payload should have identical content to original");
     }
 
     @Test
     @DisplayName("Test multiple lost packets are all retransmitted")
-    void testMultipleLostPacketsRetransmitted() throws Exception {
+    void testMultipleLostPacketsRetransmitted() {
         // Setup connection in HANDSHAKE state
         connection.setState(QuicConnection.State.HANDSHAKE);
         setupMockTlsMetadata();
@@ -678,30 +674,30 @@ class QuicConnectionTest {
         ackRanges.add(new PacketNumberSpace.AckRange(5, 5));
 
         initialSpace.onAckReceived(0, 5, ackRanges, 0, null, 0, TEST_ADDRESS);
-        java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = initialSpace.detectLostPackets(0);
+        Deque<PacketNumberSpace.SentPacket> lostPackets = new ArrayDeque<>();
+        initialSpace.detectLostPackets(0, lostPackets::offer);
 
         // Packets 0, 1 should be declared lost (5 - 3 = 2, so packets < 2 are lost)
         assertTrue(lostPackets.size() >= 2, "Should detect at least 2 lost packets");
-        assertTrue(lostPackets.containsKey(0L), "Packet 0 should be lost");
-        assertTrue(lostPackets.containsKey(1L), "Packet 1 should be lost");
+        assertEquals(1, lostPackets.stream().filter(a -> a.getPacketNumber() == 0).count(), "Packet 0 should be lost");
+        assertEquals(1, lostPackets.stream().filter(a -> a.getPacketNumber() == 1).count(), "Packet 1 should be lost");
 
         // Verify all lost packets have SentPacket metadata with unencrypted payload
-        for (java.util.Map.Entry<Long, PacketNumberSpace.SentPacket> entry : lostPackets.entrySet()) {
-            PacketNumberSpace.SentPacket sentPacket = entry.getValue();
+        for (PacketNumberSpace.SentPacket sentPacket : lostPackets) {
             assertNotNull(sentPacket,
-                    "Lost packet " + entry.getKey() + " should have SentPacket metadata");
+                    "Lost packet  should have SentPacket metadata");
             assertNotNull(sentPacket.getUnencryptedPayload(),
-                    "Lost packet " + entry.getKey() + " should have unencrypted payload");
+                    "Lost packet  should have unencrypted payload");
             assertTrue(sentPacket.getUnencryptedPayload().buf().hasRemaining(),
-                    "Lost packet " + entry.getKey() + " should have payload data");
+                    "Lost packet  should have payload data");
             assertEquals(INITIAL, sentPacket.getPacketPhase(),
-                    "Lost packet " + entry.getKey() + " should have correct packet type");
+                    "Lost packet  should have correct packet type");
         }
     }
 
     @Test
     @DisplayName("Test retransmission via processHandshakePacket ACK handling")
-    void testRetransmissionViaHandshakeAck() throws Exception {
+    void testRetransmissionViaHandshakeAck() {
         // Setup connection in HANDSHAKE state
         connection.setState(QuicConnection.State.HANDSHAKE);
         setupMockTlsMetadata();
@@ -728,7 +724,7 @@ class QuicConnectionTest {
 
     @Test
     @DisplayName("Test no retransmission for already-acked packets")
-    void testNoRetransmissionForAckedPackets() throws Exception {
+    void testNoRetransmissionForAckedPackets() {
         // Setup connection in ESTABLISHED state
         setupEstablishedConnection();
 
@@ -743,7 +739,8 @@ class QuicConnectionTest {
         List<PacketNumberSpace.AckRange> ackRanges = new ArrayList<>();
         ackRanges.add(new PacketNumberSpace.AckRange(0, 2));
         appSpace.onAckReceived(0, 2, ackRanges, 0, null, 0, TEST_ADDRESS);
-        java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = appSpace.detectLostPackets(0);
+        Deque<Long> lostPackets = new ArrayDeque<>();
+        appSpace.detectLostPackets(0, a -> lostPackets.offer(a.getPacketNumber()));
 
         // No packets should be declared lost
         assertTrue(lostPackets.isEmpty(), "No packets should be lost when all are acked");
@@ -751,7 +748,7 @@ class QuicConnectionTest {
 
     @Test
     @DisplayName("Test retransmission via 1-RTT ACK processing")
-    void testRetransmissionVia1RttAck() throws Exception {
+    void testRetransmissionVia1RttAck() {
         // Setup connection in ESTABLISHED state
         setupEstablishedConnection();
 
@@ -776,7 +773,7 @@ class QuicConnectionTest {
 
     @Test
     @DisplayName("Test retransmission generates NEW packet numbers (RFC 9002)")
-    void testRetransmissionGeneratesNewPacketNumbers() throws Exception {
+    void testRetransmissionGeneratesNewPacketNumbers() {
         // Setup connection in HANDSHAKE state
         connection.setState(QuicConnection.State.HANDSHAKE);
         connection.connectionMetadata.clientCid = new byte[]{0x01};
@@ -814,7 +811,7 @@ class QuicConnectionTest {
 
     @Test
     @DisplayName("Test retransmitted packet tracked with NEW packet number in space")
-    void testRetransmittedPacketTrackedWithNewNumber() throws Exception {
+    void testRetransmittedPacketTrackedWithNewNumber() {
         // Setup connection in ESTABLISHED state
         setupEstablishedConnection();
 
@@ -856,7 +853,7 @@ class QuicConnectionTest {
 
     @Test
     @DisplayName("Test multiple retransmissions each get unique NEW packet numbers")
-    void testMultipleRetransmissionsGetUniqueNewPacketNumbers() throws Exception {
+    void testMultipleRetransmissionsGetUniqueNewPacketNumbers() {
         // Setup connection in ESTABLISHED state
         setupEstablishedConnection();
 
@@ -898,13 +895,13 @@ class QuicConnectionTest {
     // Helper Methods
     // ========================================================================
 
-    private void setupEstablishedConnection() throws Exception {
+    private void setupEstablishedConnection() {
         connection.setState(QuicConnection.State.ESTABLISHED);
         connection.connectionMetadata.clientCid = ByteBuffer.allocate(8).putLong(TEST_CID).array();
         setupMockTlsMetadata();
     }
 
-    private void setupMockTlsMetadata() throws Exception {
+    private void setupMockTlsMetadata() {
         ConnectionMetadata mockMetadata = new ConnectionMetadata();
         mockMetadata.negotiatedIdleTimeoutMs = 10_000;
         mockMetadata.clientInitialCrypto = new HashMap<>(Map.of(QuicVersion.QUIC_VERSION_1, nCryptoMock, QuicVersion.QUIC_VERSION_2, nCryptoMock));
@@ -960,8 +957,8 @@ class QuicConnectionTest {
         // Length (simplified)
         // Handshake header: msg_type(1) + length(3) = 4 bytes
         int chBodyLen = 2 + 32 + 1 + 2 + 2 + 1 + 1; // 41
-        
-        byte[] clientHelloBytes = new byte[chBodyLen]; 
+
+        byte[] clientHelloBytes = new byte[chBodyLen];
         ByteBuffer ch = ByteBuffer.wrap(clientHelloBytes);
         ch.putShort((short) 0x0303);                  // legacy_version: TLS 1.2 compat
         ch.put(new byte[32]);                         // client_random (32 bytes)
@@ -1127,7 +1124,7 @@ class QuicConnectionTest {
                     ConnectionMetadata metadata = (ConnectionMetadata) invocation.getArguments()[0];
                     updMeta(metadata);
                     return null;
-                } );
+                });
         // Mock client Finished verification - return true for valid Finished message
         mock.when(() -> QuicCrypto.verifyClientFinished(any(ByteBuffer.class), any(byte[].class), any(byte[].class)))
                 .thenReturn(true);

@@ -21,8 +21,8 @@ public class SimpleFrameQueue implements FrameSource {
     public static final int CAPACITY = 1000;
     private final MpscArrayQueue<Frame> poolBuffers = new MpscArrayQueue<>(CAPACITY);
 
-    public void offer(Frame data) {
-        poolBuffers.add(data);
+    public boolean offer(Frame data) {
+        return poolBuffers.offer(data);
     }
 
     @Override
@@ -33,6 +33,11 @@ public class SimpleFrameQueue implements FrameSource {
     @Override
     public boolean isEmpty() {
         return poolBuffers.isEmpty();
+    }
+
+    @Override
+    public void restart() {
+
     }
 
     public void clear() {

@@ -41,6 +41,8 @@ public class DatagramBuilder {
     private DatagramToSend readyPacket;
     private int framesToSendSumLen;
     private final PacketNumberSpace space;
+    private int maxFrameSize;
+    private boolean firstPacket = true;
 
     public void setEct(ECT ectMarking) {
         this.ectMarking = ectMarking;
@@ -54,7 +56,9 @@ public class DatagramBuilder {
         this.space = space;
     }
 
-    public DatagramToSend getPacket(long currentTimeMs, InetSocketAddress dest, boolean forceBuffered, FrameSource frameSource) {
+    public DatagramToSend getPacket(long currentTimeMs, InetSocketAddress dest, boolean forceBuffered, int maxSize, FrameSource frameSource) {
+        maxFrameSize = maxSize;
+        frameSource.restart();
         if (readyPacket == null) {
             while (readyPacket == null && !frameSource.isEmpty()) {
                 enqueueOneMoreFrame(currentTimeMs, dest, frameSource.poll());
@@ -86,7 +90,7 @@ public class DatagramBuilder {
 
         PoolBuffer packet = wrapPacket(currentTimeMs, dest);
         if (packet != null) {
-            if (space.phase == PacketPhase.INITIAL) {
+            if (space.phase == PacketPhase.INITIAL && firstPacket) {
                 ByteBuffer buf = packet.buf();
                 int size = buf.remaining();
                 if (size < 1200) { // Zero padding
@@ -97,6 +101,7 @@ public class DatagramBuilder {
                     buf.limit(buf.position());
                     buf.position(start);
                 }
+                firstPacket = false;
             }
             readyPacket = new DatagramToSend(PacketSource.NEW, packet, ectMarking, dest);
         }
@@ -104,15 +109,20 @@ public class DatagramBuilder {
 
     private void enqueueOneMoreFrame(long currentTimeMs, InetSocketAddress dest, Frame frame) {
         int maxHeaderLen = (space.phase == PacketPhase.APPLICATION) ? QuicFrameBuilder.MAX_SHORT_HEADER_LENGTH : QuicFrameBuilder.MAX_LONG_HEADER_LENGTH;
-        int remaining = (int) connectionMetadata.clientMetadata.maxUdpPayloadSize - GCM_TAG_LENGTH - maxHeaderLen - framesToSendSumLen;
 
-        if (remaining < frame.data().buf().remaining() || (space.phase == PacketPhase.HANDSHAKE))
+        int remaining = getMaxPacketSize() - GCM_TAG_LENGTH - maxHeaderLen - framesToSendSumLen;
+
+        if (remaining < frame.data().buf().remaining() && !framesToSend.isEmpty())
         {
             flushPacket(currentTimeMs, dest);
         }
 
         framesToSendSumLen += frame.data().buf().remaining();
         framesToSend.add(frame);
+    }
+
+    private int getMaxPacketSize() {
+        return maxFrameSize;
     }
 
     public PoolBuffer wrapPacket(long currentTimestamp, InetSocketAddress dest) {
@@ -131,7 +141,7 @@ public class DatagramBuilder {
                 payload.buf().put(frame.data().buf());
             } catch (BufferOverflowException e) {
                 int maxHeaderLen = (space.phase == PacketPhase.APPLICATION) ? QuicFrameBuilder.MAX_SHORT_HEADER_LENGTH : QuicFrameBuilder.MAX_LONG_HEADER_LENGTH;
-                int remaining = (int) connectionMetadata.clientMetadata.maxUdpPayloadSize - GCM_TAG_LENGTH - maxHeaderLen;
+                int remaining = getMaxPacketSize() - GCM_TAG_LENGTH - maxHeaderLen;
 
                 logger.error("Strange overflow UDP max {} pack lim {} payload reminder {} (cap {}), frame size {} (send sum: {}, init start {})",
                         connectionMetadata.clientMetadata.maxUdpPayloadSize, remaining, reminder, payload.buf().capacity(), frame.data().buf().remaining(),

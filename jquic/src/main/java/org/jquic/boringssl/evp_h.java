@@ -22,29 +22,13 @@ import org.jquic.quic.linux.NativeUtil;
 import java.io.IOException;
 import java.lang.foreign.*;
 import java.lang.invoke.MethodHandle;
-import java.util.Arrays;
-import java.util.stream.Collectors;
 
 public class evp_h {
     public static final ValueLayout.OfByte C_CHAR =(ValueLayout.OfByte) Linker.nativeLinker().canonicalLayouts().get("char");
-    public static final ValueLayout.OfShort C_SHORT = (ValueLayout.OfShort) Linker.nativeLinker().canonicalLayouts().get("short");
     public static final ValueLayout.OfInt C_INT = (ValueLayout.OfInt) Linker.nativeLinker().canonicalLayouts().get("int");
     public static final ValueLayout.OfLong C_LONG_LONG = (ValueLayout.OfLong) Linker.nativeLinker().canonicalLayouts().get("long long");
-    public static final ValueLayout.OfFloat C_FLOAT = (ValueLayout.OfFloat) Linker.nativeLinker().canonicalLayouts().get("float");
-    public static final ValueLayout.OfDouble C_DOUBLE = (ValueLayout.OfDouble) Linker.nativeLinker().canonicalLayouts().get("double");
     public static final AddressLayout C_POINTER = ((AddressLayout) Linker.nativeLinker().canonicalLayouts().get("void*"))
             .withTargetLayout(MemoryLayout.sequenceLayout(java.lang.Long.MAX_VALUE, C_CHAR));
-    public static final ValueLayout C_LONG = (ValueLayout) Linker.nativeLinker().canonicalLayouts().get("long");
-    public static final ValueLayout.OfDouble C_LONG_DOUBLE = (ValueLayout.OfDouble) Linker.nativeLinker().canonicalLayouts().get("double");
-
-    static final boolean TRACE_DOWNCALLS = Boolean.getBoolean("jextract.trace.downcalls");
-
-    static void traceDowncall(String name, Object... args) {
-        String traceArgs = Arrays.stream(args)
-                .map(Object::toString)
-                .collect(Collectors.joining(", "));
-        System.out.printf("%s(%s)\n", name, traceArgs);
-    }
 
     static {
         try {
@@ -65,29 +49,6 @@ public class evp_h {
     public static int EVP_AEAD_DEFAULT_TAG_LENGTH() {
         return EVP_AEAD_DEFAULT_TAG_LENGTH;
     }
-
-    /**
-     * Variadic invoker class for:
-     * {@snippet lang=c :
-     * void __va_start(va_list *, ...)
-     * }
-     */
-    public static class __va_start {
-
-    }
-
-    /**
-     * {@snippet lang=c :
-     * typedef long _off_t
-     * }
-     */
-//    public static final OfInt _off_t = evp_h.C_LONG;
-    /**
-     * {@snippet lang=c :
-     * typedef _off_t off_t
-     * }
-     */
-//    public static final OfInt off_t = evp_h.C_LONG;
 
     private static class EVP_aead_aes_128_gcm {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
@@ -116,9 +77,6 @@ public class evp_h {
     public static MemorySegment EVP_aead_aes_128_gcm() {
         var mh$ = EVP_aead_aes_128_gcm.HANDLE;
         try {
-            if (TRACE_DOWNCALLS) {
-                traceDowncall("EVP_aead_aes_128_gcm");
-            }
             return (MemorySegment)mh$.invokeExact();
         } catch (Error | RuntimeException ex) {
             throw ex;
@@ -135,9 +93,6 @@ public class evp_h {
     public static MemorySegment EVP_aead_aes_256_gcm() {
         var mh$ = EVP_aead_aes_256_gcm.HANDLE;
         try {
-            if (TRACE_DOWNCALLS) {
-                traceDowncall("EVP_aead_aes_256_gcm");
-            }
             return (MemorySegment)mh$.invokeExact();
         } catch (Error | RuntimeException ex) {
             throw ex;
@@ -163,9 +118,6 @@ public class evp_h {
     public static MemorySegment EVP_aead_chacha20_poly1305() {
         var mh$ = EVP_aead_chacha20_poly1305.HANDLE;
         try {
-            if (TRACE_DOWNCALLS) {
-                traceDowncall("EVP_aead_chacha20_poly1305");
-            }
             return (MemorySegment)mh$.invokeExact();
         } catch (Error | RuntimeException ex) {
             throw ex;
@@ -200,9 +152,6 @@ public class evp_h {
     public static int EVP_AEAD_CTX_init(MemorySegment ctx, MemorySegment aead, MemorySegment key, long key_len, long tag_len, MemorySegment impl) {
         var mh$ = EVP_AEAD_CTX_init.HANDLE;
         try {
-            if (TRACE_DOWNCALLS) {
-                traceDowncall("EVP_AEAD_CTX_init", ctx, aead, key, key_len, tag_len, impl);
-            }
             return (int)mh$.invokeExact(ctx, aead, key, key_len, tag_len, impl);
         } catch (Error | RuntimeException ex) {
             throw ex;
@@ -229,9 +178,6 @@ public class evp_h {
     public static void EVP_AEAD_CTX_cleanup(MemorySegment ctx) {
         var mh$ = EVP_AEAD_CTX_cleanup.HANDLE;
         try {
-            if (TRACE_DOWNCALLS) {
-                traceDowncall("EVP_AEAD_CTX_cleanup", ctx);
-            }
             mh$.invokeExact(ctx);
         } catch (Error | RuntimeException ex) {
             throw ex;
@@ -268,9 +214,6 @@ public class evp_h {
     public static int EVP_AEAD_CTX_seal(MemorySegment ctx, MemorySegment out, MemorySegment out_len, long max_out_len, MemorySegment nonce, long nonce_len, MemorySegment in, long in_len, MemorySegment ad, long ad_len) {
         var mh$ = EVP_AEAD_CTX_seal.HANDLE;
         try {
-            if (TRACE_DOWNCALLS) {
-                traceDowncall("EVP_AEAD_CTX_seal", ctx, out, out_len, max_out_len, nonce, nonce_len, in, in_len, ad, ad_len);
-            }
             return (int)mh$.invokeExact(ctx, out, out_len, max_out_len, nonce, nonce_len, in, in_len, ad, ad_len);
         } catch (Error | RuntimeException ex) {
             throw ex;
@@ -307,9 +250,6 @@ public class evp_h {
     public static int EVP_AEAD_CTX_open(MemorySegment ctx, MemorySegment out, MemorySegment out_len, long max_out_len, MemorySegment nonce, long nonce_len, MemorySegment in, long in_len, MemorySegment ad, long ad_len) {
         var mh$ = EVP_AEAD_CTX_open.HANDLE;
         try {
-            if (TRACE_DOWNCALLS) {
-                traceDowncall("EVP_AEAD_CTX_open", ctx, out, out_len, max_out_len, nonce, nonce_len, in, in_len, ad, ad_len);
-            }
             return (int)mh$.invokeExact(ctx, out, out_len, max_out_len, nonce, nonce_len, in, in_len, ad, ad_len);
         } catch (Error | RuntimeException ex) {
             throw ex;
@@ -336,9 +276,6 @@ public class evp_h {
     public static MemorySegment EVP_aes_128_ecb() {
         var mh$ = EVP_aes_128_ecb.HANDLE;
         try {
-            if (TRACE_DOWNCALLS) {
-                traceDowncall("EVP_aes_128_ecb");
-            }
             return (MemorySegment)mh$.invokeExact();
         } catch (Error | RuntimeException ex) {
             throw ex;
@@ -365,9 +302,6 @@ public class evp_h {
     public static MemorySegment EVP_aes_256_ecb() {
         var mh$ = EVP_aes_256_ecb.HANDLE;
         try {
-            if (TRACE_DOWNCALLS) {
-                traceDowncall("EVP_aes_256_ecb");
-            }
             return (MemorySegment)mh$.invokeExact();
         } catch (Error | RuntimeException ex) {
             throw ex;
@@ -394,19 +328,12 @@ public class evp_h {
     public static void EVP_CIPHER_CTX_init(MemorySegment ctx) {
         var mh$ = EVP_CIPHER_CTX_init.HANDLE;
         try {
-            if (TRACE_DOWNCALLS) {
-                traceDowncall("EVP_CIPHER_CTX_init", ctx);
-            }
             mh$.invokeExact(ctx);
         } catch (Error | RuntimeException ex) {
             throw ex;
         } catch (Throwable ex$) {
             throw new AssertionError("should not reach here", ex$);
         }
-    }
-
-    private static class EVP_CIPHER_CTX_new {
-
     }
 
     private static class EVP_CIPHER_CTX_cleanup {
@@ -428,9 +355,6 @@ public class evp_h {
     public static int EVP_CIPHER_CTX_cleanup(MemorySegment ctx) {
         var mh$ = EVP_CIPHER_CTX_cleanup.HANDLE;
         try {
-            if (TRACE_DOWNCALLS) {
-                traceDowncall("EVP_CIPHER_CTX_cleanup", ctx);
-            }
             return (int)mh$.invokeExact(ctx);
         } catch (Error | RuntimeException ex) {
             throw ex;
@@ -462,19 +386,12 @@ public class evp_h {
     public static int EVP_EncryptInit_ex(MemorySegment ctx, MemorySegment cipher, MemorySegment impl, MemorySegment key, MemorySegment iv) {
         var mh$ = EVP_EncryptInit_ex.HANDLE;
         try {
-            if (TRACE_DOWNCALLS) {
-                traceDowncall("EVP_EncryptInit_ex", ctx, cipher, impl, key, iv);
-            }
             return (int)mh$.invokeExact(ctx, cipher, impl, key, iv);
         } catch (Error | RuntimeException ex) {
             throw ex;
         } catch (Throwable ex$) {
             throw new AssertionError("should not reach here", ex$);
         }
-    }
-
-    private static class EVP_DecryptInit_ex {
-
     }
 
     private static class EVP_EncryptUpdate {
@@ -500,9 +417,6 @@ public class evp_h {
     public static int EVP_EncryptUpdate(MemorySegment ctx, MemorySegment out, MemorySegment out_len, MemorySegment in, int in_len) {
         var mh$ = EVP_EncryptUpdate.HANDLE;
         try {
-            if (TRACE_DOWNCALLS) {
-                traceDowncall("EVP_EncryptUpdate", ctx, out, out_len, in, in_len);
-            }
             return (int)mh$.invokeExact(ctx, out, out_len, in, in_len);
         } catch (Error | RuntimeException ex) {
             throw ex;
@@ -531,9 +445,6 @@ public class evp_h {
     public static int EVP_CIPHER_CTX_set_padding(MemorySegment ctx, int pad) {
         var mh$ = EVP_CIPHER_CTX_set_padding.HANDLE;
         try {
-            if (TRACE_DOWNCALLS) {
-                traceDowncall("EVP_CIPHER_CTX_set_padding", ctx, pad);
-            }
             return (int)mh$.invokeExact(ctx, pad);
         } catch (Error | RuntimeException ex) {
             throw ex;

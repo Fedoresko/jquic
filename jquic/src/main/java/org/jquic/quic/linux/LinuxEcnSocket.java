@@ -37,6 +37,11 @@ import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static java.lang.foreign.ValueLayout.JAVA_SHORT;
 
 public class LinuxEcnSocket implements AutoCloseable {
+    private static final int IPPROTO_IP = 0;
+    private static final int IPPROTO_IPV6 = 41;
+    private static final int IP_RECVTOS = 13;
+    private static final int IPV6_RECVTCLASS = 66;
+
     private static final MethodHandle quic_receive_ecn;
     private static final MethodHandle quic_receive_ecn_blocking;
     private static final MethodHandle quic_receive_batch_ecn;
@@ -44,6 +49,7 @@ public class LinuxEcnSocket implements AutoCloseable {
     private static final MethodHandle send_batch_fast;
     private static final MethodHandle send_batch_ecn;
     private static final MethodHandle send_ecn;
+    private static final MethodHandle setsockoptHandle;
     private static final Logger log = LoggerFactory.getLogger(LinuxEcnSocket.class);
 
     static {
@@ -54,7 +60,24 @@ public class LinuxEcnSocket implements AutoCloseable {
         MethodHandle mh_send_batch = null;
         MethodHandle mh_send_batch_ecn = null;
         MethodHandle mh_send_ecn = null;
+        MethodHandle mh_setsockoptHandle = null;
+
         try {
+            Linker linker = Linker.nativeLinker();
+            SymbolLookup libc = linker.defaultLookup();
+
+            FunctionDescriptor sockOptDescr = FunctionDescriptor.of(
+                    ValueLayout.JAVA_INT,
+                    ValueLayout.JAVA_INT,
+                    ValueLayout.JAVA_INT,
+                    ValueLayout.JAVA_INT,
+                    ValueLayout.ADDRESS,
+                    ValueLayout.JAVA_INT
+            );
+
+            MemorySegment setsockoptAddress = libc.find("setsockopt").orElseThrow();
+            mh_setsockoptHandle = linker.downcallHandle(setsockoptAddress, sockOptDescr);
+
             NativeUtil.loadLib("libquic_ecn");
             SymbolLookup lookup = SymbolLookup.loaderLookup();
             MemorySegment symbol = lookup.find("quic_receive_ecn").orElseThrow();
@@ -135,7 +158,9 @@ public class LinuxEcnSocket implements AutoCloseable {
                     ),
                     Linker.Option.critical(true)
             );
-        } catch (Throwable e) {}
+        } catch (Throwable e) {
+            log.info("Failed to load libquic_ecn", e);
+        }
         quic_receive_ecn = mh;
         quic_receive_ecn_blocking = mh2;
         quic_receive_batch_ecn = mh_batch;
@@ -143,6 +168,7 @@ public class LinuxEcnSocket implements AutoCloseable {
         send_batch_fast = mh_send_batch;
         send_batch_ecn = mh_send_batch_ecn;
         send_ecn = mh_send_ecn;
+        setsockoptHandle = mh_setsockoptHandle;
     }
 
     private final int fd;
@@ -169,6 +195,7 @@ public class LinuxEcnSocket implements AutoCloseable {
             throw new Exception("LinuxEcnSocket is not loaded");
         }
         this.fd = fd;
+        enableEcnReceipt(fd);
     }
 
     /**
@@ -376,6 +403,29 @@ public class LinuxEcnSocket implements AutoCloseable {
                 return (int) send_batch_ecn.invokeExact(fd, dataPtrs, lengthsSegment, sockaddrPtrs, ecnFlagsSegment, size);
             } else {
                 return (int) send_batch_fast.invokeExact(fd, dataPtrs, lengthsSegment, sockaddrPtrs, size);
+            }
+        } catch (Throwable t) {
+            throw new IOException(t);
+        }
+    }
+
+    public static void enableEcnReceipt(int fd) throws Exception {
+        // Арена управляет временем жизни нативной памяти (аналог free() в C)
+        try (Arena arena = Arena.ofConfined()) {
+            // Выделяем 4 байта под значение `1` (true)
+            MemorySegment optval = arena.allocateFrom(ValueLayout.JAVA_INT, 1);
+            int optlen = (int) ValueLayout.JAVA_INT.byteSize();
+
+            // Включаем IP_RECVTOS для IPv4
+            int resV4 = (int) setsockoptHandle.invokeExact(fd, IPPROTO_IP, IP_RECVTOS, optval, optlen);
+            if (resV4 < 0) {
+                throw new RuntimeException("Failed to set IP_RECVTOS, errno code is negative");
+            }
+
+            // Включаем IPV6_RECVTCLASS для IPv6
+            int resV6 = (int) setsockoptHandle.invokeExact(fd, IPPROTO_IPV6, IPV6_RECVTCLASS, optval, optlen);
+            if (resV6 < 0) {
+                throw new RuntimeException("Failed to set IPV6_RECVTCLASS, errno code is negative");
             }
         } catch (Throwable t) {
             throw new IOException(t);

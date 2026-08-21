@@ -31,34 +31,35 @@ public class TlsSignatureMapping {
     }
 
     public static JcaSchemeInfo resolve(short signatureScheme) {
-        switch (signatureScheme) {
+        return switch (signatureScheme) {
             // ECDSA Schemes
-            case (short) 0x0403: // ecdsa_secp256r1_sha256
-                return new JcaSchemeInfo("SHA256withECDSA", null);
-            case (short) 0x0503: // ecdsa_secp384r1_sha384
-                return new JcaSchemeInfo("SHA384withECDSA", null);
-            case (short) 0x0603: // ecdsa_secp521r1_sha512
-                return new JcaSchemeInfo("SHA512withECDSA", null);
+            case (short) 0x0403 -> // ecdsa_secp256r1_sha256
+                    new JcaSchemeInfo("SHA256withECDSA", null);
+            case (short) 0x0503 -> // ecdsa_secp384r1_sha384
+                    new JcaSchemeInfo("SHA384withECDSA", null);
+            case (short) 0x0603 -> // ecdsa_secp521r1_sha512
+                    new JcaSchemeInfo("SHA512withECDSA", null);
 
             // EdDSA Schemes
-            case (short) 0x0807: // ed25519
-                return new JcaSchemeInfo("Ed25519", null);
+            case (short) 0x0807 -> // ed25519
+                    new JcaSchemeInfo("Ed25519", null);
+            case (short) 0x0808 -> // ed448
+                    new JcaSchemeInfo("Ed448", null);
 
             // RSA-PSS Schemes (Requires Parameter Specs)
-            case (short) 0x0804: // rsa_pss_rsae_sha256
-                return new JcaSchemeInfo("RSASSA-PSS", createPssSpec("SHA-256", 32));
-            case (short) 0x0805: // rsa_pss_rsae_sha384
-                return new JcaSchemeInfo("RSASSA-PSS", createPssSpec("SHA-384", 48));
-            case (short) 0x0806: // rsa_pss_rsae_sha512
-                return new JcaSchemeInfo("RSASSA-PSS", createPssSpec("SHA-512", 64));
+            // rsa_pss_rsae_sha256
+            case (short) 0x0804, (short) 0x0809 -> // rsa_pss_pss_sha256
+                    new JcaSchemeInfo("RSASSA-PSS", createPssSpec("SHA-256", 32)); // rsa_pss_rsae_sha384
+            case (short) 0x0805, (short) 0x080a -> // rsa_pss_pss_sha384
+                    new JcaSchemeInfo("RSASSA-PSS", createPssSpec("SHA-384", 48)); // rsa_pss_rsae_sha512
+            case (short) 0x0806, (short) 0x080b -> // rsa_pss_pss_sha512
+                    new JcaSchemeInfo("RSASSA-PSS", createPssSpec("SHA-512", 64));
 
             // Legacy RSA PKCS#1 v1.5 (Supported in TLS 1.3 only for reverse compatibility)
-            case (short) 0x0101: // rsa_pkcs1_sha256
-                return new JcaSchemeInfo("SHA256withRSA", null);
-
-            default:
-                return null; // Unsupported or unknown algorithm
-        }
+            case (short) 0x0101 -> // rsa_pkcs1_sha256
+                    new JcaSchemeInfo("SHA256withRSA", null);
+            default -> null; // Unsupported or unknown algorithm
+        };
     }
 
     private static PSSParameterSpec createPssSpec(String digestAlgo, int saltLen) {

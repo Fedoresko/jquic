@@ -15,8 +15,9 @@
  */
 package org.jquic.quic.paths;
 
-public interface FrameSource {
-    Frame poll();
-    boolean isEmpty();
-    void restart();
-}
+import org.jquic.quic.buffers.PoolBuffer;
+import org.jquic.quic.packets.PacketPhase;
+
+import java.net.InetSocketAddress;
+
+public record UrgentFrame(PoolBuffer data, PacketPhase phase, boolean ackEliciting, InetSocketAddress dest) {}

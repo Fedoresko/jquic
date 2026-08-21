@@ -60,6 +60,9 @@ public class ApplicationQueue implements FrameSource {
         return applicationQueue.isEmpty();
     }
 
+    @Override
+    public void restart() {}
+
     public void clear() {
         applicationQueue.drain(
             a -> a.data.data().release()

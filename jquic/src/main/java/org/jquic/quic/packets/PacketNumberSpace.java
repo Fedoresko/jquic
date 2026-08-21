@@ -16,6 +16,7 @@
 package org.jquic.quic.packets;
 
 import org.jquic.quic.buffers.PoolBuffer;
+import org.jquic.quic.paths.ConnectionPath;
 import org.jquic.quic.paths.ConnectionPathController;
 import org.jquic.quic.struct.SortedIntervals;
 import org.slf4j.Logger;
@@ -24,6 +25,7 @@ import org.slf4j.LoggerFactory;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.util.*;
+import java.util.function.Function;
 
 /**
  * Manages packet number space for a specific encryption level (Initial, Handshake, or Application).
@@ -116,7 +118,12 @@ public class PacketNumberSpace {
     }
 
     public WindowedStatCounter getWindowedStatCounter(InetSocketAddress destinationAddress) {
-        return connectionPathController == null ? null : connectionPathController.getConnectionPath(destinationAddress).windowedStatCounter;
+        if (connectionPathController == null) {
+            return null;
+        } else {
+            ConnectionPath connectionPath = connectionPathController.getConnectionPath(destinationAddress);
+            return connectionPath.windowedStatCounter == null ? null : connectionPath.windowedStatCounter;
+        }
     }
 
     /**
@@ -235,15 +242,13 @@ public class PacketNumberSpace {
      * Returns map of lost packet numbers to their SentPacket metadata for retransmission.
      * The caller will re-wrap the unencrypted payload with a NEW packet number.
      */
-    public java.util.Map<Long, SentPacket> detectLostPackets(long timestampMs) {
-        java.util.Map<Long, SentPacket> lostPackets = new HashMap<>();
-
+    public void detectLostPackets(long timestampMs, Function<SentPacket, Boolean> retransmit) {
         if (connectionPathController != null) {
             connectionPathController.clearOlderStats(timestampMs);
         }
 
         if (sentPackets.isEmpty()) {
-            return lostPackets;
+            return;
         }
 
         // Packet threshold: declare lost if far enough below largest acked
@@ -253,24 +258,31 @@ public class PacketNumberSpace {
         // headMap(lostPacketThreshold) returns only the entries with pn < lostPacketThreshold,
         // so we visit exactly the candidates without scanning the rest of the map.
 
+        int num = 0;
         while (!sentPackets.isEmpty()) {
             Map.Entry<Long, SentPacket> entry = sentPackets.firstEntry();
+            SentPacket packet = entry.getValue();
             if (entry.getKey() < lostPacketThreshold ||
-                    entry.getValue().getTimeoutTimestamp() < timestampMs
+                    packet.getTimeoutTimestamp() < timestampMs
             ) {
-                lostPackets.put(sentPackets.pollFirstEntry().getKey(), entry.getValue());
+                if (retransmit.apply(packet)) {
+                    sentPackets.pollFirstEntry();
+                    WindowedStatCounter windowedStatCounter = getWindowedStatCounter(packet.getDestinationAddress());
+                    if (windowedStatCounter != null) {
+                        windowedStatCounter.onLostPacket(timestampMs, packet.getSize());
+                    }
+                    num++;
+                } else { // the queue is full
+                    logger.info("Retransmitted {} lost packets. Blocked by queue.", num);
+                    return;
+                }
             } else {
                 break;
             }
         }
-
-        if (connectionPathController != null) {
-            for (SentPacket packet : lostPackets.values()) {
-                getWindowedStatCounter(packet.getDestinationAddress()).onLostPacket(timestampMs, packet.getSize());
-            }
+        if (num > 0) {
+            logger.info("Retransmitted {} lost packets.", num);
         }
-
-        return lostPackets;
     }
 
     /**

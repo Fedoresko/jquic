@@ -20,10 +20,8 @@ package org.jquic.boringssl;
 import org.jquic.quic.linux.NativeUtil;
 
 import java.io.IOException;
-import java.lang.invoke.*;
 import java.lang.foreign.*;
-import java.util.Arrays;
-import java.util.stream.Collectors;
+import java.lang.invoke.MethodHandle;
 
 public class err_h {
     public static final ValueLayout.OfByte C_CHAR =(ValueLayout.OfByte)Linker.nativeLinker().canonicalLayouts().get("char");
@@ -31,15 +29,6 @@ public class err_h {
     public static final ValueLayout.OfLong C_LONG_LONG = (ValueLayout.OfLong) Linker.nativeLinker().canonicalLayouts().get("long long");
     public static final AddressLayout C_POINTER = ((AddressLayout) Linker.nativeLinker().canonicalLayouts().get("void*"))
             .withTargetLayout(MemoryLayout.sequenceLayout(java.lang.Long.MAX_VALUE, C_CHAR));
-
-    static final boolean TRACE_DOWNCALLS = Boolean.getBoolean("jextract.trace.downcalls");
-
-    static void traceDowncall(String name, Object... args) {
-        String traceArgs = Arrays.stream(args)
-                .map(Object::toString)
-                .collect(Collectors.joining(", "));
-        System.out.printf("%s(%s)\n", name, traceArgs);
-    }
 
     static {
         try {
@@ -68,9 +57,6 @@ public class err_h {
     public static int ERR_get_error() {
         var mh$ = ERR_get_error.HANDLE;
         try {
-            if (TRACE_DOWNCALLS) {
-                traceDowncall("ERR_get_error");
-            }
             return (int)mh$.invokeExact();
         } catch (Error | RuntimeException ex) {
            throw ex;
@@ -100,9 +86,6 @@ public class err_h {
     public static MemorySegment ERR_error_string_n(int packed_error, MemorySegment buf, long len) {
         var mh$ = ERR_error_string_n.HANDLE;
         try {
-            if (TRACE_DOWNCALLS) {
-                traceDowncall("ERR_error_string_n", packed_error, buf, len);
-            }
             return (MemorySegment)mh$.invokeExact(packed_error, buf, len);
         } catch (Error | RuntimeException ex) {
            throw ex;

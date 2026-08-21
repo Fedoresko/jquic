@@ -214,34 +214,49 @@ public class KeystoreManager {
     public Short selectSignatureScheme(List<Short> clientSchemes) {
         String keyAlgorithm = privateKey.getAlgorithm(); // e.g., "RSA" or "EC"
 
+        if (clientSchemes.contains((short) 0x807) && checkSchemeCompatible((short) 0x807, keyAlgorithm)) {
+            return 0x807;
+        }
+        if (clientSchemes.contains((short) 0x403) && checkSchemeCompatible((short) 0x403, keyAlgorithm)) {
+            return 0x403;
+        }
+
         for (short scheme : clientSchemes) {
-            TlsSignatureMapping.JcaSchemeInfo info = TlsSignatureMapping.resolve(scheme);
-            if (info == null) continue; // Skip if our mapping doesn't recognize it
-
-            // 1. Check if the scheme matches your loaded private key type
-            if (keyAlgorithm.equalsIgnoreCase("RSA")) {
-                // Is it an RSA-PSS or standard RSA scheme?
-                if (!info.jcaAlgorithm.contains("RSA")) continue;
-            } else if (keyAlgorithm.equalsIgnoreCase("EC")) {
-                // Is it an ECDSA scheme?
-                if (!info.jcaAlgorithm.contains("ECDSA")) continue;
-            } else if (keyAlgorithm.equalsIgnoreCase("Ed25519") || keyAlgorithm.equalsIgnoreCase("EdDSA")) {
-                if (!info.jcaAlgorithm.equalsIgnoreCase("Ed25519")) continue;
-            } else {
-                continue; // Unsupported key type
-            }
-
-            // 2. Verify that your underlying Java Runtime actually supports this algorithm
-            try {
-                Signature.getInstance(info.jcaAlgorithm);
-                // If it didn't throw an exception, this scheme is available and safe to use!
-                return scheme;
-            } catch (Exception e) {
-                // Local Java security provider lacks this specific algorithm; try next
-            }
+            if (checkSchemeCompatible(scheme, keyAlgorithm)) return scheme;
         }
 
         throw new IllegalStateException("No mutually supported signature schemes found between client and server.");
+    }
+
+    private static boolean checkSchemeCompatible(short scheme, String keyAlgorithm) {
+        TlsSignatureMapping.JcaSchemeInfo info = TlsSignatureMapping.resolve(scheme);
+        if (info == null) return false;
+
+        // 1. Check if the scheme matches your loaded private key type
+        if (keyAlgorithm.equalsIgnoreCase("RSA")) {
+            if (!info.jcaAlgorithm.equals("RSASSA-PSS")) {
+                return false;
+            }
+        } else if (keyAlgorithm.equalsIgnoreCase("EC")) {
+            // Is it an ECDSA scheme?
+            if (!info.jcaAlgorithm.contains("ECDSA")) return false;
+        } else if (keyAlgorithm.equalsIgnoreCase("Ed25519") || keyAlgorithm.equalsIgnoreCase("EdDSA")) {
+            if (!info.jcaAlgorithm.equalsIgnoreCase("Ed25519")) return false;
+        } else {
+            System.err.println("Unsupported scheme "+scheme+" and key algorithm: " + keyAlgorithm);
+            return false;
+        }
+
+        // 2. Verify that your underlying Java Runtime actually supports this algorithm
+        try {
+            Signature.getInstance(info.jcaAlgorithm);
+            // If it didn't throw an exception, this scheme is available and safe to use!
+            return true;
+        } catch (Exception e) {
+            // Local Java security provider lacks this specific algorithm; try next
+            System.err.println("Unsupported scheme "+scheme+" and key algorithm: " + keyAlgorithm + " "+ e.getMessage());
+        }
+        return false;
     }
 
     /**

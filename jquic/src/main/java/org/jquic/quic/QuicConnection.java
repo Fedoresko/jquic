@@ -813,6 +813,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
 
                 needsAck = true;
             } else if (frameType == 0x1b) { // PATH_RESPONSE
+                logger.info("Received PATH_RESPONSE CID={}", connectionId);
                 byte[] data = new byte[8];
                 plaintext.buf().get(data);
                 connectionPathController.onChallenge(sender, data);
@@ -1016,12 +1017,12 @@ public class QuicConnection implements TimeoutHeap.Entry {
                 this.negotiatedProtocol = connectionMetadata.clientMetadata.alpn;
                 QuicApplicationProtocol protocol = QuicEngine.getStreamEngine().getProtocol(negotiatedProtocol);
                 if (protocol != null) {
-                    connectionMetadata.serverInitialLimits.maxData = protocol.getMaxData();
-                    connectionMetadata.serverInitialLimits.maxBidi = protocol.getMaxBidirectionalStreamsPerConnection();
-                    connectionMetadata.serverInitialLimits.maxUni = protocol.getMaxUnidirectionalStreamsPerConnection();
-                    connectionMetadata.serverInitialLimits.maxStreamDataUni = protocol.getMaxStreamData();
-                    connectionMetadata.serverInitialLimits.maxStreamDataBidiLocal = protocol.getMaxStreamData();
-                    connectionMetadata.serverInitialLimits.maxStreamDataBidiRemote = protocol.getMaxStreamData();
+                    connectionMetadata.serverInitialLimits.maxData = (long) protocol.getMaxData();
+                    connectionMetadata.serverInitialLimits.maxBidi = (long) protocol.getMaxBidirectionalStreamsPerConnection();
+                    connectionMetadata.serverInitialLimits.maxUni = (long) protocol.getMaxUnidirectionalStreamsPerConnection();
+                    connectionMetadata.serverInitialLimits.maxStreamDataUni = (long) protocol.getMaxStreamData();
+                    connectionMetadata.serverInitialLimits.maxStreamDataBidiLocal = (long) protocol.getMaxStreamData();
+                    connectionMetadata.serverInitialLimits.maxStreamDataBidiRemote = (long) protocol.getMaxStreamData();
                 }
                 logger.info("ALPN negotiated: {} for CID: {}", connectionMetadata.clientMetadata.alpn, connectionId);
             } else {
@@ -1072,8 +1073,11 @@ public class QuicConnection implements TimeoutHeap.Entry {
             QuicFrameBuilder.writeConnectionCloseFrame(byteBuffer.buf(), errorCode, reason);
 
             logger.debug("Sending CONNECTION_CLOSE packet");
-            connectionPathController.sendFrame(byteBuffer, space.phase);
-            logger.warn("Sent CONNECTION_CLOSE for CID: {}, transitioning to CLOSING", connectionId);
+            if (connectionPathController.sendFrame(byteBuffer, space.phase)) {
+                logger.warn("Sent CONNECTION_CLOSE for CID: {}, transitioning to CLOSING", connectionId);
+            } else {
+                logger.error("Could not send CONNECTION_CLOSE for CID: {}. Queue is full.", connectionId);
+            }
         } catch (Exception encryptEx) {
             logger.error("Failed to encrypt CONNECTION_CLOSE packet", encryptEx);
             setState(State.CLOSED);
@@ -1091,25 +1095,34 @@ public class QuicConnection implements TimeoutHeap.Entry {
     }
 
     private void sendInitialPacket(PoolBuffer payload) {
-        if (state.get() == INITIAL)
-            connectionPathController.sendFrame(payload, PacketPhase.INITIAL);
-        else {
+        if (state.get() == INITIAL) {
+            if (!connectionPathController.sendFrame(payload, PacketPhase.INITIAL)) {
+                payload.release();
+                logger.error("Failed to send INITIAL packet for CID: {}. Queue is full.", connectionId);
+            }
+        } else {
             logger.error("!!!Send initial packet in {} state", state.get());
             payload.release();
         }
     }
     private void sendHandshakePacket(PoolBuffer payload) {
-        if (state.get() == HANDSHAKE)
-            connectionPathController.sendFrame(payload, PacketPhase.HANDSHAKE);
-        else {
+        if (state.get() == HANDSHAKE) {
+            if (!connectionPathController.sendFrame(payload, PacketPhase.HANDSHAKE)) {
+                payload.release();
+                logger.error("Failed to send HANDSHAKE packet for CID: {}. Queue is full.", connectionId);
+            }
+        } else {
             logger.error("!!!Send handshake packet in {} state", state.get());
             payload.release();
         }
     }
     private void sendApplicationPacket(PoolBuffer payload) {
-        if (state.get() == ESTABLISHED)
-            connectionPathController.sendFrame(payload, PacketPhase.APPLICATION);
-        else {
+        if (state.get() == ESTABLISHED) {
+            if (!connectionPathController.sendFrame(payload, PacketPhase.APPLICATION)) {
+                payload.release();
+                logger.error("Failed to send APPLICATION packet for CID: {}. Queue is full.", connectionId);
+            }
+        } else {
             logger.error("!!!Send application packet in {} state", state.get());
             payload.release();
         }
@@ -1231,19 +1244,28 @@ public class QuicConnection implements TimeoutHeap.Entry {
         PoolBuffer buffer = getBufferPool().requestWriteBuffer();
         QuicFrameBuilder.writeAckEcnFrame(initialSpace, currentTimestamp, buffer.buf());
         logger.debug("Sending ACK Initial packet");
-        connectionPathController.sendAck(buffer, PacketPhase.INITIAL);
+        if (!connectionPathController.sendAck(buffer, PacketPhase.INITIAL)) {
+            buffer.release();
+            logger.error("Failed to send ACK Initial packet, queue is full.");
+        }
     }
     private void sendHandshakeAck() {
         PoolBuffer buffer = getBufferPool().requestWriteBuffer();
         QuicFrameBuilder.writeAckEcnFrame(handshakeSpace, currentTimestamp, buffer.buf());
         logger.debug("Sending Handshake ACK");
-        connectionPathController.sendAck(buffer, PacketPhase.HANDSHAKE);
+        if (!connectionPathController.sendAck(buffer, PacketPhase.HANDSHAKE)) {
+            buffer.release();
+            logger.error("Failed to send ACK Handshake packet, queue is full.");
+        }
     }
     private void send1RttAck() {
         PoolBuffer buffer = getBufferPool().requestWriteBuffer();
         QuicFrameBuilder.writeAckEcnFrame(applicationSpace, currentTimestamp, buffer.buf());
         logger.debug("Sending 1-RTT ACK");
-        connectionPathController.sendAck(buffer, PacketPhase.APPLICATION);
+        if (!connectionPathController.sendAck(buffer, PacketPhase.APPLICATION)) {
+            buffer.release();
+            logger.error("Failed to send 1-RTT ACK packet, queue is full.");
+        }
     }
 
     /**
@@ -1309,17 +1331,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
     }
 
     private void retransmitLostPackets(PacketNumberSpace space) {
-        Map<Long, PacketNumberSpace.SentPacket> lostPackets = space.detectLostPackets(currentTimestamp);
-
-        // Re-wrap lost packets with NEW packet numbers and encryption
-        if (!lostPackets.isEmpty()) {
-            logger.warn("Detected {} lost packets in connection {}, retransmitting with NEW packet numbers", lostPackets.size(), connectionId);
-
-            for (Map.Entry<Long, PacketNumberSpace.SentPacket> entry : lostPackets.entrySet()) {
-                PacketNumberSpace.SentPacket sentPacket = entry.getValue();
-                connectionPathController.sendRetransmit(sentPacket.getUnencryptedPayload(), space.phase);
-            }
-        }
+        space.detectLostPackets(currentTimestamp, sentPacket ->  connectionPathController.sendRetransmit(sentPacket.getUnencryptedPayload(), space.phase));
     }
 
     /**

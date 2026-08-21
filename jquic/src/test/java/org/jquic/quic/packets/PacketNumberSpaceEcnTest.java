@@ -109,7 +109,7 @@ class PacketNumberSpaceEcnTest {
         pns.onAckReceived(0, 5, List.of(new PacketNumberSpace.AckRange(5, 5)), 0, null, 0, TEST_ADDRESS);
         
         // Packet threshold is 3. Packet 1 should be declared lost (5 - 1 = 4 > 3)
-        pns.detectLostPackets(0);
+        pns.detectLostPackets(0, _->true);
         
         assertEquals(100, pns.getWindowedStatCounter(TEST_ADDRESS).getBytesLost());
     }
@@ -134,7 +134,7 @@ class PacketNumberSpaceEcnTest {
 
         // Lose packet 3
         pns.onAckReceived(0, 7, List.of(new PacketNumberSpace.AckRange(7, 7)), 0, null, 1, TEST_ADDRESS);
-        pns.detectLostPackets(0);
+        pns.detectLostPackets(0, _->true);
 
         assertEquals(1, pns.getWindowedStatCounter(TEST_ADDRESS).getIntervalCePackets());
         assertEquals(200, pns.getWindowedStatCounter(TEST_ADDRESS).getBytesAcked());

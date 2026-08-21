@@ -92,12 +92,12 @@ public class QuicProperties {
     public static final long DEFAULT_IDLE_TIMEOUT_MS = getLong("quic.default_idle_timeout_ms", 30_000);
 
     // InitialStreamLimits
-    public static final int INITIAL_MAX_BIDI = getInt("quic.initial_max_bidi", 128);
-    public static final int INITIAL_MAX_UNI = getInt("quic.initial_max_uni", 128);
-    public static final int INITIAL_MAX_STREAM_DATA_UNI = getInt("quic.initial_max_stream_data_uni", 1048576);
-    public static final int INITIAL_MAX_STREAM_DATA_BIDI_LOCAL = getInt("quic.initial_max_stream_data_bidi_local", 1048576);
-    public static final int INITIAL_MAX_STREAM_DATA_BIDI_REMOTE = getInt("quic.initial_max_stream_data_bidi_remote", 1048576);
-    public static final int INITIAL_MAX_DATA = getInt("quic.initial_max_data", 1048576);
+    public static final long INITIAL_MAX_BIDI = getInt("quic.initial_max_bidi", 128);
+    public static final long INITIAL_MAX_UNI = getInt("quic.initial_max_uni", 128);
+    public static final long INITIAL_MAX_STREAM_DATA_UNI = getInt("quic.initial_max_stream_data_uni", 1048576);
+    public static final long INITIAL_MAX_STREAM_DATA_BIDI_LOCAL = getInt("quic.initial_max_stream_data_bidi_local", 1048576);
+    public static final long INITIAL_MAX_STREAM_DATA_BIDI_REMOTE = getInt("quic.initial_max_stream_data_bidi_remote", 1048576);
+    public static final long INITIAL_MAX_DATA = getInt("quic.initial_max_data", 1048576);
     public static final long INITIAL_MAX_CONNECTIONS = getLong("quic.initial_max_connections", 100);
 
     // QuicServerConfig

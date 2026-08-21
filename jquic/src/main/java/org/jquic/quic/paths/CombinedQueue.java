@@ -46,14 +46,14 @@ public class CombinedQueue implements FrameSource {
         };
     }
 
-    public void addFrame(Frame frame) {
-        frameQueue.offer(frame);
+    public boolean addFrame(Frame frame) {
+        return frameQueue.offer(frame);
     }
-    public void addAck(Frame frame) {
-        ackQueue.offer(frame);
+    public boolean addAck(Frame frame) {
+        return ackQueue.offer(frame);
     }
-    public void addRetransmit(Frame frame) {
-        retansmitQueue.offer(frame);
+    public boolean addRetransmit(Frame frame) {
+        return retansmitQueue.offer(frame);
     }
     public void addApplication(TriStateQueue<ApplicationData> queue) {
         applicationQueue.offer(queue);
@@ -62,6 +62,11 @@ public class CombinedQueue implements FrameSource {
     @Override
     public boolean isEmpty() {
         return frameQueue.isEmpty() && ackQueue.isEmpty() && retansmitQueue.isEmpty() && applicationQueue.isEmpty();
+    }
+
+    @Override
+    public void restart() {
+        curQueueIndex = 0;
     }
 
     public void clear() {

@@ -27,8 +27,7 @@ import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
-import java.util.Iterator;
-import java.util.List;
+import java.util.*;
 import java.util.stream.StreamSupport;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -92,7 +91,8 @@ class PacketNumberSpaceTest {
                 new PacketNumberSpace.AckRange(0, 1)
         );
         space.onAckReceived(0, 1, ackRanges, 0, null, 0, TEST_ADDRESS);
-        java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = space.detectLostPackets(0);
+        Deque<Long> lostPackets = new ArrayDeque<>();
+        space.detectLostPackets(0, a->lostPackets.offer(a.getPacketNumber()));
 
         // Only packet 2 should remain
         assertEquals(1, space.getUnackedPacketCount());
@@ -113,7 +113,8 @@ class PacketNumberSpaceTest {
             new PacketNumberSpace.AckRange(0, 0)
         );
         space.onAckReceived(50, 0, ackRanges, 0, null, 0, TEST_ADDRESS);
-        java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = space.detectLostPackets(50);
+        Deque<Long> lostPackets = new ArrayDeque<>();
+        space.detectLostPackets(50, a->lostPackets.offer(a.getPacketNumber()));
 
         // RTT should be updated
         long rtt = space.getWindowedStatCounter(TEST_ADDRESS).getLatestRtt();
@@ -135,14 +136,15 @@ class PacketNumberSpaceTest {
             new PacketNumberSpace.AckRange(10, 10)
         );
         space.onAckReceived(10, 10, ackRanges, 0, null, 0, TEST_ADDRESS);
-        java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = space.detectLostPackets(10);
+        Deque<Long> lostPackets = new ArrayDeque<>();
+        space.detectLostPackets(10, a->lostPackets.offer(a.getPacketNumber()));
 
         // Packets 0-6 should be declared lost (more than 3 below largest acked)
-        assertTrue(lostPackets.containsKey(0L), "Packet 0 should be lost");
-        assertTrue(lostPackets.containsKey(6L), "Packet 6 should be lost");
-        assertFalse(lostPackets.containsKey(7L), "Packet 7 should not be lost (within threshold)");
-        assertFalse(lostPackets.containsKey(8L), "Packet 8 should not be lost");
-        assertFalse(lostPackets.containsKey(9L), "Packet 9 should not be lost");
+        assertTrue(lostPackets.contains(0L), "Packet 0 should be lost");
+        assertTrue(lostPackets.contains(6L), "Packet 6 should be lost");
+        assertFalse(lostPackets.contains(7L), "Packet 7 should not be lost (within threshold)");
+        assertFalse(lostPackets.contains(8L), "Packet 8 should not be lost");
+        assertFalse(lostPackets.contains(9L), "Packet 9 should not be lost");
     }
 
     @Test
@@ -169,10 +171,11 @@ class PacketNumberSpaceTest {
         // Wait for loss delay threshold (9/8 * RTT)
         // RTT is ~100ms. Loss delay is 125ms.
         // Packet 0 sent at 0. Deadline was ~125. At T=400 it should be lost.
-        java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = space.detectLostPackets(400);
+        Deque<Long> lostPackets = new ArrayDeque<>();
+        space.detectLostPackets(400, a->lostPackets.offer(a.getPacketNumber()));
 
         // Packet 0 should be lost due to time threshold
-        assertTrue(lostPackets.containsKey(0L), "Packet 0 should be lost due to time threshold");
+        assertTrue(lostPackets.contains(0L), "Packet 0 should be lost due to time threshold");
     }
 
     @Test
@@ -274,7 +277,8 @@ class PacketNumberSpaceTest {
                 new PacketNumberSpace.AckRange(i, i)
             );
             space.onAckReceived(currentTime, i, ackRanges, 0, null, 0, TEST_ADDRESS);
-            java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = space.detectLostPackets(currentTime);
+            Deque<Long> lostPackets = new ArrayDeque<>();
+            space.detectLostPackets(currentTime, a->lostPackets.offer(a.getPacketNumber()));
             assertTrue(lostPackets.isEmpty(), "No packets should be lost during RTT tracking");
         }
 
@@ -305,7 +309,8 @@ class PacketNumberSpaceTest {
             new PacketNumberSpace.AckRange(0, 0)
         );
         space.onAckReceived(0, 0, ackRanges, 0, null, 0, TEST_ADDRESS);
-        java.util.Map<Long, PacketNumberSpace.SentPacket> lostPackets = space.detectLostPackets(0);
+        Deque<Long> lostPackets = new ArrayDeque<>();
+        space.detectLostPackets(0, a->lostPackets.offer(a.getPacketNumber()));
 
         // RTT should still be initial value since packet wasn't ack-eliciting
         assertEquals(333, space.getWindowedStatCounter(TEST_ADDRESS).getSmoothedRtt());
@@ -370,7 +375,7 @@ class PacketNumberSpaceTest {
 
         // 2. Clear established RTT data from bytesAckedInLastRtt window
         currentTime += 200; // More than smoothedRtt and timeWindowMs
-        space.detectLostPackets(currentTime);
+        space.detectLostPackets(currentTime, _->true);
         assertEquals(0, space.getWindowedStatCounter(TEST_ADDRESS).getBytesAckedInLastRtt(), "Window should be clear");
 
         // 3. Send and ACK packets
@@ -386,7 +391,7 @@ class PacketNumberSpaceTest {
 
         // 4. Wait for RTT to pass
         currentTime += 200;
-        space.detectLostPackets(currentTime);
+        space.detectLostPackets(currentTime, _->true);
 
         // Bytes acked should now be 0 as the window passed
         assertEquals(0, space.getWindowedStatCounter(TEST_ADDRESS).getBytesAckedInLastRtt(), "Should be 0 after RTT window passed");

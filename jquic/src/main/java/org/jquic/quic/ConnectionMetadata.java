@@ -26,7 +26,6 @@ import javax.crypto.SecretKey;
 import java.nio.ByteBuffer;
 import java.security.GeneralSecurityException;
 import java.util.HashMap;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 
@@ -162,15 +161,6 @@ public class ConnectionMetadata {
 
             QuicCrypto.PacketProtectionKeysWithHP clientKeys = new QuicCrypto.PacketProtectionKeysWithHP(clientKeySeg, clientIv, clientHpKeySeg);
             QuicCrypto.PacketProtectionKeysWithHP serverKeys = new QuicCrypto.PacketProtectionKeysWithHP(serverKeySeg, serverIv, serverHpKeySeg);
-
-            logger.info("Client init key {}", HexFormat.of().formatHex(clientKey.getEncoded()));
-            logger.info("Client init IV {}", HexFormat.of().formatHex(clientIv));
-            logger.info("Client init HP {}", HexFormat.of().formatHex(clientHp));
-
-            logger.info("Server init key {}", HexFormat.of().formatHex(serverKey.getEncoded()));
-            logger.info("Server init IV {}", HexFormat.of().formatHex(serverIv));
-            logger.info("Server init HP {}", HexFormat.of().formatHex(serverHp));
-
 
             return new QuicCrypto.PacketProtectionKeysWithHP[] { clientKeys, serverKeys };
 
@@ -360,12 +350,12 @@ public class ConnectionMetadata {
     }
 
     public static class InitialStreamLimits {
-        public Integer maxBidi = QuicProperties.INITIAL_MAX_BIDI;  // Maximum number if bidirectional streams we are ready to accept from the start
-        public Integer maxUni = QuicProperties.INITIAL_MAX_UNI;  // Maximum number if unidirectional streams we are ready to accept from the start
-        public Integer maxStreamDataUni = QuicProperties.INITIAL_MAX_STREAM_DATA_UNI; // Maximum data per unidirectional stream we are ready to accept from it initially
-        public Integer maxStreamDataBidiLocal = QuicProperties.INITIAL_MAX_STREAM_DATA_BIDI_LOCAL; // Maximum data per bidirectional stream (opened by us) we are ready to accept from it initially
-        public Integer maxStreamDataBidiRemote = QuicProperties.INITIAL_MAX_STREAM_DATA_BIDI_REMOTE; // Maximum data per bidirectional stream (opened by peer) we are ready to accept from it initially
-        public Integer maxData = QuicProperties.INITIAL_MAX_DATA; // Total maximum data per connection we are ready to accept from the start
+        public Long maxBidi = QuicProperties.INITIAL_MAX_BIDI;  // Maximum number if bidirectional streams we are ready to accept from the start
+        public Long maxUni = QuicProperties.INITIAL_MAX_UNI;  // Maximum number if unidirectional streams we are ready to accept from the start
+        public Long maxStreamDataUni = QuicProperties.INITIAL_MAX_STREAM_DATA_UNI; // Maximum data per unidirectional stream we are ready to accept from it initially
+        public Long maxStreamDataBidiLocal = QuicProperties.INITIAL_MAX_STREAM_DATA_BIDI_LOCAL; // Maximum data per bidirectional stream (opened by us) we are ready to accept from it initially
+        public Long maxStreamDataBidiRemote = QuicProperties.INITIAL_MAX_STREAM_DATA_BIDI_REMOTE; // Maximum data per bidirectional stream (opened by peer) we are ready to accept from it initially
+        public Long maxData = QuicProperties.INITIAL_MAX_DATA; // Total maximum data per connection we are ready to accept from the start
         public long maxConnections = QuicProperties.INITIAL_MAX_CONNECTIONS; // Total number of simultaneous connections from the client
     }
 
@@ -390,12 +380,12 @@ public class ConnectionMetadata {
             this.alpn = alpn;
             this.maxIdleTimeoutMs = maxIdleTimeoutMs;
             this.maxUdpPayloadSize = maxUdpPayloadSize;
-            this.initialStreamLimits.maxData = (int)initialMaxData;
-            this.initialStreamLimits.maxStreamDataBidiLocal = (int)initialMaxStreamDataBidiLocal;
-            this.initialStreamLimits.maxStreamDataBidiRemote = (int)initialMaxStreamDataBidiRemote;
-            this.initialStreamLimits.maxStreamDataUni = (int)initialMaxStreamDataUni;
-            this.initialStreamLimits.maxBidi = (int)initialMaxStreamsBidi;
-            this.initialStreamLimits.maxUni = (int)initialMaxStreamsUni;
+            this.initialStreamLimits.maxData = initialMaxData;
+            this.initialStreamLimits.maxStreamDataBidiLocal = initialMaxStreamDataBidiLocal;
+            this.initialStreamLimits.maxStreamDataBidiRemote = initialMaxStreamDataBidiRemote;
+            this.initialStreamLimits.maxStreamDataUni = initialMaxStreamDataUni;
+            this.initialStreamLimits.maxBidi = initialMaxStreamsBidi;
+            this.initialStreamLimits.maxUni = initialMaxStreamsUni;
             this.supportedSignatures = supportedSignatures;
             this.supportedGroups = supportedGroups;
             this.ackDelayExponent = ackDelayExponent;

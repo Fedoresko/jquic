@@ -17,8 +17,8 @@ package org.jquic.quic.streamapi.impl;
 
 import org.jquic.quic.ConnectionMetadata;
 import org.jquic.quic.QuicTransportError;
-import org.jquic.quic.streamapi.QuicStreamException;
 import org.jquic.quic.streamapi.QuicConnectionControl;
+import org.jquic.quic.streamapi.QuicStreamException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -32,16 +32,16 @@ class FlightControlTest {
     private StreamManager streamManager;
     private FlightControl flightControl;
 
-    private static final int INITIAL_MAX_STREAM_DATA = 5000;
+    private static final long INITIAL_MAX_STREAM_DATA = 5000;
     private static final long INITIAL_MAX_DATA = 5000;
-    private static final int MAX_BIDI_STREAMS = 10;
-    private static final int MAX_UNI_STREAMS = 5;
+    private static final long MAX_BIDI_STREAMS = 10;
+    private static final long MAX_UNI_STREAMS = 5;
 
     @BeforeEach
     void setUp() {
         streamManager = mock(StreamManager.class);
         ConnectionMetadata.InitialStreamLimits serverLimits = new ConnectionMetadata.InitialStreamLimits();
-        serverLimits.maxData = (int) INITIAL_MAX_DATA;
+        serverLimits.maxData = INITIAL_MAX_DATA;
         serverLimits.maxStreamDataBidiLocal = INITIAL_MAX_STREAM_DATA;
         serverLimits.maxStreamDataBidiRemote = INITIAL_MAX_STREAM_DATA;
         serverLimits.maxStreamDataUni = INITIAL_MAX_STREAM_DATA;
@@ -49,7 +49,7 @@ class FlightControlTest {
         serverLimits.maxUni = MAX_UNI_STREAMS;
 
         ConnectionMetadata.InitialStreamLimits clientLimits = new ConnectionMetadata.InitialStreamLimits();
-        clientLimits.maxData = (int) INITIAL_MAX_DATA;
+        clientLimits.maxData = INITIAL_MAX_DATA;
         clientLimits.maxStreamDataBidiLocal = INITIAL_MAX_STREAM_DATA;
         clientLimits.maxStreamDataBidiRemote = INITIAL_MAX_STREAM_DATA;
         clientLimits.maxStreamDataUni = INITIAL_MAX_STREAM_DATA;
@@ -137,33 +137,34 @@ class FlightControlTest {
     }
 
     @Test
-    void testCanSendWithinLimits() {
+    void testTryIncreaseOffsetWithinLimits() {
         long streamId = 0;
         StreamState state = flightControl.incomingStream(streamId);
         
         // Initial max stream data for outgoing was 5000
-        assertTrue(flightControl.canSend(state, 500));
+        assertTrue(flightControl.tryIncreaseOffset(state, 500));
         verify(streamManager, never()).sendStreamDataBlockedFrame(anyLong(), anyLong());
     }
 
     @Test
-    void testCanSendBlockedByStreamLimit() {
+    void testTryIncreaseOffsetBlockedByStreamLimit() {
         long streamId = 0;
         StreamState state = flightControl.incomingStream(streamId);
         
         // Exceed stream limit (5000)
-        boolean result = flightControl.canSend(state, 6000);
+        boolean result = flightControl.tryIncreaseOffset(state, 6000);
         
         assertFalse(result);
-        verify(streamManager).sendStreamDataBlockedFrame(eq(streamId), eq((long)INITIAL_MAX_STREAM_DATA));
+        verify(streamManager).sendStreamDataBlockedFrame(eq(streamId), eq(INITIAL_MAX_STREAM_DATA));
     }
 
     @Test
     void testBytesAckedReducesInFlight() {
         long streamId = 0;
         StreamState state = flightControl.incomingStream(streamId);
-        
-        flightControl.updateMaxSentOffset(state, 500);
+        StreamState state2 = flightControl.incomingStream(4);
+
+        flightControl.tryIncreaseOffset(state, 500);
         // totalInFlightBytes = 500
         
         flightControl.bytesAcked(streamId, 0L, 200L);
@@ -171,9 +172,9 @@ class FlightControlTest {
         // send Bytes sill 500
         
         // Now we should be able to send 4500 more (300 + 4700 = 5000, which is limit)
-        assertTrue(flightControl.canSend(state, 4500));
+        assertTrue(flightControl.tryIncreaseOffset(state2, 4500));
         // But 4701 should fail
-        assertFalse(flightControl.canSend(state, 4501));
+        assertFalse(flightControl.tryIncreaseOffset(state, 4501));
     }
 
     @Test
@@ -403,7 +404,7 @@ class FlightControlTest {
     void testConnectionFlowControlRetransmission() {
         // Setup with INITIAL_MAX_DATA (5000)
         ConnectionMetadata.InitialStreamLimits serverLimits = new ConnectionMetadata.InitialStreamLimits();
-        serverLimits.maxData = (int) INITIAL_MAX_DATA;
+        serverLimits.maxData = INITIAL_MAX_DATA;
         serverLimits.maxStreamDataBidiLocal = INITIAL_MAX_STREAM_DATA;
         serverLimits.maxStreamDataBidiRemote = INITIAL_MAX_STREAM_DATA;
         serverLimits.maxStreamDataUni = INITIAL_MAX_STREAM_DATA;
@@ -411,7 +412,7 @@ class FlightControlTest {
         serverLimits.maxUni = MAX_UNI_STREAMS;
 
         ConnectionMetadata.InitialStreamLimits clientLimits = new ConnectionMetadata.InitialStreamLimits();
-        clientLimits.maxData = (int) INITIAL_MAX_DATA;
+        clientLimits.maxData = INITIAL_MAX_DATA;
         clientLimits.maxStreamDataBidiLocal = INITIAL_MAX_STREAM_DATA;
         clientLimits.maxStreamDataBidiRemote = INITIAL_MAX_STREAM_DATA;
         clientLimits.maxStreamDataUni = INITIAL_MAX_STREAM_DATA;
@@ -484,19 +485,19 @@ class FlightControlTest {
         // Initial maxStreamData = 5000 (INITIAL_MAX_STREAM_DATA)
         
         // Try to send 5001 bytes - blocked by both
-        assertFalse(flightControl.canSend(state, 5001));
+        assertFalse(flightControl.tryIncreaseOffset(state, 5001));
         
         // Update MAX_STREAM_DATA to 10000
         flightControl.onStreamMaxData(0, 10000);
         
         // Still blocked by connection MAX_DATA (5000)
-        assertFalse(flightControl.canSend(state, 5001));
+        assertFalse(flightControl.tryIncreaseOffset(state, 5001));
         
         // Update connection MAX_DATA to 10000
         flightControl.onMaxData(10000);
         
         // Should now be able to send 5001 bytes
-        assertTrue(flightControl.canSend(state, 5001));
+        assertTrue(flightControl.tryIncreaseOffset(state, 5001));
     }
 
     @Test
@@ -546,7 +547,7 @@ class FlightControlTest {
         long tpMaxStreamsUni = 15;
 
         ConnectionMetadata.InitialStreamLimits serverLimits = new ConnectionMetadata.InitialStreamLimits();
-        serverLimits.maxData = (int) INITIAL_MAX_DATA;
+        serverLimits.maxData = INITIAL_MAX_DATA;
         serverLimits.maxStreamDataBidiLocal = INITIAL_MAX_STREAM_DATA;
         serverLimits.maxStreamDataBidiRemote = INITIAL_MAX_STREAM_DATA;
         serverLimits.maxStreamDataUni = INITIAL_MAX_STREAM_DATA;
@@ -554,12 +555,12 @@ class FlightControlTest {
         serverLimits.maxUni = MAX_UNI_STREAMS;
 
         ConnectionMetadata.InitialStreamLimits clientLimits = new ConnectionMetadata.InitialStreamLimits();
-        clientLimits.maxData = (int) tpMaxData;
-        clientLimits.maxStreamDataBidiLocal = (int) tpMaxStreamDataBidiLocal;
-        clientLimits.maxStreamDataBidiRemote = (int) tpMaxStreamDataBidiRemote;
-        clientLimits.maxStreamDataUni = (int) tpMaxStreamDataUni;
-        clientLimits.maxBidi = (int) tpMaxStreamsBidi;
-        clientLimits.maxUni = (int) tpMaxStreamsUni;
+        clientLimits.maxData =  tpMaxData;
+        clientLimits.maxStreamDataBidiLocal =  tpMaxStreamDataBidiLocal;
+        clientLimits.maxStreamDataBidiRemote =  tpMaxStreamDataBidiRemote;
+        clientLimits.maxStreamDataUni =  tpMaxStreamDataUni;
+        clientLimits.maxBidi =  tpMaxStreamsBidi;
+        clientLimits.maxUni =  tpMaxStreamsUni;
 
         FlightControl fc = new FlightControl(serverLimits, clientLimits, streamManager);
 
@@ -575,8 +576,8 @@ class FlightControlTest {
         
         // These assertions reflect the correct behavior
         StreamState state = fc.incomingStream(0);
-        assertTrue(fc.canSend(state, 2000), "Uses peer's local limit for sending");
-        assertFalse(fc.canSend(state, 2001), "Uses peer's local limit for sending");
+        assertTrue(fc.tryIncreaseOffset(state, 2000), "Uses peer's local limit for sending");
+        assertFalse(fc.tryIncreaseOffset(state, 2001), "Uses peer's local limit for sending");
         assertFalse(fc.isReceiveCapReached(state, 0, 5000), "Uses our advertised remote limit for our receiving");
         assertTrue(fc.isReceiveCapReached(state, 0, 5001), "Uses our advertised remote limit for our receiving");
     }
@@ -584,11 +585,11 @@ class FlightControlTest {
     @Test
     void testStreamLimitEnforcementRFC() {
         ConnectionMetadata.InitialStreamLimits serverLimits = new ConnectionMetadata.InitialStreamLimits();
-        serverLimits.maxBidi = 2; // We allow 2 bidi streams from peer
-        serverLimits.maxUni = 2;  // We allow 2 uni streams from peer
+        serverLimits.maxBidi = 2L; // We allow 2 bidi streams from peer
+        serverLimits.maxUni = 2L;  // We allow 2 uni streams from peer
         ConnectionMetadata.InitialStreamLimits clientLimits = new ConnectionMetadata.InitialStreamLimits();
-        clientLimits.maxBidi = 1; // Peer allows 1 bidi stream from us
-        clientLimits.maxUni = 1;  // Peer allows 1 uni stream from us
+        clientLimits.maxBidi = 1L; // Peer allows 1 bidi stream from us
+        clientLimits.maxUni = 1L;  // Peer allows 1 uni stream from us
 
         FlightControl fc = new FlightControl(serverLimits, clientLimits, streamManager);
 
@@ -607,11 +608,11 @@ class FlightControlTest {
     @Test
     void testStreamIdClassificationAndLimits() {
         ConnectionMetadata.InitialStreamLimits serverLimits = new ConnectionMetadata.InitialStreamLimits();
-        serverLimits.maxBidi = 2;
-        serverLimits.maxUni = 2;
+        serverLimits.maxBidi = 2L;
+        serverLimits.maxUni = 2L;
         ConnectionMetadata.InitialStreamLimits clientLimits = new ConnectionMetadata.InitialStreamLimits();
-        clientLimits.maxBidi = 2;
-        clientLimits.maxUni = 2;
+        clientLimits.maxBidi = 2L;
+        clientLimits.maxUni = 2L;
 
         FlightControl fc = new FlightControl(serverLimits, clientLimits, streamManager);
 
@@ -643,13 +644,13 @@ class FlightControlTest {
     @Test
     void testFlowControlInteractionDetailed() throws QuicStreamException {
         ConnectionMetadata.InitialStreamLimits serverLimits = new ConnectionMetadata.InitialStreamLimits();
-        serverLimits.maxData = 10000;
+        serverLimits.maxData = 10000L;
         // Current FlightControl bug: it uses serverLimits.maxStreamDataBidiLocal for sending limit on outgoing Bidi
-        serverLimits.maxStreamDataBidiLocal = 10000;
+        serverLimits.maxStreamDataBidiLocal = 10000L;
         
         ConnectionMetadata.InitialStreamLimits clientLimits = new ConnectionMetadata.InitialStreamLimits();
-        clientLimits.maxData = 10000;
-        clientLimits.maxStreamDataBidiRemote = 10000;
+        clientLimits.maxData = 10000L;
+        clientLimits.maxStreamDataBidiRemote = 10000L;
 
         FlightControl fc = new FlightControl(serverLimits, clientLimits, streamManager);
 
@@ -657,9 +658,9 @@ class FlightControlTest {
         StreamState state1 = fc.openOutgoingStream(1, QuicConnectionControl.StreamType.Bidirectional);
         
         // 1. hit stream limit
-        fc.updateMaxSentOffset(state1, 9000);
-        assertTrue(fc.canSend(state1, 1000));
-        assertFalse(fc.canSend(state1, 1001));
+        fc.tryIncreaseOffset(state1, 9000);
+        assertTrue(fc.tryIncreaseOffset(state1, 10000));
+        assertFalse(fc.tryIncreaseOffset(state1, 10001));
         verify(streamManager, atLeastOnce()).sendStreamDataBlockedFrame(eq(1L), anyLong());
 
         // 2. hit connection limit
@@ -668,11 +669,11 @@ class FlightControlTest {
         
         // Open another outgoing Bidi stream ID 5.
         StreamState state5 = fc.openOutgoingStream(5, QuicConnectionControl.StreamType.Bidirectional);
-        fc.updateMaxSentOffset(state5, 1000); // Total in flight = 10000.
+        fc.tryIncreaseOffset(state5, 1000); // Total in flight = 10000.
         
         // Stream 1 still has 1000 bytes capacity (10000 - 9000).
         // But connection is full (10000 - 10000).
-        assertFalse(fc.canSend(state1, 1)); 
+        assertFalse(fc.tryIncreaseOffset(state1, 10002));
         verify(streamManager, atLeastOnce()).sendDataBlockedFrame(anyLong());
     }
 }

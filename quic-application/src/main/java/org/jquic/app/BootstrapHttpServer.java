@@ -3,6 +3,8 @@ package org.jquic.app;
 import com.sun.net.httpserver.*;
 import org.jquic.quic.KeystoreManager;
 import org.jquic.quic.QuicProperties;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
@@ -38,6 +40,7 @@ import java.util.Objects;
  * <p>Built on top of one-nio's {@link HttpServer} for minimal overhead.
  */
 public class BootstrapHttpServer {
+    Logger log = LoggerFactory.getLogger(BootstrapHttpServer.class);
     private final HttpsServer server;
 
     public BootstrapHttpServer(KeystoreManager keystoreManager) throws Exception {
@@ -56,7 +59,7 @@ public class BootstrapHttpServer {
                     sslParams.setProtocols(new String[]{"TLSv1.2", "TLSv1.3"});
                     params.setSSLParameters(sslParams);
                 } catch (Exception e) {
-                    System.out.println("Failed to configure HTTPS parameters");
+                    log.error("Failed to configure HTTPS parameters", e);
                 }
             }
         });
@@ -68,7 +71,7 @@ public class BootstrapHttpServer {
 
     public void start() {
         server.setExecutor(null); // Creates a default executor
-        System.out.println("HTTPS Server started on port " + QuicProperties.BOOTSTRAP_PORT);
+        log.info("HTTPS Server started on port " + QuicProperties.BOOTSTRAP_PORT);
         server.start();
     }
 
@@ -113,9 +116,9 @@ public class BootstrapHttpServer {
                     QuicProperties.PORT, Instant.now()
             );
 
-            exchange.getResponseHeaders().add("Access-Control-Allow-Origin","*");
-            exchange.getResponseHeaders().add("Content-Type","application/json; charset=utf-8");
-            exchange.getResponseHeaders().add("Alt-Svc","h3=\":4433\"; ma=86400");
+            exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
+            exchange.getResponseHeaders().add("Content-Type", "application/json; charset=utf-8");
+            exchange.getResponseHeaders().add("Alt-Svc", "h3=\":4433\"; ma=86400");
 
 
             exchange.sendResponseHeaders(200, body.length());
@@ -138,7 +141,7 @@ public class BootstrapHttpServer {
             String body = "U-u-uPS!";
 
             exchange.getResponseHeaders().set("Content-Type", "text/html; charset=utf-8");
-            exchange.getResponseHeaders().add("Access-Control-Allow-Origin","*");
+            exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
 
             exchange.sendResponseHeaders(200, body.length());
             try (OutputStream os = exchange.getResponseBody()) {

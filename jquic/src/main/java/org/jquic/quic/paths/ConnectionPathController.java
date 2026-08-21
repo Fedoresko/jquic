@@ -44,12 +44,12 @@ public class ConnectionPathController implements TimeoutHeap.Entry {
     public static final int MAX_PATH_ID = 3;
     public static final int PROBING_TIMEOUT = 1000;
     public static final int PATH_DEAD_TIMEOUT = 5000;
-    public static final int VERIFICATION_TIMEOUT = 10000;
+    public static final int VERIFICATION_TIMEOUT = 45000;
     private static final CongestionControl INITAL_CC = new TcpPrague();
     private final QuicConnection connection;
     private final Map<SocketAddress, ConnectionPath> pathMap = new HashMap<>();
 
-    private final ArrayDeque<Frame> urgentQueue = new ArrayDeque<>();
+    private final ArrayDeque<UrgentFrame> urgentQueue = new ArrayDeque<>();
 
     private final CombinedQueue initQueue = new CombinedQueue();
     private final CombinedQueue handshakeQueue = new CombinedQueue();
@@ -139,14 +139,15 @@ public class ConnectionPathController implements TimeoutHeap.Entry {
         };
     }
 
-    public void sendFrame(PoolBuffer payload, PacketPhase phase) {
-        getQueue(phase).addFrame(new Frame(payload, phase, true));
+    public boolean sendFrame(PoolBuffer payload, PacketPhase phase) {
+        return getQueue(phase).addFrame(new Frame(payload, phase, true));
     }
-    public void sendAck(PoolBuffer payload, PacketPhase phase) {
-        getQueue(phase).addAck(new Frame(payload, phase, false));
+    @SuppressWarnings("BooleanMethodIsAlwaysInverted")
+    public boolean sendAck(PoolBuffer payload, PacketPhase phase) {
+        return getQueue(phase).addAck(new Frame(payload, phase, false));
     }
-    public void sendRetransmit(PoolBuffer payload, PacketPhase phase) {
-        getQueue(phase).addRetransmit(new Frame(payload, phase, true));
+    public boolean sendRetransmit(PoolBuffer payload, PacketPhase phase) {
+        return getQueue(phase).addRetransmit(new Frame(payload, phase, true));
     }
     public void appendsAppData(TriStateQueue<ApplicationData> queue) {
         applicationQueue.addApplication(queue);
@@ -163,7 +164,6 @@ public class ConnectionPathController implements TimeoutHeap.Entry {
     public void onConnectionEstablished() {
         if (pathMap.containsKey(primaryAddress)) {
             pathMap.get(primaryAddress).state = VERIFIED;
-            nextShedNs = 0;
         }
     }
 
@@ -195,8 +195,25 @@ public class ConnectionPathController implements TimeoutHeap.Entry {
             return null;
         }
 
+        UrgentFrame frame = urgentQueue.poll();
+        if (frame != null) {
+            ConnectionPath path = pathMap.get(frame.dest());
+            if (path != null) {
+                DatagramToSend datagram = switch (frame.phase()) {
+                    case INITIAL -> initDatagramBuilder.makeDatagram(currentTimeMs, path.address, frame.data(), frame.ackEliciting());
+                    case HANDSHAKE -> handshakeDatagramBuilder.makeDatagram(currentTimeMs, path.address, frame.data(), frame.ackEliciting());
+                    case APPLICATION -> applicationDatagramBuilder.makeDatagram(currentTimeMs, path.address, frame.data(), frame.ackEliciting());
+                };
+                nextShedNs = currentNanos;
+                logger.info("Sending Urgent frame to {} {} bytes", frame.dest(), datagram.data().buf().remaining());
+                return datagram;
+            }
+        }
+
         ConnectionPath path = pathMap.get(primaryAddress);
+        boolean isAmpBlock = false;
         if (path == null || isAmplificationBlock(path)) {
+            isAmpBlock = path != null;
             path = null;
             for (ConnectionPath path1 : pathMap.values()) {
                 if (!isAmplificationBlock(path1) && path1.state != PROBING) {
@@ -204,6 +221,10 @@ public class ConnectionPathController implements TimeoutHeap.Entry {
                     break;
                 }
             }
+        }
+
+        if (path == null && isAmpBlock) { //Try PING if totally blocked
+            sendPing(primaryAddress);
         }
 
         if (path != null) {
@@ -241,22 +262,21 @@ public class ConnectionPathController implements TimeoutHeap.Entry {
         return null;
     }
 
+    private int getMaxPacketSize(ConnectionPath path) {
+        long defaultMax = connection.connectionMetadata.clientMetadata != null ?
+                connection.connectionMetadata.clientMetadata.maxUdpPayloadSize : 1200;
+        return path.state == NEW ? (int) Math.min(defaultMax, path.receivedBytes * 3 - path.sentBytes) : (int) defaultMax;
+    }
+
     private void schedNextDatagram(ConnectionPath path, long currentTimeMs) {
         boolean urgent = false;
-        if ( path.nextDatagram == null) {
-            Frame frame = urgentQueue.poll();
-            if (frame != null) {
-                path.nextDatagram = switch (frame.phase()) {
-                    case INITIAL -> initDatagramBuilder.makeDatagram(currentTimeMs, path.address, frame.data(), frame.ackEliciting());
-                    case HANDSHAKE -> handshakeDatagramBuilder.makeDatagram(currentTimeMs, path.address, frame.data(), frame.ackEliciting());
-                    case APPLICATION -> applicationDatagramBuilder.makeDatagram(currentTimeMs, path.address, frame.data(), frame.ackEliciting());
-                };
-                urgent = true;
-            }
+        if (isAmplificationBlock(path)) { //Send only aks and frames first, not retransmits
+            initQueue.restart();
+            handshakeQueue.restart();
         }
-        if ( path.nextDatagram == null) { path.nextDatagram = initDatagramBuilder.getPacket(currentTimeMs, path.address, true, initQueue); urgent = true; }
-        if ( path.nextDatagram == null) path.nextDatagram = handshakeDatagramBuilder.getPacket(currentTimeMs, path.address, true, handshakeQueue);
-        if ( path.nextDatagram == null) path.nextDatagram = applicationDatagramBuilder.getPacket(currentTimeMs, path.address, true, applicationQueue);
+        if ( path.nextDatagram == null) { path.nextDatagram = initDatagramBuilder.getPacket(currentTimeMs, path.address, true, getMaxPacketSize(path), initQueue); urgent = true; }
+        if ( path.nextDatagram == null) path.nextDatagram = handshakeDatagramBuilder.getPacket(currentTimeMs, path.address, true, getMaxPacketSize(path), handshakeQueue);
+        if ( path.nextDatagram == null) path.nextDatagram = applicationDatagramBuilder.getPacket(currentTimeMs, path.address, true, getMaxPacketSize(path), applicationQueue);
 
         if (path.nextDatagram == null) {
             return;
@@ -327,7 +347,7 @@ public class ConnectionPathController implements TimeoutHeap.Entry {
                     path.state = PROBING;
                     logger.info("Probing dangling path (connection {} path {})", connection.getConnectionId(), path.address);
                     path.probeSentAt = connection.getCurrentTimestamp();
-                    sendPing();
+                    sendPing(path.address);
                 }
             }
             if (path.state == PROBING) {
@@ -338,7 +358,7 @@ public class ConnectionPathController implements TimeoutHeap.Entry {
                     logger.info("Dangling path declared dead (connection {} path {})", connection.getConnectionId(), path.address);
                 } else if (connection.getCurrentTimestamp() - path.probeSentAt > PROBING_TIMEOUT) {
                     path.probeSentAt = connection.getCurrentTimestamp();
-                    sendPing();
+                    sendPing(path.address);
                 }
             }
             if (path.state == NEW && connection.getCurrentTimestamp() - path.createdAt > VERIFICATION_TIMEOUT) {
@@ -348,14 +368,14 @@ public class ConnectionPathController implements TimeoutHeap.Entry {
         }
     }
 
-    private void sendPing() {
+    private void sendPing(InetSocketAddress address) {
         PoolBuffer poolBuffer = connection.getBufferPool().requestWriteBuffer();
         QuicFrameBuilder.writePingFrame(poolBuffer);
-        sendUrgentFrame(poolBuffer, true);
+        sendUrgentFrame(poolBuffer, true, address);
     }
 
-    public void sendUrgentFrame(PoolBuffer poolBuffer, boolean ackEliciting) {
-        urgentQueue.offer(new Frame(poolBuffer, curPhase(), ackEliciting));
+    public void sendUrgentFrame(PoolBuffer poolBuffer, boolean ackEliciting, InetSocketAddress dest) {
+        urgentQueue.offer(new UrgentFrame(poolBuffer, curPhase(), ackEliciting, dest));
     }
 
     public boolean checkSenderAddress(InetSocketAddress sender, int packetSize) {
@@ -376,9 +396,8 @@ public class ConnectionPathController implements TimeoutHeap.Entry {
             path.challenge = new byte[8];
             QuicCrypto.secureRandom.get().nextBytes(path.challenge);
             QuicFrameBuilder.writePathChallengeFrame(buf.buf(), path.challenge);
-            sendUrgentFrame(buf, true); // Send Path Challenge
+            sendUrgentFrame(buf, true, sender); // Send Path Challenge
             primaryAddress = sender;
-            nextShedNs = 0;
         }
         return true;
     }

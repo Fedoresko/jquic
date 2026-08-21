@@ -61,8 +61,6 @@ public class QuicCrypto {
     // TLS 1.3 identifiers used during ClientHello parsing and ServerHello construction
     /** TLS 1.3 version identifier used in supported_versions extension (RFC 8446 В§4.2.1). */
     public static final int TLS_VERSION_1_3 = 0x0304;
-    /** IANA NamedGroup identifier for x25519 (RFC 8446 В§4.2.7). */
-    private static final int GROUP_X25519 = 0x001d;
 
     /**
      * Sentinel random used in HelloRetryRequest (RFC 8446 В§4.1.3).
@@ -126,14 +124,6 @@ public class QuicCrypto {
         ByteBuffer key,           // Encryption/decryption key
         byte[] iv,               // Initialization vector
         ByteBuffer headerProtection  // Header protection key
-    ) {}
-
-    /**
-     * Packet protection keys for a specific encryption level.
-     */
-    public record PacketProtectionKeys (
-        ByteBuffer key,          // Encryption/decryption key
-        byte[] iv               // Initialization vector
     ) {}
 
     public static final ThreadLocal<SecureRandom> secureRandom =
@@ -314,7 +304,6 @@ public class QuicCrypto {
             long initialMaxStreamsBidi = 0;
             long initialMaxStreamsUni = 0;
             long ackDelayExponent = 0;
-            long activeConnectionIdLimit = 0;
             List<Short> signatures = new ArrayList<>();
             List<Short> supportedGroups = new ArrayList<>();
             Map<Short, byte[]> clientKeys = new HashMap<>();
@@ -419,9 +408,9 @@ public class QuicCrypto {
                             } else if (paramId == 0x0A) {
                                 ackDelayExponent = QuicVarint.read(buf);
                             } else if (paramId == 0x0E) {
-                                activeConnectionIdLimit = QuicVarint.read(buf);
+                                QuicVarint.read(buf); //active connection id limit
                             } else if (paramId == 0x11) { //version_information
-                                int chosenVersion =  buf.getInt();
+                                buf.getInt(); //chosen version
                                 while (buf.position() < (int)(startPos + paramLen)) {
                                     availableVersions.add(buf.getInt());
                                 }
@@ -458,7 +447,7 @@ public class QuicCrypto {
 
             logger.debug("Initials negotiated max_data {}, max stream data bidi local {}, max stream data bidi remote {}, max stream data uni {}, max streams bidi {}, max streams uni {}", initialMaxData, initialMaxStreamDataBidiLocal, initialMaxStreamDataBidiRemote, initialMaxStreamDataUni, initialMaxStreamsBidi, initialMaxStreamsUni);
 
-            CipherMode selected = cipherSuitesList.contains(TLS_AES_128_GCM_SHA256_ID) ? TLS_AES_128_GCM_SHA256_ID : cipherSuitesList.get(0);
+            CipherMode selected = cipherSuitesList.contains(TLS_AES_128_GCM_SHA256_ID) ? TLS_AES_128_GCM_SHA256_ID : cipherSuitesList.getFirst();
 
             return new ConnectionMetadata.ClientMetadataNegotiated(alpn, maxIdleTimeout, supportedGroups, clientKeys, maxUdpPayloadSize, initialMaxData, initialMaxStreamDataBidiLocal, initialMaxStreamDataBidiRemote, initialMaxStreamDataUni, initialMaxStreamsBidi, initialMaxStreamsUni, signatures, ackDelayExponent, availableVersions, selected);
         } catch (QuicException ce) {
@@ -493,6 +482,7 @@ public class QuicCrypto {
      * @throws QuicException if the ClientHello is malformed, missing required extensions,
      *         advertises unsupported parameters, or key derivation fails
      */
+    @SuppressWarnings("DataFlowIssue")
     public static void processClientHello(ConnectionMetadata metadata, ByteBuffer clientHello) throws QuicException {
         try {
             // -- Step 1: Create TlsMetadata - the golden source of state.
@@ -514,6 +504,7 @@ public class QuicCrypto {
             if (parsed.supportedSignatures.isEmpty()) {
                 throw new QuicException("No signature_algorithms found are in ClientHello!");
             }
+
             metadata.selectedSignatureScheme = getKeystoreManager().selectSignatureScheme(parsed.supportedSignatures);
 
             long serverIdleTimeout = 30_000;
@@ -1016,6 +1007,7 @@ public class QuicCrypto {
      * If no keystore is configured an empty Certificate message is returned (the client
      * will reject it, but this keeps the code runnable during development).
      */
+    @SuppressWarnings("ConstantValue")
     public static void putCertificate(DataOutputStream out) throws IOException {
         if (certChainBytes != null) {
             // encodeCertificateChainTls() returns the full certificate_list body
@@ -1385,7 +1377,6 @@ public class QuicCrypto {
             return finalLength;
         } catch (Exception e) {
             if (e instanceof QuicException) throw (QuicException) e;
-            e.printStackTrace();
             throw new QuicException("Failed to generate retry token", QuicTransportError.INTERNAL_ERROR);
         }
     }
