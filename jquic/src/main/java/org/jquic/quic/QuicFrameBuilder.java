@@ -15,8 +15,8 @@
  */
 package org.jquic.quic;
 
-import org.jquic.quic.buffers.ChunkedOutputStreamWithAmendments;
 import org.jquic.quic.buffers.PoolBuffer;
+import org.jquic.quic.buffers.SlicingOutputStreamWithAmendments;
 import org.jquic.quic.crypto.CipherMode;
 import org.jquic.quic.crypto.QuicCrypto;
 import org.jquic.quic.packets.PacketNumberSpace;
@@ -29,7 +29,7 @@ import java.util.Iterator;
 public class QuicFrameBuilder {
     public static final int CRYPTO_FRAME_MAX_HEADER_LENGTH = 1 + 8 + 8;
     public static final int MAX_SHORT_HEADER_LENGTH = 25;
-    public static final int MAX_LONG_HEADER_LENGTH = 35; //No token
+    public static final int MAX_LONG_HEADER_LENGTH = 44; //No token
 
     private static void writeAckRanges(SortedIntervals ranges, ByteBuffer out) {
         if (ranges.isEmpty()) {
@@ -189,7 +189,7 @@ public class QuicFrameBuilder {
      *
      * @param metadata the live {@link ConnectionMetadata} for this connection
      */
-    public static void writeServerHello(ChunkedOutputStreamWithAmendments out, ConnectionMetadata metadata) throws IOException {
+    public static void writeServerHello(SlicingOutputStreamWithAmendments out, ConnectionMetadata metadata) throws IOException {
         // ServerHello wire layout (RFC 8446 В§4.1.3):
         //   ProtocolVersion(2) + Random(32) + session_id_len(1)
         //   + CipherSuite(2) + compression(1) + extensions_len(2) + extensions

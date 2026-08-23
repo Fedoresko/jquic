@@ -159,7 +159,7 @@ public class LinuxEcnSocket implements AutoCloseable {
                     Linker.Option.critical(true)
             );
         } catch (Throwable e) {
-            log.info("Failed to load libquic_ecn", e);
+            log.info("Failed to load libquic_ecn Linux library", e);
         }
         quic_receive_ecn = mh;
         quic_receive_ecn_blocking = mh2;

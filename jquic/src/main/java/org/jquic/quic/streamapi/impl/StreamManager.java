@@ -50,6 +50,7 @@ public class StreamManager implements ConnectionStreamManager {
     public static final int STREAM_BUFFER_CAPACITY = 50_000;
     public static final int DATAGRAM_FRAMES = -1;
     public static final int EXPECTED_ACKS_SPACE = 60;
+    public static final int STREAM_FRAME_HEADER_LEN = 5;
     private final QuicStreamResponseImpl datagramConnectionControl = new QuicStreamResponseImpl(null);
 
     private final QuicConnection connection;
@@ -90,14 +91,16 @@ public class StreamManager implements ConnectionStreamManager {
         try {
             ByteBuffer payload = packet.getUnencryptedPayload().buf().duplicate();
             if (payload.hasRemaining()) {
-                SreamFrameDetails frameDetails = parseStreamFrameDetails(payload);
-                // Check if this is a STREAM frame (0x08-0x0f)
-                if (frameDetails.frameType >= 0x08 && frameDetails.frameType <= 0x0f) {
+                byte frameType = payload.get();
+                if (frameType >= 0x08 && frameType <= 0x0f) {
+                    SreamFrameDetails frameDetails = parseStreamFrameDetails(frameType, payload);
+                    // Check if this is a STREAM frame (0x08-0x0f)
                     payload.position(Math.min(payload.limit(), payload.position() + (int) frameDetails.length()));
                     streamWorker.enqueueAck(this, frameDetails.streamId(), frameDetails.offset(), frameDetails.length());
                 }
-                if (frameDetails.frameType == FRAME_TYPE_RESET_STREAM) {
-                    streamWorker.enqueueFrame(this, new StreamResetFrameAck(frameDetails.streamId));
+                if (frameType == FRAME_TYPE_RESET_STREAM) {
+                    long streamId = QuicVarint.read(payload);
+                    streamWorker.enqueueFrame(this, new StreamResetFrameAck(streamId));
                 }
             }
         } catch (Exception ex) {
@@ -105,18 +108,17 @@ public class StreamManager implements ConnectionStreamManager {
         }
     }
 
-    private static @NonNull SreamFrameDetails parseStreamFrameDetails(ByteBuffer payload) {
-        byte frameType = payload.get();
+    private static @NonNull SreamFrameDetails parseStreamFrameDetails(byte frameType, ByteBuffer payload) {
         boolean hasLength = (frameType & 0x02) != 0;
         long streamId = QuicVarint.read(payload);
         boolean hasOffset = (frameType & 0x04) != 0;
         long offset = 0;
         if (hasOffset) offset = QuicVarint.read(payload);
         long length = (hasLength) ? QuicVarint.read(payload) : payload.remaining();
-        return new SreamFrameDetails(frameType, streamId, length, offset);
+        return new SreamFrameDetails(streamId, length, offset);
     }
 
-    private record SreamFrameDetails(byte frameType, long streamId, long length, long offset) {
+    private record SreamFrameDetails(long streamId, long length, long offset) {
     }
 
     /**
@@ -345,9 +347,9 @@ public class StreamManager implements ConnectionStreamManager {
         ChunkedOutputStreamWithAmendments out = ChunkedOutputStreamWithAmendments.createNonWrapping(connection.getBufferPool(),
                 (int) connection.connectionMetadata.clientMetadata.maxUdpPayloadSize
                         - GCM_TAG_LENGTH
-                        - QuicFrameBuilder.MAX_SHORT_HEADER_LENGTH
+                        - connection.connectionMetadata.maxShortHeaderLength
                         - EXPECTED_ACKS_SPACE,
-                GCM_TAG_LENGTH + QuicFrameBuilder.MAX_SHORT_HEADER_LENGTH,
+                STREAM_FRAME_HEADER_LEN,
                 (buf, offset, fin) -> (streamId == DATAGRAM_FRAMES) ?
                         StreamFrameWriter.encodeDatagramFrame(buf.duplicate(), true)
                         : StreamFrameWriter.encodeStreamFrame(
@@ -373,7 +375,9 @@ public class StreamManager implements ConnectionStreamManager {
             throw new IOException("Stream " + streamId + " cannot send data in stream.");
         }
 
-        SreamFrameDetails details = parseStreamFrameDetails(data.buf().duplicate());
+        ByteBuffer payload = data.buf().duplicate();
+        byte frameType = payload.get();
+        SreamFrameDetails details = parseStreamFrameDetails(frameType, payload);
 
         while (streamId != DATAGRAM_FRAMES && !flightControl.tryIncreaseOffset(state, details.offset + details.length)) {
             long smoothedRtt = connection.getConnectionPathController().getSmoothedRtt();
@@ -405,6 +409,7 @@ public class StreamManager implements ConnectionStreamManager {
         }
     }
 
+    @SuppressWarnings("resource")
     @Override
     public void onConnectionClose() {
         handler.onConnectionClose();

@@ -16,9 +16,9 @@
 package org.jquic.quic;
 
 import org.jquic.quic.buffers.BorrowedPoolBuffer;
-import org.jquic.quic.buffers.BufferPool;
 import org.jquic.quic.buffers.PoolBuffer;
 import org.jquic.quic.buffers.RootPoolBuffer;
+import org.jquic.quic.buffers.TestPoolBuffer;
 import org.junit.jupiter.api.Test;
 
 import java.nio.ByteBuffer;
@@ -53,7 +53,7 @@ class CryptoFrameRebuilderTest {
 
     /** Wrap a plain byte array in a ByteBuffer positioned at 0. */
     private static PoolBuffer buf(byte... bytes) {
-        return new RootPoolBuffer(ByteBuffer.wrap(bytes), mock(BufferPool.class), true);
+        return new TestPoolBuffer(ByteBuffer.wrap(bytes));
     }
 
     /** Create a sequential payload of {@code length} bytes starting at {@code start}. */
@@ -453,7 +453,7 @@ class CryptoFrameRebuilderTest {
         rebuilder.setExpectedLength(10);
 
         assertThrows(IllegalStateException.class,
-            () -> rebuilder.addPart(0, 0, buf(new byte[0])));
+            () -> rebuilder.addPart(0, 0, buf()));
     }
 
     /**

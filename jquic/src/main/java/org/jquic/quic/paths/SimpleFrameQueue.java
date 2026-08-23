@@ -36,8 +36,10 @@ public class SimpleFrameQueue implements FrameSource {
     }
 
     @Override
-    public void restart() {
+    public void restart() {}
 
+    public int size() {
+        return poolBuffers.size();
     }
 
     public void clear() {

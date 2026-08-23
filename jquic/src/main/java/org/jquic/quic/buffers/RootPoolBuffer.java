@@ -15,19 +15,21 @@
  */
 package org.jquic.quic.buffers;
 
+import org.jctools.queues.MpmcUnboundedXaddArrayQueue;
+
 import java.nio.ByteBuffer;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static org.jquic.quic.buffers.BufferPool.returnBuffer;
+
 public class RootPoolBuffer implements PoolBuffer {
     public final ByteBuffer buffer;
-    private final BufferPool pool;
+    private final MpmcUnboundedXaddArrayQueue<RootPoolBuffer> queue;
     AtomicInteger count = new AtomicInteger(0);
-    private final boolean writeBuffer;
 
-    public RootPoolBuffer(ByteBuffer buffer, BufferPool pool, boolean writeBuffer) {
+    public RootPoolBuffer(ByteBuffer buffer, MpmcUnboundedXaddArrayQueue<RootPoolBuffer> pool) {
         this.buffer = buffer;
-        this.pool = pool;
-        this.writeBuffer = writeBuffer;
+        this.queue = pool;
     }
 
     @Override
@@ -39,11 +41,7 @@ public class RootPoolBuffer implements PoolBuffer {
     public void release() {
         int cnt = count.decrementAndGet();
         if (cnt == 0) {
-            if (writeBuffer) {
-                pool.returnWriteBuffer(this);
-            } else {
-                pool.returnReadBuffer(this);
-            }
+            returnBuffer(this, queue);
         }
         if (cnt < 0) {
             throw new IllegalStateException();

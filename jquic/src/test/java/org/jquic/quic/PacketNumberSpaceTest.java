@@ -15,9 +15,8 @@
  */
 package org.jquic.quic;
 
-import org.jquic.quic.buffers.BufferPool;
 import org.jquic.quic.buffers.PoolBuffer;
-import org.jquic.quic.buffers.RootPoolBuffer;
+import org.jquic.quic.buffers.TestPoolBuffer;
 import org.jquic.quic.packets.PacketNumberSpace;
 import org.jquic.quic.packets.PacketPhase;
 import org.jquic.quic.paths.ConnectionPathController;
@@ -27,7 +26,10 @@ import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
-import java.util.*;
+import java.util.ArrayDeque;
+import java.util.Deque;
+import java.util.Iterator;
+import java.util.List;
 import java.util.stream.StreamSupport;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -66,7 +68,7 @@ class PacketNumberSpaceTest {
     @Test
     void testOnPacketSent_TracksPackets() {
         PacketNumberSpace space = new PacketNumberSpace(PacketPhase.INITIAL);
-        PoolBuffer frames = new RootPoolBuffer(ByteBuffer.allocate(10), mock(BufferPool.class), false);
+        PoolBuffer frames = new TestPoolBuffer(ByteBuffer.allocate(10));
 
         space.onPacketSent(0, 0, frames,  true, TEST_ADDRESS);
         space.onPacketSent(0, 1, frames,  true, TEST_ADDRESS);
@@ -80,9 +82,9 @@ class PacketNumberSpaceTest {
         PacketNumberSpace space = new PacketNumberSpace(PacketPhase.INITIAL);
 
         // Send packets 0, 1, 2
-        space.onPacketSent(0, 0, new RootPoolBuffer(ByteBuffer.allocate(10), mock(BufferPool.class), false).borrow(),  true, TEST_ADDRESS);
-        space.onPacketSent(0, 1, new RootPoolBuffer(ByteBuffer.allocate(10), mock(BufferPool.class), false).borrow(),  true, TEST_ADDRESS);
-        space.onPacketSent(0, 2, new RootPoolBuffer(ByteBuffer.allocate(10), mock(BufferPool.class), false).borrow(),  true, TEST_ADDRESS);
+        space.onPacketSent(0, 0, new TestPoolBuffer(ByteBuffer.allocate(10)).borrow(),  true, TEST_ADDRESS);
+        space.onPacketSent(0, 1, new TestPoolBuffer(ByteBuffer.allocate(10)).borrow(),  true, TEST_ADDRESS);
+        space.onPacketSent(0, 2, new TestPoolBuffer(ByteBuffer.allocate(10)).borrow(),  true, TEST_ADDRESS);
 
         assertEquals(3, space.getUnackedPacketCount());
 
@@ -106,7 +108,7 @@ class PacketNumberSpaceTest {
         space.setConnectionPathController(connectionPathController);
 
         // Send packet 0 at T=0
-        space.onPacketSent(0, 0, new RootPoolBuffer(ByteBuffer.allocate(10), mock(BufferPool.class), false).borrow(),  true, TEST_ADDRESS);
+        space.onPacketSent(0, 0, new TestPoolBuffer(ByteBuffer.allocate(10)).borrow(),  true, TEST_ADDRESS);
 
         // ACK packet 0 at T=50
         List<PacketNumberSpace.AckRange> ackRanges = List.of(
@@ -125,10 +127,11 @@ class PacketNumberSpaceTest {
     @Test
     void testDetectLostPackets_PacketThreshold() {
         PacketNumberSpace space = new PacketNumberSpace(PacketPhase.INITIAL);
+        space.setConnectionPathController(new ConnectionPathController(mock(QuicConnection.class), TEST_ADDRESS));
 
         // Send packets 0-10 at T=0
         for (int i = 0; i <= 10; i++) {
-            space.onPacketSent(0, i, new RootPoolBuffer(ByteBuffer.allocate(10), mock(BufferPool.class), false).borrow(),  true, TEST_ADDRESS);
+            space.onPacketSent(0, i, new TestPoolBuffer(ByteBuffer.allocate(10)).borrow(),  true, TEST_ADDRESS);
         }
 
         // ACK packet 10 at T=10 (leaving 0-9 unacked)
@@ -150,19 +153,20 @@ class PacketNumberSpaceTest {
     @Test
     void testDetectLostPackets_TimeThreshold() {
         PacketNumberSpace space = new PacketNumberSpace(PacketPhase.INITIAL);
+        space.setConnectionPathController(new ConnectionPathController(mock(QuicConnection.class), TEST_ADDRESS));
 
         // Send packet 0 at T=0
-        space.onPacketSent(0, 0, new RootPoolBuffer(ByteBuffer.allocate(10), mock(BufferPool.class), false).borrow(),  true, TEST_ADDRESS);
+        space.onPacketSent(0, 0, new TestPoolBuffer(ByteBuffer.allocate(10)).borrow(),  true, TEST_ADDRESS);
 
         // Send and ACK packet 1 at T=100 to establish RTT=100
-        space.onPacketSent(100, 1, new RootPoolBuffer(ByteBuffer.allocate(10), mock(BufferPool.class), false).borrow(),  true, TEST_ADDRESS);
+        space.onPacketSent(100, 1, new TestPoolBuffer(ByteBuffer.allocate(10)).borrow(),  true, TEST_ADDRESS);
         List<PacketNumberSpace.AckRange> ackRanges1 = List.of(
             new PacketNumberSpace.AckRange(1, 1)
         );
         space.onAckReceived(200, 1, ackRanges1, 0, null, 0, TEST_ADDRESS);
 
         // Send and ACK packet 2 at T=300 to trigger loss detection for packet 0
-        space.onPacketSent(300, 2, new RootPoolBuffer(ByteBuffer.allocate(10), mock(BufferPool.class), false).borrow(),  true, TEST_ADDRESS);
+        space.onPacketSent(300, 2, new TestPoolBuffer(ByteBuffer.allocate(10)).borrow(),  true, TEST_ADDRESS);
         List<PacketNumberSpace.AckRange> ackRanges2 = List.of(
             new PacketNumberSpace.AckRange(2, 2)
         );
@@ -269,7 +273,7 @@ class PacketNumberSpaceTest {
         long currentTime = 0;
         // Send multiple packets and ACK them with different delays
         for (int i = 0; i < 3; i++) {
-            space.onPacketSent(currentTime, i, new RootPoolBuffer(ByteBuffer.allocate(10), mock(BufferPool.class), false).borrow(),  true, TEST_ADDRESS);
+            space.onPacketSent(currentTime, i, new TestPoolBuffer(ByteBuffer.allocate(10)).borrow(),  true, TEST_ADDRESS);
             long delay = 10 + i * 10;
             currentTime += delay;
 
@@ -302,7 +306,7 @@ class PacketNumberSpaceTest {
         space.setConnectionPathController(connectionPathController);
 
         // Send non-ack-eliciting packet (e.g., ACK-only packet)
-        space.onPacketSent(0, 0, new RootPoolBuffer(ByteBuffer.allocate(10), mock(BufferPool.class), false).borrow(), false, TEST_ADDRESS);
+        space.onPacketSent(0, 0, new TestPoolBuffer(ByteBuffer.allocate(10)).borrow(), false, TEST_ADDRESS);
 
         // ACK it
         List<PacketNumberSpace.AckRange> ackRanges = List.of(
@@ -356,9 +360,9 @@ class PacketNumberSpaceTest {
                 return 100;
             }
         });
-        PoolBuffer frames100 = new RootPoolBuffer(ByteBuffer.allocate(100), mock(BufferPool.class), false).borrow();
+        PoolBuffer frames100 = new TestPoolBuffer(ByteBuffer.allocate(100)).borrow();
         frames100.buf().limit(100);
-        PoolBuffer frames200 = new RootPoolBuffer(ByteBuffer.allocate(200), mock(BufferPool.class), false).borrow();
+        PoolBuffer frames200 = new TestPoolBuffer(ByteBuffer.allocate(200)).borrow();
         frames200.buf().limit(200);
 
         long currentTime = 0;

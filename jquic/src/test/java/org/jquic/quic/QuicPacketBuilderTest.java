@@ -17,9 +17,8 @@ package org.jquic.quic;
 
 import org.jquic.quic.buffers.BufferPool;
 import org.jquic.quic.buffers.NonReusableBuffer;
-import org.jquic.quic.buffers.RootPoolBuffer;
+import org.jquic.quic.buffers.TestPoolBuffer;
 import org.jquic.quic.crypto.NativeCrypto;
-import org.jquic.quic.crypto.QuicCrypto;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
@@ -38,15 +37,12 @@ import static org.mockito.Mockito.*;
 class QuicPacketBuilderTest {
 
     public static final byte[] SCID = ByteBuffer.wrap(new byte[8]).putLong(0x5678L).array();
-    private static final byte[] MOCK_IV = new byte[12];
-    private static final ByteBuffer MOCK_HP = null; // Set to 0 to skip HP in QuicPacketBuilder
-    private static final ByteBuffer MOCK_KEY = ByteBuffer.wrap(new byte[16]);
     private static final NativeCrypto MOCK_CRYPTO = mock(NativeCrypto.class);
     private static final BufferPool pool = mock(BufferPool.class);
 
     @BeforeAll
     static void init() throws QuicException {
-        when(pool.requestWriteBuffer()).thenAnswer((_) -> new RootPoolBuffer(ByteBuffer.allocate(2000).position(100), pool, true) );
+        when(pool.requestWriteBuffer()).thenAnswer((_) -> new TestPoolBuffer(ByteBuffer.allocate(2000).position(100)));
         doAnswer(
                 invocation -> {
                     ByteBuffer f = invocation.getArgument(0);
@@ -55,12 +51,12 @@ class QuicPacketBuilderTest {
                 }
         ).when(MOCK_CRYPTO).encryptPacketInPlace(any(), anyLong(), any());
     }
-    
+
     @Test
     void testBuildInitialPacket_HeaderStructure() throws QuicException {
         // Arrange
         long destinationCid = 0x1234567890ABCDEFL;
-        byte [] sourceCid = ByteBuffer.wrap(new byte[8]).putLong(0xFEDCBA0987654321L).array();
+        byte[] sourceCid = ByteBuffer.wrap(new byte[8]).putLong(0xFEDCBA0987654321L).array();
         long packetNumber = 5;
         ByteBuffer payload = ByteBuffer.wrap(new byte[]{0x01, 0x02, 0x03, 0x04});
         int payloadSize = payload.remaining();
@@ -119,7 +115,7 @@ class QuicPacketBuilderTest {
 
         // Check encrypted payload is present (original payload + GCM tag)
         assertEquals(payloadSize + GCM_TAG_LENGTH, packet.remaining(),
-            "Remaining bytes should be encrypted payload (plaintext + GCM tag)");
+                "Remaining bytes should be encrypted payload (plaintext + GCM tag)");
     }
 
     @Test
@@ -205,7 +201,7 @@ class QuicPacketBuilderTest {
 
         // Check encrypted payload is present (original payload + GCM tag)
         assertEquals(originalPayloadSize + GCM_TAG_LENGTH, packet.remaining(),
-            "Remaining bytes should be encrypted payload (plaintext + GCM tag)");
+                "Remaining bytes should be encrypted payload (plaintext + GCM tag)");
     }
 
     @Test
@@ -244,8 +240,8 @@ class QuicPacketBuilderTest {
         ByteBuffer packet = poolBuffer.buf();
 
         // Assert - short header: 1 (flags) + 8 (CID) + 1 (PN) + 16 (GCM tag) = 26 bytes
-        assertEquals(1 + 8 + 1 + GCM_TAG_LENGTH, packet.remaining(), 
-            "Minimum 1-RTT packet should be header (10 bytes) + GCM tag (16 bytes)");
+        assertEquals(1 + 8 + 1 + GCM_TAG_LENGTH, packet.remaining(),
+                "Minimum 1-RTT packet should be header (10 bytes) + GCM tag (16 bytes)");
     }
 
     @Test
@@ -267,8 +263,8 @@ class QuicPacketBuilderTest {
             assertEquals(pn, encodedPn, "Packet number " + pn + " should be encoded correctly");
 
             // After PN, we should have encrypted payload (10 bytes) + GCM tag (16 bytes)
-            assertEquals(10 + GCM_TAG_LENGTH, packet.remaining(), 
-                "Should have encrypted payload + GCM tag remaining");
+            assertEquals(10 + GCM_TAG_LENGTH, packet.remaining(),
+                    "Should have encrypted payload + GCM tag remaining");
         }
     }
 
@@ -299,7 +295,7 @@ class QuicPacketBuilderTest {
         ByteBuffer packet = poolBuffer.buf();
 
         // Assert - skip to length field
-        packet.position(packet.position() +  1 + 4 + 1 + 8 + 1 + 8); // flags + version + dcid_len + dcid + scid_len + scid
+        packet.position(packet.position() + 1 + 4 + 1 + 8 + 1 + 8); // flags + version + dcid_len + dcid + scid_len + scid
 
         long length = readVarint(packet);
         System.out.println("[DEBUG_LOG] Handshake length varint: " + length + ", expected at least " + (payloadData.length + GCM_TAG_LENGTH + 1));
@@ -331,22 +327,22 @@ class QuicPacketBuilderTest {
         int prefix = (first & 0xC0) >> 6;
 
         switch (prefix) {
-            case 0: 
+            case 0:
                 return first & 0x3F;
-            case 1: 
+            case 1:
                 return ((first & 0x3F) << 8) | (buffer.get() & 0xFF);
-            case 2: 
-                return ((first & 0x3F) << 24) | 
-                       ((buffer.get() & 0xFF) << 16) |
-                       ((buffer.get() & 0xFF) << 8) | 
-                       (buffer.get() & 0xFF);
+            case 2:
+                return ((first & 0x3F) << 24) |
+                        ((buffer.get() & 0xFF) << 16) |
+                        ((buffer.get() & 0xFF) << 8) |
+                        (buffer.get() & 0xFF);
             case 3:
                 long value = (first & 0x3F);
                 for (int i = 0; i < 7; i++) {
                     value = (value << 8) | (buffer.get() & 0xFF);
                 }
                 return value;
-            default: 
+            default:
                 return 0;
         }
     }

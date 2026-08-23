@@ -19,6 +19,7 @@ import org.jquic.quic.streamapi.impl.ApplicationData;
 import org.jquic.quic.struct.TriStateQueue;
 
 public class CombinedQueue implements FrameSource {
+    public static final int RETRANSMIT_THRESHOLD = 100;
     private final SimpleFrameQueue frameQueue = new SimpleFrameQueue();
     private final SimpleFrameQueue ackQueue = new SimpleFrameQueue();
     private final SimpleFrameQueue retansmitQueue = new SimpleFrameQueue();
@@ -30,6 +31,9 @@ public class CombinedQueue implements FrameSource {
     public Frame poll() {
         for (int i = 0 ; i < 4; i++) {
             Frame frame = pollIdx(curQueueIndex++);
+            if (retansmitQueue.size() > RETRANSMIT_THRESHOLD && curQueueIndex == 3) {
+                curQueueIndex = 0;  // skip app data if retransmits grow
+            }
             curQueueIndex = curQueueIndex % 4;
             if (frame != null) return frame;
         }

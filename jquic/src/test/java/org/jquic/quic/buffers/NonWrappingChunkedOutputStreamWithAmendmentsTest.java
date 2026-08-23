@@ -40,7 +40,7 @@ public class NonWrappingChunkedOutputStreamWithAmendmentsTest {
         ByteBuffer buffer = ByteBuffer.allocate(100);
         int chunkSize = 10;
         
-        when(myPool.requestWriteBuffer()).thenReturn(new RootPoolBuffer(buffer, myPool, true));
+        when(myPool.requestWriteBuffer()).thenReturn(new TestPoolBuffer(buffer));
         
         ChunkedOutputStreamWithAmendments stream = ChunkedOutputStreamWithAmendments.createNonWrapping(myPool, chunkSize, 0, (buf, _, _) -> buf.duplicate());
         
@@ -85,10 +85,10 @@ public class NonWrappingChunkedOutputStreamWithAmendmentsTest {
         int chunkSize = 10;
 
         when(myPool.requestWriteBuffer())
-            .thenReturn(new RootPoolBuffer(buffer1, myPool, true))
-            .thenReturn(new RootPoolBuffer(buffer2, myPool, true));
+            .thenReturn(new TestPoolBuffer(buffer1))
+            .thenReturn(new TestPoolBuffer(buffer2));
         
-        ChunkedOutputStreamWithAmendments stream = ChunkedOutputStreamWithAmendments.createNonWrapping(myPool, chunkSize, 0, (buf, offset, isFinal) -> buf.duplicate());
+        ChunkedOutputStreamWithAmendments stream = ChunkedOutputStreamWithAmendments.createNonWrapping(myPool, chunkSize, 0, (buf,_ ,_) -> buf.duplicate());
 
         // Write 30 bytes (3 chunks of 10)
         stream.write(pattern(30, 1));
@@ -129,10 +129,10 @@ public class NonWrappingChunkedOutputStreamWithAmendmentsTest {
         int chunkSize = 10;
         int trailingPadding = 5;
 
-        when(myPool.requestWriteBuffer()).thenReturn(new RootPoolBuffer(b1, myPool, true))
-                .thenReturn(new RootPoolBuffer(b2, myPool, true));
+        when(myPool.requestWriteBuffer()).thenReturn(new TestPoolBuffer(b1))
+                .thenReturn(new TestPoolBuffer(b2));
         
-        ChunkedOutputStreamWithAmendments stream = ChunkedOutputStreamWithAmendments.createNonWrapping(myPool, chunkSize, trailingPadding, (buf, offset, isFinal) -> buf.duplicate());
+        ChunkedOutputStreamWithAmendments stream = ChunkedOutputStreamWithAmendments.createNonWrapping(myPool, chunkSize, trailingPadding, (buf,_ ,_) -> buf.duplicate());
 
         // Buffer capacity 32. Effective capacity 32 - 5 = 27.
         // Chunk 0: [0, 10), gap [10, 15)
@@ -191,9 +191,9 @@ public class NonWrappingChunkedOutputStreamWithAmendmentsTest {
     @Test
     public void testAmendAtPos() throws IOException {
         ByteBuffer buffer = ByteBuffer.allocate(100);
-        when(myPool.requestWriteBuffer()).thenReturn(new RootPoolBuffer(buffer, myPool, true));
+        when(myPool.requestWriteBuffer()).thenReturn(new TestPoolBuffer(buffer));
         
-        ChunkedOutputStreamWithAmendments stream = ChunkedOutputStreamWithAmendments.createNonWrapping(myPool, 10, 0, (buf, offset, isFinal) -> buf.duplicate());
+        ChunkedOutputStreamWithAmendments stream = ChunkedOutputStreamWithAmendments.createNonWrapping(myPool, 10, 0, (buf,_ ,_) -> buf.duplicate());
         
         stream.write(new byte[]{1, 2, 3, 4, 5});
         int pos = stream.getPos(); // 5
@@ -216,9 +216,9 @@ public class NonWrappingChunkedOutputStreamWithAmendmentsTest {
     @Test
     public void testReadyContentFrom() throws IOException {
         ByteBuffer buffer = ByteBuffer.allocate(100);
-        when(myPool.requestWriteBuffer()).thenReturn(new RootPoolBuffer(buffer, myPool, true));
+        when(myPool.requestWriteBuffer()).thenReturn(new TestPoolBuffer(buffer));
         
-        ChunkedOutputStreamWithAmendments stream = ChunkedOutputStreamWithAmendments.createNonWrapping(myPool, 10, 2, (buf, offset, isFinal) -> buf.duplicate());
+        ChunkedOutputStreamWithAmendments stream = ChunkedOutputStreamWithAmendments.createNonWrapping(myPool, 10, 2, (buf,_ ,_) -> buf.duplicate());
         
         stream.write(new byte[]{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15});
         
@@ -243,10 +243,10 @@ public class NonWrappingChunkedOutputStreamWithAmendmentsTest {
         // Clear buffer to ensure zeros in gaps
         for (int i = 0; i < 100; i++) buffer.put(i, (byte) 0);
         
-        when(myPool.requestWriteBuffer()).thenReturn(new RootPoolBuffer(buffer.position(2), myPool, true));
+        when(myPool.requestWriteBuffer()).thenReturn(new TestPoolBuffer(buffer.position(2)));
         
         // Wrapper that adds 2 bytes header "<<"
-        ChunkedOutputStreamWithAmendments.ChunkWrapper wrapper = (buf, offset, isFinal) -> {
+        ChunkedOutputStreamWithAmendments.ChunkWrapper wrapper = (buf,_ ,_) -> {
             int start = buf.position();
             int end = buf.limit();
             buffer.put(start - 2, (byte)'<');
@@ -285,9 +285,9 @@ public class NonWrappingChunkedOutputStreamWithAmendmentsTest {
     @Test
     public void testLargeWriteSpanningMultipleChunks() throws IOException {
         ByteBuffer buffer = ByteBuffer.allocate(100);
-        when(myPool.requestWriteBuffer()).thenReturn(new RootPoolBuffer(buffer, myPool, true));
+        when(myPool.requestWriteBuffer()).thenReturn(new TestPoolBuffer(buffer));
         
-        ChunkedOutputStreamWithAmendments stream = ChunkedOutputStreamWithAmendments.createNonWrapping(myPool, 10, 0, (buf, offset, isFinal) -> buf.duplicate());
+        ChunkedOutputStreamWithAmendments stream = ChunkedOutputStreamWithAmendments.createNonWrapping(myPool, 10, 0, (buf,_ ,_) -> buf.duplicate());
         
         byte[] data = new byte[25];
         for (int i = 0; i < 25; i++) data[i] = (byte) i;
@@ -304,9 +304,9 @@ public class NonWrappingChunkedOutputStreamWithAmendmentsTest {
     @Test
     public void testSetChunkConsumer() throws IOException {
         ByteBuffer buffer = ByteBuffer.allocate(100);
-        when(myPool.requestWriteBuffer()).thenReturn(new RootPoolBuffer(buffer, myPool, true));
+        when(myPool.requestWriteBuffer()).thenReturn(new TestPoolBuffer(buffer));
         
-        ChunkedOutputStreamWithAmendments stream = ChunkedOutputStreamWithAmendments.createNonWrapping(myPool, 10, 0, (buf, offset, isFinal) -> buf.duplicate());
+        ChunkedOutputStreamWithAmendments stream = ChunkedOutputStreamWithAmendments.createNonWrapping(myPool, 10, 0, (buf,_ ,_) -> buf.duplicate());
         
         List<PoolBuffer> consumed = new ArrayList<>();
         stream.setChunkConsumer(e-> {
@@ -326,9 +326,9 @@ public class NonWrappingChunkedOutputStreamWithAmendmentsTest {
     @Test
     public void testIllegalAmendments() throws IOException {
         ByteBuffer buffer = ByteBuffer.allocate(100);
-        when(myPool.requestWriteBuffer()).thenReturn(new RootPoolBuffer(buffer, myPool, true));
+        when(myPool.requestWriteBuffer()).thenReturn(new TestPoolBuffer(buffer));
         
-        ChunkedOutputStreamWithAmendments stream = ChunkedOutputStreamWithAmendments.createNonWrapping(myPool, 10, 0, (buf, offset, isFinal) -> buf.duplicate());
+        ChunkedOutputStreamWithAmendments stream = ChunkedOutputStreamWithAmendments.createNonWrapping(myPool, 10, 0, (buf,_ ,_) -> buf.duplicate());
         
         stream.write(new byte[20]);
         
@@ -341,10 +341,10 @@ public class NonWrappingChunkedOutputStreamWithAmendmentsTest {
     @Test
     public void testCloseReleasesBuffer() throws IOException {
         ByteBuffer buffer = ByteBuffer.allocate(100);
-        RootPoolBuffer root = spy(new RootPoolBuffer(buffer, myPool, true));
+        PoolBuffer root = spy(new TestPoolBuffer(buffer));
         when(myPool.requestWriteBuffer()).thenReturn(root);
         
-        ChunkedOutputStreamWithAmendments stream = ChunkedOutputStreamWithAmendments.createNonWrapping(myPool, 10, 0, (buf, offset, isFinal) -> buf.duplicate());
+        ChunkedOutputStreamWithAmendments stream = ChunkedOutputStreamWithAmendments.createNonWrapping(myPool, 10, 0, (buf,_ ,_) -> buf.duplicate());
         
         stream.write(new byte[5]);
         assertFalse(stream.isClosed());
@@ -359,9 +359,9 @@ public class NonWrappingChunkedOutputStreamWithAmendmentsTest {
     @Test
     public void testDataOutputStreamMethods() throws IOException {
         ByteBuffer buffer = ByteBuffer.allocate(100);
-        when(myPool.requestWriteBuffer()).thenReturn(new RootPoolBuffer(buffer, myPool, true));
+        when(myPool.requestWriteBuffer()).thenReturn(new TestPoolBuffer(buffer));
         
-        ChunkedOutputStreamWithAmendments stream = ChunkedOutputStreamWithAmendments.createNonWrapping(myPool, 20, 0, (buf, offset, isFinal) -> buf.duplicate());
+        ChunkedOutputStreamWithAmendments stream = ChunkedOutputStreamWithAmendments.createNonWrapping(myPool, 20, 0, (buf,_ ,_) -> buf.duplicate());
         
         stream.writeInt(0x12345678);
         stream.writeShort(0xABCD);
@@ -383,9 +383,9 @@ public class NonWrappingChunkedOutputStreamWithAmendmentsTest {
     @Test
     public void testAmendMultipleTimes() throws IOException {
         ByteBuffer buffer = ByteBuffer.allocate(100);
-        when(myPool.requestWriteBuffer()).thenReturn(new RootPoolBuffer(buffer, myPool, true));
+        when(myPool.requestWriteBuffer()).thenReturn(new TestPoolBuffer(buffer));
         
-        ChunkedOutputStreamWithAmendments stream = ChunkedOutputStreamWithAmendments.createNonWrapping(myPool, 10, 0, (buf, offset, isFinal) -> buf.duplicate());
+        ChunkedOutputStreamWithAmendments stream = ChunkedOutputStreamWithAmendments.createNonWrapping(myPool, 10, 0, (buf,_ ,_) -> buf.duplicate());
         
         stream.write(new byte[]{0, 0, 0, 0, 0}); // pos 0..4
         stream.write(new byte[]{1, 1, 1, 1, 1}); // pos 5..9
@@ -404,9 +404,9 @@ public class NonWrappingChunkedOutputStreamWithAmendmentsTest {
     @Test
     public void testAmendAfterFlush() throws IOException {
         ByteBuffer buffer = ByteBuffer.allocate(100);
-        when(myPool.requestWriteBuffer()).thenReturn(new RootPoolBuffer(buffer, myPool, true));
+        when(myPool.requestWriteBuffer()).thenReturn(new TestPoolBuffer(buffer));
         
-        ChunkedOutputStreamWithAmendments stream = ChunkedOutputStreamWithAmendments.createNonWrapping(myPool, 10, 0, (buf, offset, isFinal) -> buf.duplicate());
+        ChunkedOutputStreamWithAmendments stream = ChunkedOutputStreamWithAmendments.createNonWrapping(myPool, 10, 0, (buf,_ ,_) -> buf.duplicate());
         
         stream.write(new byte[]{1, 2, 3, 4, 5});
         stream.flush(); // Chunk 0 is 5 bytes. gaps: {5 -> nextStart}
@@ -426,9 +426,9 @@ public class NonWrappingChunkedOutputStreamWithAmendmentsTest {
     @Test
     public void testAmendAfterSmallChunkFails() throws IOException {
         ByteBuffer buffer = ByteBuffer.allocate(100);
-        when(myPool.requestWriteBuffer()).thenReturn(new RootPoolBuffer(buffer, myPool, true));
+        when(myPool.requestWriteBuffer()).thenReturn(new TestPoolBuffer(buffer));
         
-        ChunkedOutputStreamWithAmendments stream = ChunkedOutputStreamWithAmendments.createNonWrapping(myPool, 10, 0, (buf, offset, isFinal) -> buf.duplicate());
+        ChunkedOutputStreamWithAmendments stream = ChunkedOutputStreamWithAmendments.createNonWrapping(myPool, 10, 0, (buf,_ ,_) -> buf.duplicate());
         
         stream.write(pattern(5, 1));
         stream.flush(); // Chunk 0 is 5 bytes. gaps: {5 -> nextStart}
@@ -445,9 +445,9 @@ public class NonWrappingChunkedOutputStreamWithAmendmentsTest {
     public void testGoBackAfterBufferAllocationAmendsWrongBuffer() throws IOException {
         ByteBuffer b1 = ByteBuffer.allocate(32);
         ByteBuffer b2 = ByteBuffer.allocate(32);
-        when(myPool.requestWriteBuffer()).thenReturn(new RootPoolBuffer(b1, myPool, true)).thenReturn(new RootPoolBuffer(b2, myPool, true));
+        when(myPool.requestWriteBuffer()).thenReturn(new TestPoolBuffer(b1)).thenReturn(new TestPoolBuffer(b2));
         
-        ChunkedOutputStreamWithAmendments stream = ChunkedOutputStreamWithAmendments.createNonWrapping(myPool, 10, 0, (buf, offset, isFinal) -> buf.duplicate());
+        ChunkedOutputStreamWithAmendments stream = ChunkedOutputStreamWithAmendments.createNonWrapping(myPool, 10, 0, (buf,_ ,_) -> buf.duplicate());
         
         stream.write(pattern(32, 1));
         stream.write(pattern(5, 33)); // Triggers new buffer b2
@@ -476,11 +476,11 @@ public class NonWrappingChunkedOutputStreamWithAmendmentsTest {
         b2.position(10);
 
         when(myPool.requestWriteBuffer())
-                .thenReturn(new RootPoolBuffer(b1, myPool, true))
-                .thenReturn(new RootPoolBuffer(b2, myPool, true));
+                .thenReturn(new TestPoolBuffer(b1))
+                .thenReturn(new TestPoolBuffer(b2));
 
         // Wrapper adds a header of size 2 or 4.
-        ChunkedOutputStreamWithAmendments.ChunkWrapper wrapper = (buf, offset, isFinal) -> {
+        ChunkedOutputStreamWithAmendments.ChunkWrapper wrapper = (buf,offset ,_) -> {
             int headerSize = (offset / chunkSize) % 2 == 0 ? 2 : 4;
             int start = buf.position();
             int end = buf.limit();
@@ -546,9 +546,9 @@ public class NonWrappingChunkedOutputStreamWithAmendmentsTest {
         int trailingPadding = 5;
         ByteBuffer buffer = ByteBuffer.allocate(bufferSize);
         buffer.position(10);
-        when(myPool.requestWriteBuffer()).thenReturn(new RootPoolBuffer(buffer, myPool, true));
+        when(myPool.requestWriteBuffer()).thenReturn(new TestPoolBuffer(buffer));
 
-        ChunkedOutputStreamWithAmendments.ChunkWrapper wrapper = (buf, offset, isFinal) -> {
+        ChunkedOutputStreamWithAmendments.ChunkWrapper wrapper = (buf,_ ,_) -> {
             int start = buf.position();
             buffer.put(start - 2, (byte)'<');
             buffer.put(start - 1, (byte)'<');
@@ -578,9 +578,9 @@ public class NonWrappingChunkedOutputStreamWithAmendmentsTest {
         int trailingPadding = 20;
         ByteBuffer b1 = ByteBuffer.allocate(bufferSize);
         ByteBuffer b2 = ByteBuffer.allocate(bufferSize);
-        when(myPool.requestWriteBuffer()).thenReturn(new RootPoolBuffer(b1, myPool, true)).thenReturn(new RootPoolBuffer(b2, myPool, true));
+        when(myPool.requestWriteBuffer()).thenReturn(new TestPoolBuffer(b1)).thenReturn(new TestPoolBuffer(b2));
         
-        ChunkedOutputStreamWithAmendments.ChunkWrapper wrapper = (buf, offset, isFinal) -> 
+        ChunkedOutputStreamWithAmendments.ChunkWrapper wrapper = (buf,_ ,_) -> 
             buf.duplicate().position(buf.position() - 10);
         
         b1.position(20);
@@ -620,12 +620,12 @@ public class NonWrappingChunkedOutputStreamWithAmendmentsTest {
         b3.position(10);
 
         when(myPool.requestWriteBuffer())
-            .thenReturn(new RootPoolBuffer(b1, myPool, true))
-            .thenReturn(new RootPoolBuffer(b2, myPool, true))
-            .thenReturn(new RootPoolBuffer(b3, myPool, true));
+            .thenReturn(new TestPoolBuffer(b1))
+            .thenReturn(new TestPoolBuffer(b2))
+            .thenReturn(new TestPoolBuffer(b3));
             
         // Wrapper: alternating 2 and 4 byte headers
-        ChunkedOutputStreamWithAmendments.ChunkWrapper wrapper = (buf, offset, isFinal) -> {
+        ChunkedOutputStreamWithAmendments.ChunkWrapper wrapper = (buf,offset ,_) -> {
             int headerLen = (offset / chunkSize) % 2 == 0 ? 2 : 4;
             ByteBuffer underlying = (buf.array() == b1.array()) ? b1 : (buf.array() == b2.array() ? b2 : b3);
             

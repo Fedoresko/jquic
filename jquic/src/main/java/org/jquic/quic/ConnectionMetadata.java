@@ -18,6 +18,7 @@ package org.jquic.quic;
 import org.jquic.quic.crypto.CipherMode;
 import org.jquic.quic.crypto.NativeCrypto;
 import org.jquic.quic.crypto.QuicCrypto;
+import org.jquic.quic.crypto.QuicKeyLogger;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,6 +29,9 @@ import java.security.GeneralSecurityException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+
+import static org.jquic.quic.QuicFrameBuilder.MAX_LONG_HEADER_LENGTH;
+import static org.jquic.quic.QuicFrameBuilder.MAX_SHORT_HEADER_LENGTH;
 
 /**
  * TLS metadata associated with a QUIC connection.
@@ -66,6 +70,8 @@ public class ConnectionMetadata {
     public byte[] initialDcid;
     public byte[] retrySourceCid;
     public long negotiatedIdleTimeoutMs;
+    public int maxLongHeaderLength = MAX_LONG_HEADER_LENGTH;
+    public int maxShortHeaderLength = MAX_SHORT_HEADER_LENGTH;
 
     /**
      * Handshake secret bytes retained for Master Secret derivation in stage 2.
@@ -181,6 +187,9 @@ public class ConnectionMetadata {
         this.serverHandshakeTrafficSecret = serverHandshakeTrafficSecret;
         this.clientHandshakeTrafficSecret = clientHandshakeTrafficSecret;
 
+        QuicKeyLogger.log("CLIENT_HANDSHAKE_TRAFFIC_SECRET", clientMetadata.clientRandom, clientHandshakeTrafficSecret);
+        QuicKeyLogger.log("SERVER_HANDSHAKE_TRAFFIC_SECRET", clientMetadata.clientRandom, serverHandshakeTrafficSecret);
+
         byte[] serverHp = QuicCrypto.deriveHp(quicVersion, serverHandshakeTrafficSecret, clientMetadata.selectedCipherSuite);
         SecretKey serverKey = QuicCrypto.deriveKey(quicVersion, serverHandshakeTrafficSecret, clientMetadata.selectedCipherSuite);
         ByteBuffer serverKeySeg = wrapDirect(serverKey.getEncoded());
@@ -227,6 +236,9 @@ public class ConnectionMetadata {
 
             serverApplicationTrafficSecret = QuicCrypto.hkdfExpandLabel(
                     masterSecret, "s ap traffic", context, 32);
+
+            QuicKeyLogger.log("CLIENT_TRAFFIC_SECRET_0", clientMetadata.clientRandom, clientApplicationTrafficSecret);
+            QuicKeyLogger.log("SERVER_TRAFFIC_SECRET_0", clientMetadata.clientRandom, serverApplicationTrafficSecret);
 
             SecretKey clientApplicationSecret = QuicCrypto.deriveKey(quicVersion, clientApplicationTrafficSecret, clientMetadata.selectedCipherSuite);
             SecretKey serverApplicationSecret = QuicCrypto.deriveKey(quicVersion, serverApplicationTrafficSecret, clientMetadata.selectedCipherSuite);
@@ -375,8 +387,9 @@ public class ConnectionMetadata {
         public final Map<Short, byte[]> clientKeys;
         public final CipherMode selectedCipherSuite;
         public final List<Integer> availableVersions;
+        public final byte[] clientRandom;
 
-        public ClientMetadataNegotiated(String alpn, long maxIdleTimeoutMs, List<Short> supportedGroups, Map<Short, byte[]> clientKeys, long maxUdpPayloadSize, long initialMaxData, long initialMaxStreamDataBidiLocal, long initialMaxStreamDataBidiRemote, long initialMaxStreamDataUni, long initialMaxStreamsBidi, long initialMaxStreamsUni, List<Short> supportedSignatures, long ackDelayExponent,  List<Integer> availableVersions, CipherMode selectedCipherSuite) {
+        public ClientMetadataNegotiated(String alpn, long maxIdleTimeoutMs, List<Short> supportedGroups, Map<Short, byte[]> clientKeys, long maxUdpPayloadSize, long initialMaxData, long initialMaxStreamDataBidiLocal, long initialMaxStreamDataBidiRemote, long initialMaxStreamDataUni, long initialMaxStreamsBidi, long initialMaxStreamsUni, List<Short> supportedSignatures, long ackDelayExponent,  List<Integer> availableVersions, CipherMode selectedCipherSuite, byte[] clientRandom) {
             this.alpn = alpn;
             this.maxIdleTimeoutMs = maxIdleTimeoutMs;
             this.maxUdpPayloadSize = maxUdpPayloadSize;
@@ -392,6 +405,7 @@ public class ConnectionMetadata {
             this.clientKeys = clientKeys;
             this.availableVersions = availableVersions;
             this.selectedCipherSuite = selectedCipherSuite;
+            this.clientRandom = clientRandom;
         }
     }
 }

@@ -19,18 +19,19 @@ import org.jctools.queues.MpmcUnboundedXaddArrayQueue;
 
 import java.nio.ByteBuffer;
 
-public class BufferPool implements ReadBufferPool, WriteBufferPool {
+public class BufferPool implements ReadBufferPool, WriteBufferPool, CryptoBufferPool {
     public static final int READ_BUFFER_SIZE = 2048;
     public static final int WRITE_BUFFER_SIZE = 2048;
     public static final int INITIAL_SIZE = 100;
 
     private final MpmcUnboundedXaddArrayQueue<RootPoolBuffer> readBufferPool = new MpmcUnboundedXaddArrayQueue<>( 10, 100);
     private final MpmcUnboundedXaddArrayQueue<RootPoolBuffer> writeBufferPool = new MpmcUnboundedXaddArrayQueue<>( 10, 100);
+    private final MpmcUnboundedXaddArrayQueue<RootPoolBuffer> cryptoBufferPool = new MpmcUnboundedXaddArrayQueue<>( 10, 100);
 
     public BufferPool() {
         for (int i = 0; i < INITIAL_SIZE; i++) {
-            readBufferPool.offer(new RootPoolBuffer(ByteBuffer.allocateDirect(READ_BUFFER_SIZE), this, false));
-            writeBufferPool.offer(new RootPoolBuffer(ByteBuffer.allocateDirect(WRITE_BUFFER_SIZE), this, true));
+            readBufferPool.offer(new RootPoolBuffer(ByteBuffer.allocateDirect(READ_BUFFER_SIZE), readBufferPool));
+            writeBufferPool.offer(new RootPoolBuffer(ByteBuffer.allocateDirect(WRITE_BUFFER_SIZE), writeBufferPool));
         }
     }
 
@@ -41,44 +42,40 @@ public class BufferPool implements ReadBufferPool, WriteBufferPool {
         return writeBufferPool.size();
     }
 
+    @Override
     public PoolBuffer requestReadBuffer() {
-        RootPoolBuffer buffer = readBufferPool.poll();
-        if (buffer == null) {
-            buffer = new RootPoolBuffer(ByteBuffer.allocateDirect(READ_BUFFER_SIZE), this,false);
-        } else {
-            buffer.buffer.clear();
-        }
-        return buffer.borrow();
+        return requestBuffer(READ_BUFFER_SIZE, readBufferPool);
     }
 
+    @Override
     public PoolBuffer requestWriteBuffer() {
-        RootPoolBuffer buffer = writeBufferPool.poll();
+        return requestBuffer(WRITE_BUFFER_SIZE, writeBufferPool);
+    }
+
+    @Override
+    public PoolBuffer requestCryptoBuffer(int size) {
+        return requestBuffer(size, cryptoBufferPool);
+    }
+
+    static void returnBuffer(RootPoolBuffer buffer, MpmcUnboundedXaddArrayQueue<RootPoolBuffer> queue) {
+        queue.offer(buffer);
+        if (queue.size() >= 150) {
+            for (int i = 0; i < 50; i++) {
+                queue.poll(); // Free excessive data
+            }
+        }
+    }
+
+    private static PoolBuffer requestBuffer(int size, MpmcUnboundedXaddArrayQueue<RootPoolBuffer> queue) {
+        RootPoolBuffer buffer = queue.poll();
         if (buffer == null) {
-            buffer = new RootPoolBuffer(ByteBuffer.allocateDirect(WRITE_BUFFER_SIZE), this, true);
+            buffer = new RootPoolBuffer(ByteBuffer.allocateDirect(size + 200), queue);
         } else {
             buffer.buffer.clear();
         }
 
         buffer.buf().position(100);
         return buffer.borrow();
-    }
-
-    void returnReadBuffer(RootPoolBuffer buffer) {
-        readBufferPool.offer(buffer);
-        if (readBufferPool.size() >= 150) {
-            for (int i = 0; i < 50; i++) {
-                readBufferPool.poll(); // Free excessive data
-            }
-        }
-    }
-
-    void returnWriteBuffer(RootPoolBuffer buffer) {
-        writeBufferPool.offer(buffer);
-        if (writeBufferPool.size() >= 150) {
-            for (int i = 0; i < 50; i++) {
-                writeBufferPool.poll(); // Free excessive data
-            }
-        }
     }
 }
 

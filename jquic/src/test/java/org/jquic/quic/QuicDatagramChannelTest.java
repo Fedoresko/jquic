@@ -15,9 +15,8 @@
  */
 package org.jquic.quic;
 
-import org.jquic.quic.buffers.BufferPool;
 import org.jquic.quic.buffers.PoolBuffer;
-import org.jquic.quic.buffers.RootPoolBuffer;
+import org.jquic.quic.buffers.TestPoolBuffer;
 import org.jquic.quic.linux.ECT;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -32,7 +31,6 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.mock;
 
 class QuicDatagramChannelTest {
 
@@ -82,7 +80,7 @@ class QuicDatagramChannelTest {
         SocketAddress serverAddr = serverChannel.getLocalAddress();
 
         for (int i = 0; i < count; i++) {
-            data.add(new SelectorThread.PacketToSend(serverAddr, new RootPoolBuffer(ByteBuffer.wrap(("Message " + i).getBytes()), mock(BufferPool.class),false).borrow(), ECT.NONE));
+            data.add(new SelectorThread.PacketToSend(serverAddr, new TestPoolBuffer(ByteBuffer.wrap(("Message " + i).getBytes())).borrow(), ECT.NONE));
         }
 
         int sent = quicClientChannel.sendBatch(data);
@@ -120,7 +118,7 @@ class QuicDatagramChannelTest {
     void testReceiveBatchNonBlocking() throws IOException {
         PoolBuffer[] buffers = new PoolBuffer[10];
         for (int i = 0; i < buffers.length; i++) {
-            buffers[i] = new RootPoolBuffer(ByteBuffer.wrap(("Message " + i).getBytes()), mock(BufferPool.class),false);
+            buffers[i] = new TestPoolBuffer(ByteBuffer.wrap(("Message " + i).getBytes()));
         }
         List<QuicDatagramChannel.ReceivedPacket> received = quicServerChannel.receiveBatch(buffers);
         assertTrue(received.isEmpty(), "Should not receive anything on empty socket");

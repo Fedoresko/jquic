@@ -36,13 +36,17 @@ public class PacketNumberSpace {
 
     // RFC 9002: Loss detection constants
     private static final double K_TIME_THRESHOLD = 9.0 / 8.0; // 1.125
-    private static final int K_PACKET_THRESHOLD = 3; // Packet reordering threshold
+    private static final int MIN_K_PACKET_THRESHOLD = 3; // Packet reordering threshold
     public static final int MIN_LOSS_TIMEOUT = 200;
 
     public final PacketPhase phase; // For logging: "Initial", "Handshake", "Application"
 
     // Packet number allocation
     private long nextPacketNumber = 0;
+
+    private int kPacketThreshold = MIN_K_PACKET_THRESHOLD;
+    private int firstAckedRangeLen;
+    private long lastLossDetectedMs = 0;
 
     // Received packet tracking
     private long largestReceivedPacketNumber = -1;
@@ -122,7 +126,7 @@ public class PacketNumberSpace {
             return null;
         } else {
             ConnectionPath connectionPath = connectionPathController.getConnectionPath(destinationAddress);
-            return connectionPath.windowedStatCounter == null ? null : connectionPath.windowedStatCounter;
+            return connectionPath == null ? null : connectionPath.windowedStatCounter;
         }
     }
 
@@ -178,6 +182,10 @@ public class PacketNumberSpace {
         // Update largest acked
         if (largestAcked > largestAckedPacketNumber) {
             largestAckedPacketNumber = largestAcked;
+        }
+
+        if (!ackRanges.isEmpty()) {
+            firstAckedRangeLen = (int) (ackRanges.getFirst().largest - ackRanges.getFirst().smallest + 1);
         }
 
         // Find newly acked packets.
@@ -252,7 +260,7 @@ public class PacketNumberSpace {
         }
 
         // Packet threshold: declare lost if far enough below largest acked
-        long lostPacketThreshold = largestAckedPacketNumber - K_PACKET_THRESHOLD;
+        long lostPacketThreshold = largestAckedPacketNumber - kPacketThreshold;
 
         // --- Packet-threshold pass ---
         // headMap(lostPacketThreshold) returns only the entries with pn < lostPacketThreshold,
@@ -281,7 +289,14 @@ public class PacketNumberSpace {
             }
         }
         if (num > 0) {
+            if (timestampMs - lastLossDetectedMs < connectionPathController.getSmoothedRtt()) {
+                kPacketThreshold = firstAckedRangeLen + 1;
+            }
+            lastLossDetectedMs = timestampMs;
+
             logger.info("Retransmitted {} lost packets.", num);
+        } else {
+            if (kPacketThreshold > MIN_K_PACKET_THRESHOLD) kPacketThreshold--;
         }
     }
 

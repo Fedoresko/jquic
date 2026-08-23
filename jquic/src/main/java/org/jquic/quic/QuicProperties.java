@@ -85,7 +85,7 @@ public class QuicProperties {
 
     public static final int OUTBOUND_APP_QUEUE_SIZE = getInt("quic.outbound_app_queue_size", 1000);
     public static final int HANDSHAKE_QUEUE_CAP = getInt("quic.handshake_queue_cap", 1000);
-    public static final int MAX_RECIEVE_BATCH = getInt("quic.max_receive_batch", 64);
+    public static final int MAX_RECEIVE_BATCH = getInt("quic.max_receive_batch", 64);
     public static final int MAX_SEND_BATCH = getInt("quic.max_send_batch", 128);
     public static final long TIMEOUT_CHECK_INTERVAL_MS = getLong("quic.timeout_check_interval_ms", 1000);
 
@@ -118,4 +118,6 @@ public class QuicProperties {
     public static final int DEFENCE_COOLDOWN = getInt("quic.defence.cooldown_ms", 30000);
     public static final int RETRY_TOKEN_EXPIRATION = getInt("quic.defence.retry_token_expiration_ms", 3000);
     public static final boolean START_IN_DEFENCE = Boolean.parseBoolean(getString("quic.defence.start_on", "false"));
+
+    public static final String SSLKEYLOGFILE = getString("SSLKEYLOGFILE", getString("quic.ssl_keylog", System.getenv("SSLKEYLOGFILE")));
 }

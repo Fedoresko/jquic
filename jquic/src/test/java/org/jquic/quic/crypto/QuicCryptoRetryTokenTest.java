@@ -32,6 +32,7 @@ import java.util.Arrays;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
+@SuppressWarnings("ResultOfMethodCallIgnored")
 class QuicCryptoRetryTokenTest {
 
     private static MockedStatic<QuicCrypto> quicCryptoMock;
@@ -73,94 +74,103 @@ class QuicCryptoRetryTokenTest {
     void testRetryTokenIPv4() throws Exception {
         long timestamp = System.currentTimeMillis();
         byte[] cid = new byte[]{1, 2, 3, 4, 5, 6, 7, 8};
+        byte[] serverCid = new byte[]{9, 10, 11, 12, 13, 14, 15, 16};
         InetSocketAddress address = new InetSocketAddress("127.0.0.1", 12345);
         ByteBuffer buffer = ByteBuffer.allocateDirect(100);
 
         buffer.position(10); //Start at non-zero position
 
-        int length = QuicCrypto.generateRetryToken(nativeCrypto, buffer, timestamp, cid, address);
-        // IV(12) + Tag(16) + Plaintext(8+1+8+4+2=23) = 51
-        assertEquals(51, length);
+        int length = QuicCrypto.generateRetryToken(nativeCrypto, buffer, timestamp, cid, address, serverCid);
+        // IV(12) + Tag(16) + Plaintext(8+1+8+4+2+1+8=32) = 60
+        assertEquals(60, length);
         assertEquals(length, buffer.remaining());
 
         QuicCrypto.RetryTokenInfo info = QuicCrypto.parseRetryToken(nativeCrypto, buffer);
 
         assertEquals(timestamp, info.timestamp());
-        assertArrayEquals(cid, info.connectionId());
+        assertArrayEquals(cid, info.odcid());
         assertEquals(address.getAddress(), info.ip());
         assertEquals(address.getPort(), info.port());
+        assertArrayEquals(serverCid, info.serverCid());
     }
 
     @Test
     void testRetryTokenIPv6() throws Exception {
         long timestamp = System.currentTimeMillis();
         byte[] cid = new byte[]{8, 7, 6, 5, 4, 3, 2, 1};
+        byte[] serverCid = new byte[]{1, 2, 3, 4, 5, 6, 7, 8};
         InetSocketAddress address = new InetSocketAddress("::1", 54321);
         ByteBuffer buffer = ByteBuffer.allocateDirect(100);
 
-        int length = QuicCrypto.generateRetryToken(nativeCrypto, buffer, timestamp, cid, address);
-        // IV(12) + Tag(16) + Plaintext(8+1+8+16+2=35) = 63
-        assertEquals(63, length);
+        int length = QuicCrypto.generateRetryToken(nativeCrypto, buffer, timestamp, cid, address, serverCid);
+        // IV(12) + Tag(16) + Plaintext(8+1+8+16+2+1+8=44) = 72
+        assertEquals(72, length);
         assertEquals(length, buffer.remaining());
 
         QuicCrypto.RetryTokenInfo info = QuicCrypto.parseRetryToken(nativeCrypto, buffer);
 
         assertEquals(timestamp, info.timestamp());
-        assertArrayEquals(cid, info.connectionId());
+        assertArrayEquals(cid, info.odcid());
         assertEquals(address.getAddress(), info.ip());
         assertEquals(address.getPort(), info.port());
+        assertArrayEquals(serverCid, info.serverCid());
     }
 
     @Test
     void testRetryTokenVariableCID() throws Exception {
         long timestamp = System.currentTimeMillis();
+        byte[] serverCid = new byte[]{1, 2, 3, 4};
         InetSocketAddress address = new InetSocketAddress("127.0.0.1", 12345);
         ByteBuffer buffer = ByteBuffer.allocateDirect(100);
 
         // Min length CID (1 byte)
         byte[] cid1 = new byte[]{0x42};
-        int length1 = QuicCrypto.generateRetryToken(nativeCrypto, buffer.clear(), timestamp, cid1, address);
-        // IV(12) + Tag(16) + Plaintext(8+1+1+4+2=16) = 44
-        assertEquals(44, length1);
+        int length1 = QuicCrypto.generateRetryToken(nativeCrypto, buffer.clear(), timestamp, cid1, address, serverCid);
+        // IV(12) + Tag(16) + Plaintext(8+1+1+4+2+1+4=21) = 49
+        assertEquals(49, length1);
         QuicCrypto.RetryTokenInfo info1 = QuicCrypto.parseRetryToken(nativeCrypto, buffer);
-        assertArrayEquals(cid1, info1.connectionId());
+        assertArrayEquals(cid1, info1.odcid());
+        assertArrayEquals(serverCid, info1.serverCid());
 
         // Max length CID (20 bytes)
         byte[] cid20 = new byte[20];
         for (int i = 0; i < 20; i++) cid20[i] = (byte) i;
-        int length20 = QuicCrypto.generateRetryToken(nativeCrypto, buffer.clear(), timestamp, cid20, address);
-        // IV(12) + Tag(16) + Plaintext(8+1+20+4+2=35) = 63
-        assertEquals(63, length20);
+        int length20 = QuicCrypto.generateRetryToken(nativeCrypto, buffer.clear(), timestamp, cid20, address, serverCid);
+        // IV(12) + Tag(16) + Plaintext(8+1+20+4+2+1+4=40) = 68
+        assertEquals(68, length20);
         QuicCrypto.RetryTokenInfo info20 = QuicCrypto.parseRetryToken(nativeCrypto, buffer);
-        assertArrayEquals(cid20, info20.connectionId());
+        assertArrayEquals(cid20, info20.odcid());
+        assertArrayEquals(serverCid, info20.serverCid());
     }
 
     @Test
     void testRetryTokenInvalidCIDLength() {
         long timestamp = System.currentTimeMillis();
+        byte[] serverCid = new byte[8];
         InetSocketAddress address = new InetSocketAddress("127.0.0.1", 12345);
         ByteBuffer buffer = ByteBuffer.allocateDirect(100);
 
         // CID too long (21 bytes)
         byte[] cid21 = new byte[21];
         assertThrows(QuicException.class, () ->
-                QuicCrypto.generateRetryToken(nativeCrypto, buffer, timestamp, cid21, address));
+                QuicCrypto.generateRetryToken(nativeCrypto, buffer, timestamp, cid21, address, serverCid));
 
         // CID too short (0 bytes)
         byte[] cid0 = new byte[0];
         assertThrows(QuicException.class, () ->
-                QuicCrypto.generateRetryToken(nativeCrypto, buffer, timestamp, cid0, address));
+                QuicCrypto.generateRetryToken(nativeCrypto, buffer, timestamp, cid0, address, serverCid));
     }
 
     @Test
     void testRetryTokenMismatchIP() throws Exception {
         long timestamp = System.currentTimeMillis();
         byte[] cid = new byte[8];
+        byte[] serverCid = new byte[8];
         InetSocketAddress address = new InetSocketAddress("127.0.0.1", 12345);
         InetSocketAddress wrongAddress = new InetSocketAddress("127.0.0.2", 12345);
         ByteBuffer buffer = ByteBuffer.allocateDirect(100);
 
-        QuicCrypto.generateRetryToken(nativeCrypto, buffer, timestamp, cid, address);
+        QuicCrypto.generateRetryToken(nativeCrypto, buffer, timestamp, cid, address, serverCid);
 
         QuicCrypto.RetryTokenInfo retryTokenInfo = QuicCrypto.parseRetryToken(nativeCrypto, buffer);
 
@@ -174,11 +184,12 @@ class QuicCryptoRetryTokenTest {
     void testRetryTokenMismatchPort() throws Exception {
         long timestamp = System.currentTimeMillis();
         byte[] cid = new byte[8];
+        byte[] serverCid = new byte[8];
         InetSocketAddress address = new InetSocketAddress("127.0.0.1", 12345);
         InetSocketAddress wrongAddress = new InetSocketAddress("127.0.0.1", 12346);
         ByteBuffer buffer = ByteBuffer.allocateDirect(100);
 
-        QuicCrypto.generateRetryToken(nativeCrypto, buffer, timestamp, cid, address);
+        QuicCrypto.generateRetryToken(nativeCrypto, buffer, timestamp, cid, address, serverCid);
 
         QuicCrypto.RetryTokenInfo retryTokenInfo = QuicCrypto.parseRetryToken(nativeCrypto, buffer);
 
@@ -200,10 +211,11 @@ class QuicCryptoRetryTokenTest {
     void testParseRetryTokenLeavesBufferEncrypted() throws Exception {
         long timestamp = System.currentTimeMillis();
         byte[] cid = new byte[]{1, 2, 3, 4, 5, 6, 7, 8};
+        byte[] serverCid = new byte[]{8, 7, 6, 5, 4, 3, 2, 1};
         InetSocketAddress address = new InetSocketAddress("127.0.0.1", 12345);
         ByteBuffer buffer = ByteBuffer.allocateDirect(100);
 
-        int length = QuicCrypto.generateRetryToken(nativeCrypto, buffer, timestamp, cid, address);
+        int length = QuicCrypto.generateRetryToken(nativeCrypto, buffer, timestamp, cid, address, serverCid);
         
         // Take a snapshot of the encrypted data (after IV)
         byte[] encryptedSnapshot = new byte[length - QuicCrypto.GCM_NONCE_LENGTH];

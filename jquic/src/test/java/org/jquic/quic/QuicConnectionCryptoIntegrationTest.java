@@ -15,6 +15,8 @@
  */
 package org.jquic.quic;
 
+import org.jquic.quic.buffers.TestPoolBuffer;
+
 import org.jquic.quic.buffers.*;
 import org.jquic.quic.crypto.CipherMode;
 import org.jquic.quic.crypto.NativeCrypto;
@@ -42,6 +44,7 @@ import static org.mockito.Mockito.*;
  * Initial → Handshake → 1-RTT sequence works higher-to-higher.
  * NO MOCKING of QuicCrypto - all encryption/decryption is real.
  */
+@SuppressWarnings("ResultOfMethodCallIgnored")
 class QuicConnectionCryptoIntegrationTest {
 
     private static final SelectorThread selectorMock = mock(SelectorThread.class);
@@ -71,7 +74,7 @@ class QuicConnectionCryptoIntegrationTest {
             // Mock signature scheme selection
             when(km.selectSignatureScheme(anyList())).thenReturn((short) 0x0403); // ecdsa_secp256r1_sha256
 
-            when(pool.requestWriteBuffer()).thenAnswer((_) -> new RootPoolBuffer(ByteBuffer.allocateDirect(2000).position(100), pool, true).borrow());
+            when(pool.requestWriteBuffer()).thenAnswer((_) -> new TestPoolBuffer(ByteBuffer.allocateDirect(2000).position(100)).borrow());
             when(selectorMock.getBufferPool()).thenReturn(pool);
 
             // Initialize QuicStreamEngineImpl in QuicEngine
@@ -677,7 +680,7 @@ class QuicConnectionCryptoIntegrationTest {
         ConnectionMetadata m = new ConnectionMetadata();
         m.clientMetadata = new ConnectionMetadata.ClientMetadataNegotiated("h3", 1000, List.of(),
                 Map.of(), 1200, 1000, 0, 0,
-                0, 0, 0, List.of(), 3, List.of(), CipherMode.TLS_AES_128_GCM_SHA256_ID);
+                0, 0, 0, List.of(), 3, List.of(), CipherMode.TLS_AES_128_GCM_SHA256_ID, new byte[0]);
         m.negotiatedIdleTimeoutMs = 10_000;
         m.clientHandshakeCrypto = new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(real1RttKey, new byte[12], hpSeg), CipherMode.TLS_AES_128_GCM_SHA256_ID);
         m.serverHandshakeCrypto = new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(real1RttKey, new byte[12], hpSeg), CipherMode.TLS_AES_128_GCM_SHA256_ID);

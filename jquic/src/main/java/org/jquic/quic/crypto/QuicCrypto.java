@@ -449,7 +449,7 @@ public class QuicCrypto {
 
             CipherMode selected = cipherSuitesList.contains(TLS_AES_128_GCM_SHA256_ID) ? TLS_AES_128_GCM_SHA256_ID : cipherSuitesList.getFirst();
 
-            return new ConnectionMetadata.ClientMetadataNegotiated(alpn, maxIdleTimeout, supportedGroups, clientKeys, maxUdpPayloadSize, initialMaxData, initialMaxStreamDataBidiLocal, initialMaxStreamDataBidiRemote, initialMaxStreamDataUni, initialMaxStreamsBidi, initialMaxStreamsUni, signatures, ackDelayExponent, availableVersions, selected);
+            return new ConnectionMetadata.ClientMetadataNegotiated(alpn, maxIdleTimeout, supportedGroups, clientKeys, maxUdpPayloadSize, initialMaxData, initialMaxStreamDataBidiLocal, initialMaxStreamDataBidiRemote, initialMaxStreamDataUni, initialMaxStreamsBidi, initialMaxStreamsUni, signatures, ackDelayExponent, availableVersions, selected, clientRandom);
         } catch (QuicException ce) {
             throw ce;
         } catch (Exception e) {
@@ -830,12 +830,11 @@ public class QuicCrypto {
 
         // -- ALPN extension (0x0010, RFC 7301) ------------------------------------
         // Only include if a protocol was negotiated.
-        output.write((byte) 0x00);
         Optional<QuicApplicationProtocol> protocol = QuicEngine.getStreamEngine().getProtocols().stream()
                 .filter(p -> p.getProtocolName().equals(metadata.clientMetadata.alpn)).findFirst();
 
         if (protocol.isPresent()) {
-            output.write((byte) 0x10);  // extension type: ALPN
+            output.writeShort((byte) 0x10);  // extension type: ALPN
             int totalLen = protocol.get().getProtocolName().length() + 1;
             output.writeShort((short) (totalLen + 2));  // extension data length
             output.writeShort((short) totalLen);  // ProtocolNameList length
@@ -919,7 +918,7 @@ public class QuicCrypto {
         QuicVarint.write(output, 8);
         output.writeLong(cid);
 
-        // retry_source_connection_id (param id 0x0f)
+        // retry_source_connection_id (param id 0x10)
         if (metadata.retrySourceCid != null) {
             QuicVarint.write(output, 0x10);
             QuicVarint.write(output, metadata.retrySourceCid.length);
@@ -1333,14 +1332,14 @@ public class QuicCrypto {
      * @param buffer A pre-allocated direct ByteBuffer to use for encryption. 
      *               Must have enough space for the token and 12-byte IV.
      * @param timestamp The timestamp to include in the token.
-     * @param connectionId The connection ID (1 to 20 bytes).
+     * @param odcid The connection ID (1 to 20 bytes).
      * @param address The client's IP address.
      * @return The AEAD-protected retry token length.
      * @throws QuicException if generation fails.
      */
-    public static int generateRetryToken(NativeCrypto crypto, ByteBuffer buffer, long timestamp, byte[] connectionId, InetSocketAddress address) throws QuicException {
-        if (connectionId.length < 1 || connectionId.length > 20) {
-            throw new QuicException("Invalid CID length for retry token: " + connectionId.length, QuicTransportError.INTERNAL_ERROR);
+    public static int generateRetryToken(NativeCrypto crypto, ByteBuffer buffer, long timestamp, byte[] odcid, InetSocketAddress address, byte[] serverCid) throws QuicException {
+        if (odcid.length < 1 || odcid.length > 20) {
+            throw new QuicException("Invalid CID length for retry token: " + odcid.length, QuicTransportError.INTERNAL_ERROR);
         }
         try {
             byte[] ipBytes = address.getAddress().getAddress();
@@ -1356,10 +1355,12 @@ public class QuicCrypto {
             // Plaintext: timestamp (8) + CID length (1) + CID (variable) + IP (variable) + Port (2)
             int plaintextStart = buffer.position();
             buffer.putLong(timestamp);
-            buffer.put((byte) connectionId.length);
-            buffer.put(connectionId);
-            buffer.put(ipBytes);
+            buffer.put((byte) odcid.length);
+            buffer.put(odcid);
             buffer.putShort((short) port);
+            buffer.put((byte) serverCid.length);
+            buffer.put(serverCid);
+            buffer.put(ipBytes);
             int plaintextEnd = buffer.position();
 
             buffer.position(plaintextStart);
@@ -1427,11 +1428,19 @@ public class QuicCrypto {
             byte[] connectionId = new byte[cidLength];
             token.get(connectionId);
 
-            byte[] parsedIp = new byte[token.remaining() - 2];
+            int parsedPort = Short.toUnsignedInt(token.getShort());
+
+            int serverCidLength = token.get() & 0xFF;
+            if (token.remaining() < serverCidLength) {
+                throw new QuicException("Invalid server CID length in token", QuicTransportError.INVALID_TOKEN);
+            }
+            byte[] serverCid = new byte[serverCidLength];
+            token.get(serverCid);
+
+            byte[] parsedIp = new byte[token.remaining()];
             token.get(parsedIp);
 
-            int parsedPort = Short.toUnsignedInt(token.getShort());
-            info = new RetryTokenInfo(timestamp, connectionId, java.net.InetAddress.getByAddress(parsedIp), parsedPort);
+            info = new RetryTokenInfo(timestamp, connectionId, java.net.InetAddress.getByAddress(parsedIp), parsedPort, serverCid);
         } catch (java.net.UnknownHostException | QuicException e) {
             // Re-encrypt even on failure to maintain buffer state if possible
             // but for simplicity and security, we just throw after re-encrypting if we can.
@@ -1458,6 +1467,6 @@ public class QuicCrypto {
         return info;
     }
 
-    public record RetryTokenInfo(long timestamp, byte[] connectionId, java.net.InetAddress ip, int port) {}
+    public record RetryTokenInfo(long timestamp, byte[] odcid, java.net.InetAddress ip, int port, byte[] serverCid) {}
 }
 

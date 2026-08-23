@@ -18,8 +18,7 @@ package org.jquic.quic.packets;
 import org.jquic.quic.QuicConnection;
 import org.jquic.quic.QuicFrameBuilder;
 import org.jquic.quic.QuicVarint;
-import org.jquic.quic.buffers.BufferPool;
-import org.jquic.quic.buffers.RootPoolBuffer;
+import org.jquic.quic.buffers.TestPoolBuffer;
 import org.jquic.quic.paths.ConnectionPathController;
 import org.jquic.quic.streamapi.CongestionControl;
 import org.jspecify.annotations.NonNull;
@@ -30,7 +29,7 @@ import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.Mockito.mock;
 
 class PacketNumberSpaceEcnTest {
@@ -85,8 +84,8 @@ class PacketNumberSpaceEcnTest {
         PacketNumberSpace pns = new PacketNumberSpace(PacketPhase.APPLICATION);
         pns.setConnectionPathController(getConnectionPathController());
 
-        pns.onPacketSent(0, 1, new RootPoolBuffer(ByteBuffer.allocate(100), mock(BufferPool.class), false).borrow(), true, TEST_ADDRESS);
-        pns.onPacketSent(0, 2, new RootPoolBuffer(ByteBuffer.allocate(100), mock(BufferPool.class), false).borrow(), true, TEST_ADDRESS);
+        pns.onPacketSent(0, 1, new TestPoolBuffer(ByteBuffer.allocate(100)).borrow(), true, TEST_ADDRESS);
+        pns.onPacketSent(0, 2, new TestPoolBuffer(ByteBuffer.allocate(100)).borrow(), true, TEST_ADDRESS);
         
         pns.onAckReceived(0, 2, List.of(new PacketNumberSpace.AckRange(1, 2)), 0, null, 0, TEST_ADDRESS);
         
@@ -99,11 +98,11 @@ class PacketNumberSpaceEcnTest {
         PacketNumberSpace pns = new PacketNumberSpace(PacketPhase.APPLICATION);
         pns.setConnectionPathController(getConnectionPathController());
 
-        pns.onPacketSent(0, 1, new RootPoolBuffer(ByteBuffer.allocate(100), mock(BufferPool.class), false).borrow(), true, TEST_ADDRESS);
-        pns.onPacketSent(0, 2, new RootPoolBuffer(ByteBuffer.allocate(100), mock(BufferPool.class), false).borrow(), true, TEST_ADDRESS);
-        pns.onPacketSent(0, 3, new RootPoolBuffer(ByteBuffer.allocate(100), mock(BufferPool.class), false).borrow(), true, TEST_ADDRESS);
-        pns.onPacketSent(0, 4, new RootPoolBuffer(ByteBuffer.allocate(100), mock(BufferPool.class), false).borrow(), true, TEST_ADDRESS);
-        pns.onPacketSent(0, 5, new RootPoolBuffer(ByteBuffer.allocate(100), mock(BufferPool.class), false).borrow(), true, TEST_ADDRESS);
+        pns.onPacketSent(0, 1, new TestPoolBuffer(ByteBuffer.allocate(100)).borrow(), true, TEST_ADDRESS);
+        pns.onPacketSent(0, 2, new TestPoolBuffer(ByteBuffer.allocate(100)).borrow(), true, TEST_ADDRESS);
+        pns.onPacketSent(0, 3, new TestPoolBuffer(ByteBuffer.allocate(100)).borrow(), true, TEST_ADDRESS);
+        pns.onPacketSent(0, 4, new TestPoolBuffer(ByteBuffer.allocate(100)).borrow(), true, TEST_ADDRESS);
+        pns.onPacketSent(0, 5, new TestPoolBuffer(ByteBuffer.allocate(100)).borrow(), true, TEST_ADDRESS);
 
         // Ack packet 5 to set largestAckedPacketNumber
         pns.onAckReceived(0, 5, List.of(new PacketNumberSpace.AckRange(5, 5)), 0, null, 0, TEST_ADDRESS);
@@ -119,9 +118,9 @@ class PacketNumberSpaceEcnTest {
         PacketNumberSpace pns = new PacketNumberSpace(PacketPhase.APPLICATION);
         pns.setConnectionPathController(getConnectionPathController());
 
-        pns.onPacketSent(0, 1, new RootPoolBuffer(ByteBuffer.allocate(100), mock(BufferPool.class), false).borrow(), true, TEST_ADDRESS);
-        pns.onPacketSent(0, 2, new RootPoolBuffer(ByteBuffer.allocate(100), mock(BufferPool.class), false).borrow(), true, TEST_ADDRESS);
-        pns.onPacketSent(0, 3, new RootPoolBuffer(ByteBuffer.allocate(100), mock(BufferPool.class), false).borrow(), true, TEST_ADDRESS);
+        pns.onPacketSent(0, 1, new TestPoolBuffer(ByteBuffer.allocate(100)).borrow(), true, TEST_ADDRESS);
+        pns.onPacketSent(0, 2, new TestPoolBuffer(ByteBuffer.allocate(100)).borrow(), true, TEST_ADDRESS);
+        pns.onPacketSent(0, 3, new TestPoolBuffer(ByteBuffer.allocate(100)).borrow(), true, TEST_ADDRESS);
 
         // Receive packet (ECN flags 0)
         pns.onPacketReceived(System.currentTimeMillis(), 10, 0);

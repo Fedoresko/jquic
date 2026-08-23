@@ -108,7 +108,8 @@ public class DatagramBuilder {
     }
 
     private void enqueueOneMoreFrame(long currentTimeMs, InetSocketAddress dest, Frame frame) {
-        int maxHeaderLen = (space.phase == PacketPhase.APPLICATION) ? QuicFrameBuilder.MAX_SHORT_HEADER_LENGTH : QuicFrameBuilder.MAX_LONG_HEADER_LENGTH;
+        int maxHeaderLen = (space.phase == PacketPhase.APPLICATION) ?
+                connectionMetadata.maxShortHeaderLength : connectionMetadata.maxLongHeaderLength;
 
         int remaining = getMaxPacketSize() - GCM_TAG_LENGTH - maxHeaderLen - framesToSendSumLen;
 
@@ -140,7 +141,8 @@ public class DatagramBuilder {
             try {
                 payload.buf().put(frame.data().buf());
             } catch (BufferOverflowException e) {
-                int maxHeaderLen = (space.phase == PacketPhase.APPLICATION) ? QuicFrameBuilder.MAX_SHORT_HEADER_LENGTH : QuicFrameBuilder.MAX_LONG_HEADER_LENGTH;
+                int maxHeaderLen = (space.phase == PacketPhase.APPLICATION) ?
+                        connectionMetadata.maxShortHeaderLength : connectionMetadata.maxLongHeaderLength;
                 int remaining = getMaxPacketSize() - GCM_TAG_LENGTH - maxHeaderLen;
 
                 logger.error("Strange overflow UDP max {} pack lim {} payload reminder {} (cap {}), frame size {} (send sum: {}, init start {})",

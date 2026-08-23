@@ -47,7 +47,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class SelectorThread extends Thread {
     private static final Logger logger = LoggerFactory.getLogger(SelectorThread.class);
     public static final int HANDSHAKE_QUEUE_CAP = QuicProperties.HANDSHAKE_QUEUE_CAP;
-    public static final int MAX_RECIEVE_BATCH = QuicProperties.MAX_RECIEVE_BATCH;
+    public static final int MAX_RECIEVE_BATCH = QuicProperties.MAX_RECEIVE_BATCH;
     public static final int MAX_SEND_BATCH = QuicProperties.MAX_SEND_BATCH;
 
     private final int threadId;
@@ -297,7 +297,7 @@ public class SelectorThread extends Thread {
         if (conn != null) {
             conn.setCurrentTimestamp(now);
             conn.retransmitLostPackets();
-            timerWheelScheduler.scheduleAt(nowNs + 50_000_000, event);
+            timerWheelScheduler.scheduleAt(nowNs + 150_000_000, event);
             return true;
         }
         return false;
@@ -327,7 +327,11 @@ public class SelectorThread extends Thread {
                 if (packetSummary.type() == QuicPacketHeader.PacketType.PADDING) continue;
 
                 if (packetSummary.type() != QuicPacketHeader.PacketType.ONE_RTT && packetSummary.version() == QuicVersion.UNKNOWN) {
-                    logger.info("[Acceptor] Unsupported QUIC version. Sending Version Negotiation.");
+                    if (datagram.buf().position() > 0) {
+                        break; // This is just trailing junk
+                    }
+
+                    logger.info("Unsupported QUIC version. Sending Version Negotiation.");
                     // Send Version Negotiation: DCID = received SCID, SCID = received DCID
 
                     if (datagram.buf().remaining() >= 1200) { // Minimum packet size requirement
@@ -445,7 +449,7 @@ public class SelectorThread extends Thread {
      */
     private void processHandshakeTask(long now, long nowNs, HandshakeTask task) {
         try {
-            if (task.packetSummary.type() != QuicPacketHeader.PacketType.INITIAL) return;
+//            if (task.packetSummary.type() != QuicPacketHeader.PacketType.INITIAL) return;
 
             logger.warn("Selector-{}: Processing Initial packet for new CID: {}", threadId, task.allocatedCid);
 
@@ -465,8 +469,8 @@ public class SelectorThread extends Thread {
                         throw new QuicException("Retry token is expired", QuicTransportError.INVALID_TOKEN);
                     }
                     logger.info("Verifyed retry token succesfully");
-                    originalDcid = retryTokenInfo.connectionId();
-                    retrySourceCid = task.packetSummary.dcid();
+                    originalDcid = retryTokenInfo.odcid();
+                    retrySourceCid = retryTokenInfo.serverCid();
                 } else if (task.packetSummary.token() == null || task.packetSummary.token().remaining() == 0) {
                     QuicVersion version = task.packetSummary.version();
                     byte[] serverCid = ByteBuffer.wrap(new byte[8]).putLong(task.allocatedCid).flip().array();
@@ -514,7 +518,7 @@ public class SelectorThread extends Thread {
 
     private void sendRetry(long now, InetSocketAddress peer, QuicVersion version, byte[] clientCid, byte[] serverCid, byte[] originalDcid) throws QuicException, IOException {
         PoolBuffer buffer = getBufferPool().requestWriteBuffer();
-        QuicCrypto.generateRetryToken(getRetryTokenCrypto(), buffer.buf(), now, originalDcid, peer);
+        QuicCrypto.generateRetryToken(getRetryTokenCrypto(), buffer.buf(), now, originalDcid, peer, serverCid);
         QuicPacketBuilder.buildRetryPacket(buffer.buf(), version, clientCid,
                 serverCid, originalDcid,
                 getRetryTokenIntegrityCrypto(version));

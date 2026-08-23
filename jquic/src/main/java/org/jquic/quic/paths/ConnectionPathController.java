@@ -64,6 +64,7 @@ public class ConnectionPathController implements TimeoutHeap.Entry {
     private final static Logger logger = LoggerFactory.getLogger(ConnectionPathController.class);
     
     private CongestionControl congestionControl;
+    private boolean hasAmpBlock = false;
 
     private PacketNumberSpace pnSpace(PacketPhase phase) {
         return switch (phase) {
@@ -157,7 +158,7 @@ public class ConnectionPathController implements TimeoutHeap.Entry {
         return nextShedNs;
     }
 
-    public SocketAddress getRemoteAddress() {
+    public InetSocketAddress getRemoteAddress() {
         return primaryAddress;
     }
 
@@ -167,7 +168,7 @@ public class ConnectionPathController implements TimeoutHeap.Entry {
         }
     }
 
-    public void onChallenge(SocketAddress address, byte[] challengeData) {
+    public void onPathChallengeResponse(SocketAddress address, byte[] challengeData) {
         ConnectionPath path = pathMap.get(address);
         if (path != null && path.state == NEW && Arrays.equals(path.challenge, challengeData)) {
             path.state = VERIFIED;
@@ -211,9 +212,8 @@ public class ConnectionPathController implements TimeoutHeap.Entry {
         }
 
         ConnectionPath path = pathMap.get(primaryAddress);
-        boolean isAmpBlock = false;
         if (path == null || isAmplificationBlock(path)) {
-            isAmpBlock = path != null;
+            hasAmpBlock = path != null;
             path = null;
             for (ConnectionPath path1 : pathMap.values()) {
                 if (!isAmplificationBlock(path1) && path1.state != PROBING) {
@@ -221,10 +221,6 @@ public class ConnectionPathController implements TimeoutHeap.Entry {
                     break;
                 }
             }
-        }
-
-        if (path == null && isAmpBlock) { //Try PING if totally blocked
-            sendPing(primaryAddress);
         }
 
         if (path != null) {
@@ -265,15 +261,13 @@ public class ConnectionPathController implements TimeoutHeap.Entry {
     private int getMaxPacketSize(ConnectionPath path) {
         long defaultMax = connection.connectionMetadata.clientMetadata != null ?
                 connection.connectionMetadata.clientMetadata.maxUdpPayloadSize : 1200;
-        return path.state == NEW ? (int) Math.min(defaultMax, path.receivedBytes * 3 - path.sentBytes) : (int) defaultMax;
+        return path.state == NEW ?
+                (int) Math.min(hasAmpBlock ? 200 : defaultMax, path.receivedBytes * 3 - path.sentBytes)
+                : (int) defaultMax;
     }
 
     private void schedNextDatagram(ConnectionPath path, long currentTimeMs) {
         boolean urgent = false;
-        if (isAmplificationBlock(path)) { //Send only aks and frames first, not retransmits
-            initQueue.restart();
-            handshakeQueue.restart();
-        }
         if ( path.nextDatagram == null) { path.nextDatagram = initDatagramBuilder.getPacket(currentTimeMs, path.address, true, getMaxPacketSize(path), initQueue); urgent = true; }
         if ( path.nextDatagram == null) path.nextDatagram = handshakeDatagramBuilder.getPacket(currentTimeMs, path.address, true, getMaxPacketSize(path), handshakeQueue);
         if ( path.nextDatagram == null) path.nextDatagram = applicationDatagramBuilder.getPacket(currentTimeMs, path.address, true, getMaxPacketSize(path), applicationQueue);
@@ -361,6 +355,13 @@ public class ConnectionPathController implements TimeoutHeap.Entry {
                     sendPing(path.address);
                 }
             }
+            if (path.state == NEW
+                    && connection.getCurrentTimestamp() - path.lastActive > PROBING_TIMEOUT
+                    && connection.getCurrentTimestamp() - path.probeSentAt > PROBING_TIMEOUT
+            ) {
+                path.probeSentAt = connection.getCurrentTimestamp();
+                sendPing(path.address);
+            }
             if (path.state == NEW && connection.getCurrentTimestamp() - path.createdAt > VERIFICATION_TIMEOUT) {
                 logger.info("Path removed UNVERIFIED Connection#{}, path {}", connection.getConnectionId(), path.address);
                 it.remove(); // Not verified yet.
@@ -368,7 +369,7 @@ public class ConnectionPathController implements TimeoutHeap.Entry {
         }
     }
 
-    private void sendPing(InetSocketAddress address) {
+    public void sendPing(InetSocketAddress address) {
         PoolBuffer poolBuffer = connection.getBufferPool().requestWriteBuffer();
         QuicFrameBuilder.writePingFrame(poolBuffer);
         sendUrgentFrame(poolBuffer, true, address);
