@@ -20,7 +20,6 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.net.InetAddress;
-import java.net.UnknownHostException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -35,8 +34,8 @@ public class LinuxEcnSocketIpv6Test {
         // Mocking IPv4 behavior with new size
         byte[] ipv4 = new byte[] {127, 0, 0, 1};
         int port = 12345;
-        int idx = 0;
-        int pos = idx * 28;
+        int idx;
+        int pos = 0;
         
         batchAddrs.set(ValueLayout.JAVA_SHORT, pos, (short) 2); // AF_INET
         batchAddrs.set(ValueLayout.JAVA_SHORT, pos + 2, Short.reverseBytes((short) port));
