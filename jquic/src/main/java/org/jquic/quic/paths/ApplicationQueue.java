@@ -56,8 +56,8 @@ public class ApplicationQueue implements FrameSource {
     }
 
     @Override
-    public boolean isEmpty() {
-        return applicationQueue.isEmpty();
+    public Frame peek() {
+        return applicationQueue.peek() == null ? null : new Frame(applicationQueue.peek().data.data(), PacketPhase.APPLICATION, true);
     }
 
     @Override

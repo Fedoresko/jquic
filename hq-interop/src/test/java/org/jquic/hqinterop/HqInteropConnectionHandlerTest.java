@@ -41,11 +41,11 @@ class HqInteropConnectionHandlerTest {
         DataOutputStream spyDataOut = spy(dataOut);
  
         // 1. New stream allocated
-        handler.onNewClientStreamAllocated(streamId, control, spyDataOut, QuicConnectionControl.StreamType.Bidirectional);
+        handler.onNewClientStreamAllocated(streamId, control, spyDataOut, QuicConnectionControl.StreamType.Bidirectional, false);
  
         // 2. Receive request data "GET /index.html\n"
         byte[] request = "GET /index.html\n".getBytes(StandardCharsets.UTF_8);
-        handler.onStreamDataReceived(streamId, control, request, true, null);
+        handler.onStreamDataReceived(streamId, control, request, true, null, false);
 
         Thread.sleep(100);
  
@@ -68,16 +68,16 @@ class HqInteropConnectionHandlerTest {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         DataOutputStream dataOut = new DataOutputStream(out);
  
-        handler.onNewClientStreamAllocated(streamId, control, dataOut, QuicConnectionControl.StreamType.Bidirectional);
+        handler.onNewClientStreamAllocated(streamId, control, dataOut, QuicConnectionControl.StreamType.Bidirectional, false);
 
         Thread.sleep(100);
 
         // Receive part 1
-        handler.onStreamDataReceived(streamId, control, "GET /".getBytes(StandardCharsets.UTF_8), false, null);
+        handler.onStreamDataReceived(streamId, control, "GET /".getBytes(StandardCharsets.UTF_8), false, null, false);
         assertEquals(0, out.size(), "Should not respond yet");
  
         // Receive part 2
-        handler.onStreamDataReceived(streamId, control, "test\n".getBytes(StandardCharsets.UTF_8), true, null);
+        handler.onStreamDataReceived(streamId, control, "test\n".getBytes(StandardCharsets.UTF_8), true, null, false);
 
         Thread.sleep(100);
 

@@ -359,12 +359,6 @@ public class SelectorThread extends Thread {
                     connection = initializingConnections.get(dcid);
                 }
 
-                if (packetSummary.type() == QuicPacketHeader.PacketType.ZERO_RTT) {
-                    logger.warn("Selector-{}: Processing {} packet for CID: {} not implemented", threadId, packetSummary.type(), cid);
-                    skipPacket(datagram.buf());
-                    continue;
-                }
-
                 if (connection == null) {
                     logger.warn("Selector-{}: No connection found for CID: {}, discarding datagram", threadId, cid);
                     if (packetSummary.type() == QuicPacketHeader.PacketType.INITIAL) {
@@ -404,7 +398,11 @@ public class SelectorThread extends Thread {
                             logger.debug("Selector-{}: Processing 1-RTT packet for CID: {} from: {}", threadId, cid, sender);
                             connection.process1RttPacket(datagram, ecnFlags, sender);
                         }
-                        case RETRY, ZERO_RTT -> {
+                        case ZERO_RTT -> {
+                            logger.debug("Selector-{}: Processing 0-RTT packet for CID: {} from: {}", threadId, cid, sender);
+                            connection.process0RttPacket(datagram, ecnFlags, sender);
+                        }
+                        case RETRY -> {
                             logger.warn("Selector-{}: Processing {} packet for CID: {} not implemented", threadId, packetSummary.type(), cid);
                             skipPacket(datagram.buf());
                         }
@@ -451,7 +449,7 @@ public class SelectorThread extends Thread {
         try {
 //            if (task.packetSummary.type() != QuicPacketHeader.PacketType.INITIAL) return;
 
-            logger.warn("Selector-{}: Processing Initial packet for new CID: {}", threadId, task.allocatedCid);
+            logger.warn("Selector-{}: Processing packet for new CID: {}", threadId, task.allocatedCid);
 
             byte[] originalDcid = task.packetSummary.dcid();
             byte[] retrySourceCid = null;
@@ -490,7 +488,7 @@ public class SelectorThread extends Thread {
                     _ -> {
                         QuicConnection conn = new QuicConnection(task.allocatedCid, task.packetSummary.version(), task.sender, this, odcid);
                         timeoutHeap.insertOrUpdate(conn);
-                        timerWheelScheduler.scheduleAt(nowNs + 1_000_000L,
+                        timerWheelScheduler.scheduleAt(nowNs + 10_000_000L,
                                 new TimerWheelScheduler.ScheduledEvent(TimerWheelScheduler.EventType.LOSS_DETECTION, task.allocatedCid));
                         appDataPriorityQueue.add(conn.getConnectionPathController());
                         return conn;

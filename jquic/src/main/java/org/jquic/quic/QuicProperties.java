@@ -119,5 +119,7 @@ public class QuicProperties {
     public static final int RETRY_TOKEN_EXPIRATION = getInt("quic.defence.retry_token_expiration_ms", 3000);
     public static final boolean START_IN_DEFENCE = Boolean.parseBoolean(getString("quic.defence.start_on", "false"));
 
+    public static boolean ENABLE_SESSION_RESUMPTION = Boolean.parseBoolean(getString("quic.enable_session_resumption", "true"));
+
     public static final String SSLKEYLOGFILE = getString("SSLKEYLOGFILE", getString("quic.ssl_keylog", System.getenv("SSLKEYLOGFILE")));
 }

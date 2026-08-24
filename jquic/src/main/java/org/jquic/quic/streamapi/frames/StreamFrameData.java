@@ -22,12 +22,14 @@ public class StreamFrameData implements ProtocolFrame {
     public final long offset;
     public final PoolBuffer data;
     public final boolean fin;
+    public final boolean isEarlyData;
 
-    public StreamFrameData(long streamId, long offset, PoolBuffer data, boolean fin) {
+    public StreamFrameData(long streamId, long offset, PoolBuffer data, boolean fin, boolean isEarlyData) {
         this.streamId = streamId;
         this.offset = offset;
         this.data = data;
         this.fin = fin;
+        this.isEarlyData = isEarlyData;
     }
 
     @Override

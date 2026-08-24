@@ -19,33 +19,44 @@ import org.jquic.quic.streamapi.impl.ApplicationData;
 import org.jquic.quic.struct.TriStateQueue;
 
 public class CombinedQueue implements FrameSource {
-    public static final int RETRANSMIT_THRESHOLD = 100;
     private final SimpleFrameQueue frameQueue = new SimpleFrameQueue();
     private final SimpleFrameQueue ackQueue = new SimpleFrameQueue();
     private final SimpleFrameQueue retansmitQueue = new SimpleFrameQueue();
     private final ApplicationQueue applicationQueue = new ApplicationQueue();
 
     private int curQueueIndex = 0;
+    private boolean readyToPoll = false;
+
+    public void setReadyToPoll(boolean isApplicationLayerReady) {
+        this.readyToPoll = isApplicationLayerReady;
+    }
+
+    @Override
+    public Frame peek() {
+        return lookAt(false);
+    }
 
     @Override
     public Frame poll() {
-        for (int i = 0 ; i < 4; i++) {
-            Frame frame = pollIdx(curQueueIndex++);
-            if (retansmitQueue.size() > RETRANSMIT_THRESHOLD && curQueueIndex == 3) {
-                curQueueIndex = 0;  // skip app data if retransmits grow
-            }
-            curQueueIndex = curQueueIndex % 4;
+        return lookAt(true);
+    }
+
+    public Frame lookAt(boolean poll) {
+        if (!readyToPoll) return null;
+        for (int i = 0; i < 4; i++) {
+            Frame frame = lookIdx(poll, curQueueIndex);
             if (frame != null) return frame;
+            curQueueIndex = (curQueueIndex + 1) % 4;
         }
         return null;
     }
 
-    private Frame pollIdx(int idx) {
+    private Frame lookIdx(boolean poll, int idx) {
         return switch (idx) {
-            case 0 -> frameQueue.poll();
-            case 1 -> ackQueue.poll();
-            case 2 -> retansmitQueue.poll();
-            case 3 -> applicationQueue.poll();
+            case 0 -> poll ? frameQueue.poll() : frameQueue.peek();
+            case 1 -> poll ? ackQueue.poll() : ackQueue.peek();
+            case 2 -> poll ? retansmitQueue.poll() : retansmitQueue.peek();
+            case 3 -> poll ? applicationQueue.poll() : applicationQueue.peek();
             default -> throw new IllegalStateException("Unexpected value: " + idx);
         };
     }
@@ -53,19 +64,17 @@ public class CombinedQueue implements FrameSource {
     public boolean addFrame(Frame frame) {
         return frameQueue.offer(frame);
     }
+
     public boolean addAck(Frame frame) {
         return ackQueue.offer(frame);
     }
+
     public boolean addRetransmit(Frame frame) {
         return retansmitQueue.offer(frame);
     }
+
     public void addApplication(TriStateQueue<ApplicationData> queue) {
         applicationQueue.offer(queue);
-    }
-
-    @Override
-    public boolean isEmpty() {
-        return frameQueue.isEmpty() && ackQueue.isEmpty() && retansmitQueue.isEmpty() && applicationQueue.isEmpty();
     }
 
     @Override

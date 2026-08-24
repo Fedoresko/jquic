@@ -68,7 +68,7 @@ public class BufferPool implements ReadBufferPool, WriteBufferPool, CryptoBuffer
 
     private static PoolBuffer requestBuffer(int size, MpmcUnboundedXaddArrayQueue<RootPoolBuffer> queue) {
         RootPoolBuffer buffer = queue.poll();
-        if (buffer == null) {
+        if (buffer == null || buffer.buf().capacity() < size + 200) {
             buffer = new RootPoolBuffer(ByteBuffer.allocateDirect(size + 200), queue);
         } else {
             buffer.buffer.clear();

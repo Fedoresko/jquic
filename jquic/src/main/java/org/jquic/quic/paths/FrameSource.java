@@ -17,6 +17,6 @@ package org.jquic.quic.paths;
 
 public interface FrameSource {
     Frame poll();
-    boolean isEmpty();
+    Frame peek();
     void restart();
 }

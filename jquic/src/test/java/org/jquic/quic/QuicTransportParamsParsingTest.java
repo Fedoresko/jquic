@@ -26,6 +26,7 @@ import java.util.Arrays;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
+@SuppressWarnings("SameParameterValue")
 class QuicTransportParamsParsingTest {
 
     @Test
@@ -44,7 +45,7 @@ class QuicTransportParamsParsingTest {
                 5     // initial_max_streams_uni (0x09)
         );
 
-        ConnectionMetadata.ClientMetadataNegotiated parsedHello = QuicCrypto.parseClientHello(hello);
+        ConnectionMetadata.ClientMetadataNegotiated parsedHello = QuicCrypto.parseClientHello(0, new ConnectionMetadata(), hello);
 
         assertNotNull(parsedHello);
 
@@ -63,7 +64,7 @@ class QuicTransportParamsParsingTest {
 
         QuicException ex = org.junit.jupiter.api.Assertions.assertThrows(
                 QuicException.class,
-                () -> QuicCrypto.parseClientHello(hello)
+                () -> QuicCrypto.parseClientHello(0, new ConnectionMetadata(), hello)
         );
 
         assertEquals("ClientHello: no transport parameters", ex.getMessage());
@@ -114,11 +115,6 @@ class QuicTransportParamsParsingTest {
 
         hello.flip();
         return hello;
-    }
-
-    private Object getFieldValue(Object obj, String fieldName) throws Exception {
-        java.lang.reflect.Field field = obj.getClass().getField(fieldName);
-        return field.get(obj);
     }
 
     private ByteBuffer buildClientHelloWithParams(long maxData, long bidiLocal, long bidiRemote, long uni, long streamsBidi, long streamsUni) throws Exception {

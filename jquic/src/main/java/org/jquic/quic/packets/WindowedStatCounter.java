@@ -36,10 +36,10 @@ public class WindowedStatCounter {
     int latestRtt = 0;
 
 
-    private long timeWindowMs;
+    private long timeWindowMs = 32;
 
     public WindowedStatCounter(int timeWindowMs) {
-        setTimeWindowMs(timeWindowMs);
+        setTimeWindowMs(Math.max(timeWindowMs, 32));
     }
 
     public void setTimeWindowMs(int timeWindowMs) {

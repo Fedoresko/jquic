@@ -31,8 +31,8 @@ public class SimpleFrameQueue implements FrameSource {
     }
 
     @Override
-    public boolean isEmpty() {
-        return poolBuffers.isEmpty();
+    public Frame peek() {
+        return poolBuffers.peek();
     }
 
     @Override
