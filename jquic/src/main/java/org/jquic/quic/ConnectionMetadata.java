@@ -26,12 +26,14 @@ import org.slf4j.LoggerFactory;
 import javax.crypto.SecretKey;
 import java.nio.ByteBuffer;
 import java.security.GeneralSecurityException;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 import static org.jquic.quic.QuicFrameBuilder.MAX_LONG_HEADER_LENGTH;
 import static org.jquic.quic.QuicFrameBuilder.MAX_SHORT_HEADER_LENGTH;
+import static org.jquic.quic.QuicProperties.SSLKEYLOGFILE;
 
 /**
  * TLS metadata associated with a QUIC connection.
@@ -48,7 +50,7 @@ import static org.jquic.quic.QuicFrameBuilder.MAX_SHORT_HEADER_LENGTH;
  * </ol>
  *
  * <p>A running SHA-256 transcript hash is maintained by calling
- * {@link #updateTranscript(byte[])} with each TLS handshake message in wire order:
+ * {@link #updateTranscript(ByteBuffer)} ()} with each TLS handshake message in wire order:
  * ClientHello -> ServerHello -> EncryptedExtensions -> Certificate ->
  * CertificateVerify -> (server) Finished -> (client) Finished.
  * Snapshot the current hash at any time via {@link #transcriptHash()}.
@@ -65,11 +67,10 @@ public class ConnectionMetadata {
     public QuicVersion quicInitialVersion;
     public QuicVersion quicVersion;
 
-    public byte[] originalDcid;
     public byte[] clientCid;
     public byte[] initialDcid;
+    public byte[] originalDcid;
     public byte[] retrySourceCid;
-    public long negotiatedIdleTimeoutMs;
     public int maxLongHeaderLength = MAX_LONG_HEADER_LENGTH;
     public int maxShortHeaderLength = MAX_SHORT_HEADER_LENGTH;
 
@@ -77,7 +78,6 @@ public class ConnectionMetadata {
      * Handshake secret bytes retained for Master Secret derivation in stage 2.
      */
     public byte[] handshakeSecretBytes;
-
     public Map<QuicVersion, NativeCrypto> clientInitialCrypto = new HashMap<>();
     public Map<QuicVersion, NativeCrypto> serverInitialCrypto = new HashMap<>();
     public NativeCrypto clientHandshakeCrypto;
@@ -91,7 +91,11 @@ public class ConnectionMetadata {
     public NativeCrypto prevServerApplicationCrypto;
     public byte[] clientApplicationTrafficSecret;
     public byte[] serverApplicationTrafficSecret;
+    public byte[] resumptionMasterSecret;
+    public NativeCrypto zeroRttCrypto;
+    public boolean clientEarlyDataRequested = false;
 
+    // Transport secrets rotation phase
     public byte currentPhase;
     public long lastPhaseSwitchPacketNumber = -1;
 
@@ -131,10 +135,27 @@ public class ConnectionMetadata {
         };
     }
 
-    private static ByteBuffer wrapDirect(byte[] data) {
-        ByteBuffer buffer = ByteBuffer.allocateDirect(data.length);
-        buffer.put(data);
-        return buffer.flip();
+    public void dropInitialSecrets() {
+        clientInitialCrypto.values().forEach(NativeCrypto::close);
+        serverInitialCrypto.values().forEach(NativeCrypto::close);
+        clientInitialCrypto.clear();
+        serverInitialCrypto.clear();
+    }
+
+    public void dropHandshakeSecrets() {
+        if (clientHandshakeCrypto != null) {
+            clientHandshakeCrypto.close();
+            serverHandshakeCrypto.close();
+            clientHandshakeCrypto = null;
+            serverHandshakeCrypto = null;
+        }
+    }
+
+    public void dropZeroRttTrafficSecrets() {
+        if (zeroRttCrypto != null) {
+            zeroRttCrypto.close();
+            zeroRttCrypto = null;
+        }
     }
 
     /**
@@ -159,11 +180,11 @@ public class ConnectionMetadata {
             byte[] serverHp = QuicCrypto.deriveHp(quicVersion, serverInitialSecret, CipherMode.TLS_AES_128_GCM_SHA256_ID);
 
 
-            ByteBuffer clientKeySeg = wrapDirect(clientKey.getEncoded());
-            ByteBuffer serverKeySeg = wrapDirect(serverKey.getEncoded());
+            ByteBuffer clientKeySeg = QuicCrypto.wrapDirect(clientKey.getEncoded());
+            ByteBuffer serverKeySeg = QuicCrypto.wrapDirect(serverKey.getEncoded());
 
-            ByteBuffer clientHpKeySeg = wrapDirect(clientHp);
-            ByteBuffer serverHpKeySeg = wrapDirect(serverHp);
+            ByteBuffer clientHpKeySeg = QuicCrypto.wrapDirect(clientHp);
+            ByteBuffer serverHpKeySeg = QuicCrypto.wrapDirect(serverHp);
 
             QuicCrypto.PacketProtectionKeysWithHP clientKeys = new QuicCrypto.PacketProtectionKeysWithHP(clientKeySeg, clientIv, clientHpKeySeg);
             QuicCrypto.PacketProtectionKeysWithHP serverKeys = new QuicCrypto.PacketProtectionKeysWithHP(serverKeySeg, serverIv, serverHpKeySeg);
@@ -192,9 +213,8 @@ public class ConnectionMetadata {
 
         byte[] serverHp = QuicCrypto.deriveHp(quicVersion, serverHandshakeTrafficSecret, clientMetadata.selectedCipherSuite);
         SecretKey serverKey = QuicCrypto.deriveKey(quicVersion, serverHandshakeTrafficSecret, clientMetadata.selectedCipherSuite);
-        ByteBuffer serverKeySeg = wrapDirect(serverKey.getEncoded());
-        ByteBuffer serverHpKeySeg = wrapDirect(serverHp);
-
+        ByteBuffer serverKeySeg = QuicCrypto.wrapDirect(serverKey.getEncoded());
+        ByteBuffer serverHpKeySeg = QuicCrypto.wrapDirect(serverHp);
 
         byte[] iv = QuicCrypto.deriveIv(quicVersion, serverHandshakeTrafficSecret);
 
@@ -202,9 +222,9 @@ public class ConnectionMetadata {
                 iv, serverHpKeySeg), clientMetadata.selectedCipherSuite);
 
         byte[] clientHp = QuicCrypto.deriveHp(quicVersion, clientHandshakeTrafficSecret, clientMetadata.selectedCipherSuite);
-        ByteBuffer clientHpKeySeg = wrapDirect(clientHp);
+        ByteBuffer clientHpKeySeg = QuicCrypto.wrapDirect(clientHp);
         SecretKey clientKey = QuicCrypto.deriveKey(quicVersion, clientHandshakeTrafficSecret, clientMetadata.selectedCipherSuite);
-        ByteBuffer clientKeySeg = wrapDirect(clientKey.getEncoded());
+        ByteBuffer clientKeySeg = QuicCrypto.wrapDirect(clientKey.getEncoded());
         byte[] iv1 = QuicCrypto.deriveIv(quicVersion, clientHandshakeTrafficSecret);
 
         clientHandshakeCrypto = new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(clientKeySeg,
@@ -221,12 +241,19 @@ public class ConnectionMetadata {
      *
      * @throws QuicException if key derivation fails
      */
-    public void createApplicationKeys() throws QuicException {
+    public void createApplicationKeys(ByteBuffer clientFinishedBytes) throws QuicException {
         try {
             // Master Secret = HKDF-Extract(Derive-Secret(Handshake Secret, "derived", ""), 0)
             byte[] derivedFromHandshake = QuicCrypto.hkdfExpandLabel(
                     handshakeSecretBytes, "derived", QuicCrypto.sha256(new byte[0]), 32);
             byte[] masterSecret = QuicCrypto.hkdfExtract(derivedFromHandshake, new byte[32]);
+            
+            Arrays.fill(handshakeSecretBytes, (byte) 0);
+            handshakeSecretBytes = null;
+            Arrays.fill(clientHandshakeTrafficSecret, (byte) 0);
+            clientHandshakeTrafficSecret = null;
+            Arrays.fill(serverHandshakeTrafficSecret, (byte) 0);
+            serverHandshakeTrafficSecret = null;
 
             // Snapshot the current transcript hash (all messages up to client Finished)
             byte[] context = transcriptHash();
@@ -247,14 +274,18 @@ public class ConnectionMetadata {
             byte[] clientApplicationIv = QuicCrypto.deriveIv(quicVersion, clientApplicationTrafficSecret);
             byte[] serverApplicationIv = QuicCrypto.deriveIv(quicVersion, serverApplicationTrafficSecret);
 
-            ByteBuffer clientHpKeySeg = wrapDirect(clientApplicationHpKey);
-            ByteBuffer serverHpKeySeg = wrapDirect(serverApplicationHpKey);
+            ByteBuffer clientHpKeySeg = QuicCrypto.wrapDirect(clientApplicationHpKey);
+            ByteBuffer serverHpKeySeg = QuicCrypto.wrapDirect(serverApplicationHpKey);
 
-            ByteBuffer clientKeySeg = wrapDirect(clientApplicationSecret.getEncoded());
-            ByteBuffer serverKeySeg = wrapDirect(serverApplicationSecret.getEncoded());
+            ByteBuffer clientKeySeg = QuicCrypto.wrapDirect(clientApplicationSecret.getEncoded());
+            ByteBuffer serverKeySeg = QuicCrypto.wrapDirect(serverApplicationSecret.getEncoded());
 
             clientApplicationCrypto = new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(clientKeySeg, clientApplicationIv, clientHpKeySeg), clientMetadata.selectedCipherSuite);
             serverApplicationCrypto = new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(serverKeySeg, serverApplicationIv, serverHpKeySeg), clientMetadata.selectedCipherSuite);
+
+            updateTranscript(clientFinishedBytes);
+
+            resumptionMasterSecret = QuicCrypto.hkdfExpandLabel(masterSecret, "res master", transcriptHash(), 32);
 
             logger.debug("Derived 1-RTT application keys from transcript hash (stage 2 complete)");
         } catch (GeneralSecurityException e) {
@@ -263,39 +294,35 @@ public class ConnectionMetadata {
     }
 
     public void rotateApplicationKeys() throws Exception {
-        try {
-            if (prevClientApplicationCrypto != null) {
-                prevClientApplicationCrypto.close();
-                prevServerApplicationCrypto.close();
-            }
-            prevClientApplicationCrypto = clientApplicationCrypto;
-            prevServerApplicationCrypto = serverApplicationCrypto;
-
-            clientApplicationTrafficSecret = QuicCrypto.hkdfExpandLabel(
-                    clientApplicationTrafficSecret, QuicCrypto.kuLabel(quicVersion), new byte[0], 32);
-            serverApplicationTrafficSecret = QuicCrypto.hkdfExpandLabel(
-                    serverApplicationTrafficSecret, QuicCrypto.kuLabel(quicVersion), new byte[0], 32);
-
-            SecretKey clientKey = QuicCrypto.deriveKey(quicVersion, clientApplicationTrafficSecret, clientMetadata.selectedCipherSuite);
-            SecretKey serverKey = QuicCrypto.deriveKey(quicVersion, serverApplicationTrafficSecret, clientMetadata.selectedCipherSuite);
-
-            ByteBuffer clientKeySeg = wrapDirect(clientKey.getEncoded());
-            ByteBuffer serverKeySeg = wrapDirect(serverKey.getEncoded());
-
-            clientApplicationCrypto = new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(clientKeySeg,
-                    QuicCrypto.deriveIv(quicVersion, clientApplicationTrafficSecret),
-                    prevClientApplicationCrypto.getHpKey()), clientMetadata.selectedCipherSuite);
-
-            serverApplicationCrypto = new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(serverKeySeg,
-                    QuicCrypto.deriveIv(quicVersion, serverApplicationTrafficSecret),
-                    prevServerApplicationCrypto.getHpKey()), clientMetadata.selectedCipherSuite);
-
-            currentPhase = (byte)( (currentPhase == 0) ? 1 : 0 );
-
-            logger.info("Rotated application keys, current Key Phase set to {}", currentPhase);
-        } catch (GeneralSecurityException e) {
-            throw new QuicException("Failed to rotate application keys", e);
+        if (prevClientApplicationCrypto != null) {
+            prevClientApplicationCrypto.close();
+            prevServerApplicationCrypto.close();
         }
+        prevClientApplicationCrypto = clientApplicationCrypto;
+        prevServerApplicationCrypto = serverApplicationCrypto;
+
+        clientApplicationTrafficSecret = QuicCrypto.hkdfExpandLabel(
+                clientApplicationTrafficSecret, QuicCrypto.kuLabel(quicVersion), new byte[0], 32);
+        serverApplicationTrafficSecret = QuicCrypto.hkdfExpandLabel(
+                serverApplicationTrafficSecret, QuicCrypto.kuLabel(quicVersion), new byte[0], 32);
+
+        SecretKey clientKey = QuicCrypto.deriveKey(quicVersion, clientApplicationTrafficSecret, clientMetadata.selectedCipherSuite);
+        SecretKey serverKey = QuicCrypto.deriveKey(quicVersion, serverApplicationTrafficSecret, clientMetadata.selectedCipherSuite);
+
+        ByteBuffer clientKeySeg = QuicCrypto.wrapDirect(clientKey.getEncoded());
+        ByteBuffer serverKeySeg = QuicCrypto.wrapDirect(serverKey.getEncoded());
+
+        clientApplicationCrypto = new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(clientKeySeg,
+                QuicCrypto.deriveIv(quicVersion, clientApplicationTrafficSecret),
+                prevClientApplicationCrypto.getHpKey()), clientMetadata.selectedCipherSuite);
+
+        serverApplicationCrypto = new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(serverKeySeg,
+                QuicCrypto.deriveIv(quicVersion, serverApplicationTrafficSecret),
+                prevServerApplicationCrypto.getHpKey()), clientMetadata.selectedCipherSuite);
+
+        currentPhase = (byte)( (currentPhase == 0) ? 1 : 0 );
+
+        logger.info("Rotated application keys, current Key Phase set to {}", currentPhase);
     }
 
     public @Nullable Boolean initializeKeys() {
@@ -332,10 +359,6 @@ public class ConnectionMetadata {
         message.reset();
     }
 
-    public synchronized void updateTranscript(byte[] message) {
-        transcriptDigest.update(message);
-    }
-
     /**
      * Resets the running transcript digest to its initial (empty) state.
      *
@@ -349,16 +372,24 @@ public class ConnectionMetadata {
     }
 
     /**
+     * Returns a clone of the current transcript digest.
+     * Use this for calculating binders or other intermediate hashes without affecting the main transcript.
+     */
+    public synchronized java.security.MessageDigest getTranscriptDigestClone() {
+        try {
+            return (java.security.MessageDigest) transcriptDigest.clone();
+        } catch (CloneNotSupportedException e) {
+            throw new IllegalStateException("MessageDigest.clone() not supported", e);
+        }
+    }
+
+    /**
      * Returns a non-destructive snapshot of the current transcript hash.
      *
      * @return 32-byte SHA-256 digest of all messages fed so far
      */
     public synchronized byte[] transcriptHash() {
-        try {
-            return ((java.security.MessageDigest) transcriptDigest.clone()).digest();
-        } catch (CloneNotSupportedException e) {
-            throw new IllegalStateException("MessageDigest.clone() not supported", e);
-        }
+        return getTranscriptDigestClone().digest();
     }
 
     public static class InitialStreamLimits {
@@ -378,7 +409,7 @@ public class ConnectionMetadata {
         /** Negotiated ALPN protocol (e.g. "h3"), or null if not provided. */
         public final String alpn;
         /** max_idle_timeout from QUIC transport parameters (0 if absent). */
-        public final long maxIdleTimeoutMs;
+        public long maxIdleTimeoutMs;
         public final long maxUdpPayloadSize;
         public final InitialStreamLimits initialStreamLimits = new InitialStreamLimits();
         public final long ackDelayExponent;
@@ -387,9 +418,12 @@ public class ConnectionMetadata {
         public final Map<Short, byte[]> clientKeys;
         public final CipherMode selectedCipherSuite;
         public final List<Integer> availableVersions;
-        public final byte[] clientRandom;
 
-        public ClientMetadataNegotiated(String alpn, long maxIdleTimeoutMs, List<Short> supportedGroups, Map<Short, byte[]> clientKeys, long maxUdpPayloadSize, long initialMaxData, long initialMaxStreamDataBidiLocal, long initialMaxStreamDataBidiRemote, long initialMaxStreamDataUni, long initialMaxStreamsBidi, long initialMaxStreamsUni, List<Short> supportedSignatures, long ackDelayExponent,  List<Integer> availableVersions, CipherMode selectedCipherSuite, byte[] clientRandom) {
+        public final byte[] clientRandom;
+        public final long selectedIdentity;             // Selected Session Ticket Identity
+        public final byte[] psk;                        // Pre-Shared Key
+
+        public ClientMetadataNegotiated(String alpn, long maxIdleTimeoutMs, List<Short> supportedGroups, Map<Short, byte[]> clientKeys, long maxUdpPayloadSize, long initialMaxData, long initialMaxStreamDataBidiLocal, long initialMaxStreamDataBidiRemote, long initialMaxStreamDataUni, long initialMaxStreamsBidi, long initialMaxStreamsUni, List<Short> supportedSignatures, long ackDelayExponent, List<Integer> availableVersions, CipherMode selectedCipherSuite, byte[] clientRandom, long selectedIdentity, byte[] psk) {
             this.alpn = alpn;
             this.maxIdleTimeoutMs = maxIdleTimeoutMs;
             this.maxUdpPayloadSize = maxUdpPayloadSize;
@@ -405,7 +439,17 @@ public class ConnectionMetadata {
             this.clientKeys = clientKeys;
             this.availableVersions = availableVersions;
             this.selectedCipherSuite = selectedCipherSuite;
-            this.clientRandom = clientRandom;
+            if (SSLKEYLOGFILE != null) {
+                this.clientRandom = clientRandom;
+            } else  {
+                this.clientRandom = null;
+            }
+            this.selectedIdentity = selectedIdentity;
+            this.psk = psk;
+        }
+
+        public ClientMetadataNegotiated(String alpn, long maxIdleTimeoutMs, List<Short> supportedGroups, Map<Short, byte[]> clientKeys, long maxUdpPayloadSize, long initialMaxData, long initialMaxStreamDataBidiLocal, long initialMaxStreamDataBidiRemote, long initialMaxStreamDataUni, long initialMaxStreamsBidi, long initialMaxStreamsUni, List<Short> supportedSignatures, long ackDelayExponent, List<Integer> availableVersions, CipherMode selectedCipherSuite, byte[] clientRandom, long selectedIdentity) {
+            this(alpn, maxIdleTimeoutMs, supportedGroups, clientKeys, maxUdpPayloadSize, initialMaxData, initialMaxStreamDataBidiLocal, initialMaxStreamDataBidiRemote, initialMaxStreamDataUni, initialMaxStreamsBidi, initialMaxStreamsUni, supportedSignatures, ackDelayExponent, availableVersions, selectedCipherSuite, clientRandom, selectedIdentity, null);
         }
     }
 }

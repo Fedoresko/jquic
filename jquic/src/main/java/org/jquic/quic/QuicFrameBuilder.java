@@ -21,12 +21,16 @@ import org.jquic.quic.crypto.CipherMode;
 import org.jquic.quic.crypto.QuicCrypto;
 import org.jquic.quic.packets.PacketNumberSpace;
 import org.jquic.quic.struct.SortedIntervals;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.Arrays;
 import java.util.Iterator;
 
 public class QuicFrameBuilder {
+    private final static Logger logger = LoggerFactory.getLogger(QuicFrameBuilder.class);
     public static final int CRYPTO_FRAME_MAX_HEADER_LENGTH = 1 + 8 + 8;
     public static final int MAX_SHORT_HEADER_LENGTH = 25;
     public static final int MAX_LONG_HEADER_LENGTH = 44; //No token
@@ -48,10 +52,15 @@ public class QuicFrameBuilder {
         long firstRangeLength = firstRange.higher() - firstRange.lower();
         QuicVarint.write(out, firstRangeLength);
 
+        logger.debug("Range: {} -  {}", firstRange.higher(), firstRange.lower());
+
+
         // Additional ranges with gaps
         long previousSmallest = firstRange.lower();
         while (iterator.hasNext()) {
             SortedIntervals.Interval range = iterator.next();
+
+            logger.debug("Range: {} -  {}", range.higher(), range.lower());
 
             // Gap = previousSmallest - currentLargest - 2
             long gap = previousSmallest - range.higher() - 2;
@@ -231,6 +240,12 @@ public class QuicFrameBuilder {
         out.writeShort((short) keyShare.length);
         out.write(keyShare);
 
+        // pre_shared_key extension (0x0029) - index of the selected identity
+        if (metadata.clientMetadata != null && metadata.clientMetadata.selectedIdentity != -1) {
+            out.writeShort((short) 0x0029);
+            out.writeShort((short) 2);
+            out.writeShort((short) metadata.clientMetadata.selectedIdentity);
+        }
 
         // Back-fill extensions length
         short extLength = (short) (out.getPos() - extStart);
@@ -242,6 +257,10 @@ public class QuicFrameBuilder {
             wrt.write((byte) (len >> 8));
             wrt.write((byte) len);
         });
+
+        Arrays.fill(metadata.serverEphemeralPublicKey, (byte) 0x00);
+        metadata.serverEphemeralPublicKey = null;
+
     }
 
     /**
@@ -260,7 +279,9 @@ public class QuicFrameBuilder {
         QuicVarint.write(out, largestAcknowledged);
         QuicVarint.write(out, ackDelay);
 
+        logger.debug("Largest ACK PN {} ranges: {}", largestAcknowledged, ranges.size());
         writeAckRanges(ranges, out);
+
 
         // ECN Counts
         QuicVarint.write(out, space.clientEct0Counter);

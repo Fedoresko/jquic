@@ -60,7 +60,7 @@ public class DatagramBuilder {
         maxFrameSize = maxSize;
         frameSource.restart();
         if (readyPacket == null) {
-            while (readyPacket == null && !frameSource.isEmpty()) {
+            while (readyPacket == null && frameSource.peek() != null) {
                 enqueueOneMoreFrame(currentTimeMs, dest, frameSource.poll());
             }
             if (forceBuffered && readyPacket == null) {
@@ -107,7 +107,7 @@ public class DatagramBuilder {
         }
     }
 
-    private void enqueueOneMoreFrame(long currentTimeMs, InetSocketAddress dest, Frame frame) {
+    private void enqueueOneMoreFrame(long currentTimeMs, InetSocketAddress dest,  Frame frame) {
         int maxHeaderLen = (space.phase == PacketPhase.APPLICATION) ?
                 connectionMetadata.maxShortHeaderLength : connectionMetadata.maxLongHeaderLength;
 
@@ -172,6 +172,19 @@ public class DatagramBuilder {
         PoolBuffer datagram = writeBufferPool.requestWriteBuffer();
         try {
             long packetNumber = space.allocatePacketNumber();
+
+            switch (space.phase) {
+                case INITIAL: if ( connectionMetadata.serverInitialCrypto.isEmpty() ) {
+                    logger.debug("Server Initial crypto is empty");
+                    payload.release(); datagram.release();
+                    return null;
+                }
+                case HANDSHAKE: if (connectionMetadata.serverHandshakeCrypto == null ) {
+                    logger.debug("Server Handshake crypto is empty");
+                    payload.release(); datagram.release();
+                    return null;
+                }
+            }
 
             switch (space.phase) {
                 case INITIAL -> QuicPacketBuilder.buildInitialPacket(

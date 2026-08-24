@@ -46,7 +46,7 @@ public class HqInteropConnectionHandler implements QuicApplicationProtocolConnec
     }
  
     @Override
-    public void onNewClientStreamAllocated(long streamId, @NonNull QuicConnectionControl control, @Nullable DataOutputStream outputStream, QuicConnectionControl.StreamType streamType) {
+    public void onNewClientStreamAllocated(long streamId, @NonNull QuicConnectionControl control, @Nullable DataOutputStream outputStream, QuicConnectionControl.StreamType streamType, boolean isEarlyData) {
         logger.debug("New client stream allocated: {} ({})", streamId, streamType);
         if (streamType == QuicConnectionControl.StreamType.Bidirectional) {
             requestBuffers.put(streamId, new ByteArrayOutputStream());
@@ -57,7 +57,7 @@ public class HqInteropConnectionHandler implements QuicApplicationProtocolConnec
     }
  
     @Override
-    public void onStreamDataReceived(long streamId, @NonNull QuicConnectionControl control, byte[] data, boolean isLastData, @Nullable Long errorCode) {
+    public void onStreamDataReceived(long streamId, @NonNull QuicConnectionControl control, byte[] data, boolean isLastData, @Nullable Long errorCode, boolean isEarlyData) {
         ByteArrayOutputStream buffer = requestBuffers.get(streamId);
         if (buffer != null) {
             try {

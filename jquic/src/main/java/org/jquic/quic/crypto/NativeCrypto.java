@@ -52,7 +52,6 @@ public class NativeCrypto implements AutoCloseable {
      * Set ecnription keys used for the all further encription calls.
      *
      * @param keys - encryption key parameters
-     * @param mode
      * @throws QuicException - exception if crypto problems
      */
     public NativeCrypto(QuicCrypto.PacketProtectionKeysWithHP keys, CipherMode mode) throws QuicException {
@@ -100,7 +99,7 @@ public class NativeCrypto implements AutoCloseable {
     }
 
     @Override
-    public void close() throws Exception {
+    public void close() {
         EVP_CIPHER_CTX_cleanup(ecbCtx);
         EVP_AEAD_CTX_cleanup(aeadCtx);
 
@@ -172,9 +171,21 @@ public class NativeCrypto implements AutoCloseable {
     }
 
     public void decryptAeadInPlace(ByteBuffer encrypted, MemorySegment associatedData, ByteBuffer nonce) throws QuicException {
+//        encrypted.mark();
+//        this.keys.key().mark();
+//        nonce.mark();
+//        System.out.println(
+//                HexFormat.of().formatHex(ByteBuffer.allocate(encrypted.remaining()).put(encrypted).array()) + "\n" +
+//                HexFormat.of().formatHex(ByteBuffer.allocate(this.keys.key().remaining()).put(this.keys.key()).array()) + "\n" +
+//                HexFormat.of().formatHex(ByteBuffer.allocate(nonce.remaining()).put(nonce).array()) + "\n"
+//                );
+//        nonce.reset();
+//        encrypted.reset();
+//        this.keys.key().reset();
+
         int ret = EVP_AEAD_CTX_open(aeadCtx,
                 MemorySegment.ofBuffer(encrypted), openOutLen, encrypted.remaining(),
-                MemorySegment.ofBuffer(nonce.rewind()), GCM_NONCE_LENGTH,
+                MemorySegment.ofBuffer(nonce), GCM_NONCE_LENGTH,
                 MemorySegment.ofBuffer(encrypted), encrypted.remaining(),
                 associatedData == null ? MemorySegment.NULL : associatedData, 
                 associatedData == null ? 0 : associatedData.byteSize());
@@ -188,13 +199,25 @@ public class NativeCrypto implements AutoCloseable {
     public void encryptAead(ByteBuffer plaintext, ByteBuffer ciphertext, MemorySegment associatedData, ByteBuffer nonce) throws QuicException {
         if (EVP_AEAD_CTX_seal(aeadCtx,
                 MemorySegment.ofBuffer(ciphertext), sealOutLen, plaintext.remaining() + QuicCrypto.GCM_TAG_LENGTH,
-                MemorySegment.ofBuffer(nonce.rewind()), GCM_NONCE_LENGTH,
+                MemorySegment.ofBuffer(nonce), GCM_NONCE_LENGTH,
                 MemorySegment.ofBuffer(plaintext), plaintext.remaining(),
                 associatedData == null ? MemorySegment.NULL : associatedData,
                 associatedData == null ? 0 : associatedData.byteSize()) != 1) {
             logErrorAndThrow("Failed to seal EVP_AEAD_CTX");
         }
         ciphertext.limit(ciphertext.position() + (int) sealOutLen.get(ValueLayout.JAVA_LONG, 0));
+
+//        ciphertext.mark();
+//        this.keys.key().mark();
+//        nonce.mark();
+//        System.out.println(
+//                HexFormat.of().formatHex(ByteBuffer.allocate(ciphertext.remaining()).put(ciphertext).array()) + "\n" +
+//                HexFormat.of().formatHex(ByteBuffer.allocate(this.keys.key().remaining()).put(this.keys.key()).array()) + "\n" +
+//                HexFormat.of().formatHex(ByteBuffer.allocate(nonce.remaining()).put(nonce).array())  + "\n"
+//        );
+//        nonce.reset();
+//        ciphertext.reset();
+//        this.keys.key().reset();
     }
 
     public void encryptAeadInPlace(ByteBuffer plaintext, MemorySegment associatedData, ByteBuffer nonce) throws QuicException {
@@ -209,7 +232,7 @@ public class NativeCrypto implements AutoCloseable {
             nonce.put(GCM_NONCE_LENGTH - 1 - i,
                     (byte) (baseIv[GCM_NONCE_LENGTH - 1 - i] ^ (byte) (packetNumber >> (i * 8))));
         }
-        return nonce;
+        return nonce.rewind();
     }
 
     private void logSslError(String error) {

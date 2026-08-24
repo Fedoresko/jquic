@@ -239,5 +239,118 @@ class BBRv3Test {
                                           10000, 0, 10000, 0, 8, 0, 13000, 10000, 0, 0, 0);
         assertEquals(11_111_111L, delayDownFinal, 10000);
     }
+
+    @Test
+    void testBwReduction() {
+        // 1. Establish high BW
+        // BW = 10000 / 100 = 100 bytes/ms
+        bbr.getDelay(currentTime, 1200, 1, 100, 100, 100,
+                    10000, 0, 10000, 0, 8, 0, 0, 10000, 0, 0, 0);
+        
+        // 2. Simulate some time passes and BW drops significantly
+        // Even if we report lower bytesAckedInRtt, maxBw should eventually decrease if implemented correctly.
+        
+        for (int i = 0; i < 20; i++) {
+            currentTime += 100;
+            // Report low BW: 1000 / 100 = 10 bytes/ms
+            bbr.getDelay(currentTime, 1200, 1, 100, 100, 100,
+                        1000, 0, 1000, 0, 1, 0, 0, 20000, 0, 0, 0);
+        }
+        
+        // At maxBw = 10, Startup pacingGain = 2.89, Pacing rate = 28.9 bytes/ms.
+        // Sending 1000 bytes should delay ~34.6ms.
+        // We set inFlightData (18000) > cwnd (approx 10*100*2.89 = 2890) to trigger CWND delay.
+        
+        long delay = bbr.getDelay(currentTime, 1000, 1, 100, 100, 100,
+                                 1000, 0, 1000, 0, 1, 0, 0, 18000, 0, 0, 0);
+        
+        System.out.println("Delay after BW drop: " + delay + " ns");
+        
+        // If maxBw dropped to 10, pacingRate = 10 * 2.89 = 28.9. 
+        // inFlight(18000) + data(1000) - cwnd(2890) = 16110
+        // delay = 16110 / 28.9 = 557 ms. 
+        // Max delay is RTT * 1M = 100 * 1M = 100,000,000 ns.
+        assertTrue(delay > 50_000_000L, "Fix verification: maxBw should decrease, causing larger delay. Got: " + delay);
+    }
+
+    @Test
+    void testStartupExitTiming() {
+        // 1. Establish initial BW in Startup
+        // smoothedRtt = 100ms, bytesAckedInRtt = 10000 bytes.
+        // currentBw = 100 bytes/ms.
+        bbr.getDelay(currentTime, 1200, 1, 100, 100, 100,
+                    10000, 0, 10000, 0, 8, 0, 0, 10000, 0, 0, 0);
+        
+        // 2. Simulate sending multiple packets within the SAME RTT with no BW growth
+        // We'll call it 5 times at the same currentTime.
+        
+        for (int i = 0; i < 5; i++) {
+            long delay = bbr.getDelay(currentTime, 1200, 1, 100, 100, 100,
+                                     10000, 0, 10000, 0, 8, 0, 0, 10000, 0, 0, 0);
+            
+            // If it exits STARTUP, the pacing delay for 1200 bytes will jump from ~4ms to ~34ms.
+            // We expect it to STAY in STARTUP because 3 RTTs haven't passed.
+            assertTrue(delay < 10_000_000L, "Should still be in STARTUP at iteration " + i + ". delay=" + delay);
+        }
+    }
+
+    @Test
+    void testLossResponse() {
+        // 1. Establish initial state
+        // BW = 100. minRtt = 100. BDP = 10000. cwndGain = 2.89. targetCwnd = 28900.
+        bbr.getDelay(currentTime, 1200, 1, 100, 100, 100,
+                    10000, 0, 10000, 0, 8, 0, 0, 10000, 0, 0, 0);
+        
+        long initialCwnd = bbr.getCwnd();
+        assertTrue(initialCwnd >= 28900, "Initial CWND should be at least BDP * 2.89. Got: " + initialCwnd);
+
+        // 2. Trigger loss
+        currentTime += 100;
+        bbr.getDelay(currentTime, 1200, 1, 100, 100, 100,
+                    10000, 0, 10000, 5000, 8, currentTime, 0, 10000, 0, 0, 0);
+        
+        long cwndAfterLoss = bbr.getCwnd();
+        assertTrue(cwndAfterLoss < initialCwnd, "CWND should decrease after loss. Got: " + cwndAfterLoss);
+        assertEquals((long)(initialCwnd * 0.7), cwndAfterLoss, 100, "CWND should be reduced by ~30%");
+
+        // 3. Verify CWND remains bounded during recovery even if BW grows
+        currentTime += 50;
+        // Reporting higher BW: 20000 / 100 = 200 bytes/ms. targetCwnd would be 200 * 100 * 2.89 = 57800.
+        // But lossEpochStartTime is still set (100ms interval not yet passed).
+        bbr.getDelay(currentTime, 1200, 1, 100, 100, 100,
+                    20000, 0, 30000, 5000, 8, currentTime, 0, 10000, 0, 0, 0);
+        
+        long cwndDuringRecovery = bbr.getCwnd();
+        assertEquals(cwndAfterLoss, cwndDuringRecovery, "CWND should remain bounded by lossEpochStartCwnd * 0.7 during recovery");
+    }
+
+    @Test
+    void testExtraAcked() {
+        // 1. Establish initial state
+        // BW = 100. minRtt = 100. BDP = 10000. cwndGain = 2.89.
+        bbr.getDelay(currentTime, 1200, 1, 100, 100, 100,
+                    10000, 0, 10000, 0, 8, 0, 0, 10000, 0, 0, 0);
+        
+        long cwndBefore = bbr.getCwnd();
+
+        // 2. Simulate ACK aggregation (large bytesAckedInWindow jump)
+        // BBRv3 tracks maxExtraAcked over 10 RTTs.
+        // Current bytesAckedInWindow = 10000.
+        // Jump to 30000 in one go.
+        currentTime += 100;
+        bbr.getDelay(currentTime, 1200, 1, 100, 100, 100,
+                    10000, 0, 30000, 0, 8, 0, 0, 10000, 0, 0, 0);
+        
+        // extraAcked becomes 20000.
+        // maxExtraAcked is updated when 10 RTTs pass.
+        currentTime += 1000;
+        bbr.getDelay(currentTime, 1200, 1, 100, 100, 100,
+                    10000, 0, 40000, 0, 8, 0, 0, 10000, 0, 0, 0);
+        
+        long cwndAfter = bbr.getCwnd();
+        assertTrue(cwndAfter > cwndBefore, "CWND should increase due to extraAcked from ACK aggregation. Before: " + cwndBefore + ", After: " + cwndAfter);
+        // BDP = 10000. Gain = 2.89. extra = 20000. Total = 28900 + 20000 = 48900.
+        assertTrue(cwndAfter >= 48900, "CWND should include extraAcked. Got: " + cwndAfter);
+    }
 }
 

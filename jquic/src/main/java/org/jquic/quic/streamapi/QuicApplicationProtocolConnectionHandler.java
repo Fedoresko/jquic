@@ -42,8 +42,9 @@ public interface QuicApplicationProtocolConnectionHandler {
      * @param streamType - type of the stream (unidirectional or bidirectional)
      * @param outputStream - stream for writing stream frames, blocks writing thread by congestion control and buffer limits
      *                      (null for unidirectional streams).
+     * @param isEarlyData - true if data originates from 0-RTT packets
      */
-    void onNewClientStreamAllocated(long streamId, @NonNull QuicConnectionControl control, @Nullable DataOutputStream outputStream, QuicConnectionControl.StreamType streamType);
+    void onNewClientStreamAllocated(long streamId, @NonNull QuicConnectionControl control, @Nullable DataOutputStream outputStream, QuicConnectionControl.StreamType streamType, boolean isEarlyData);
 
     /**
      * Called when the client receives data on a stream (STREAM frame) if all previous frames were received (in order).
@@ -51,9 +52,10 @@ public interface QuicApplicationProtocolConnectionHandler {
      * @param control - connection control object, handles commands like openStream / closeStream / closeConnection
      * @param isLastData - true if this is the last frame in the stream (FIN) or last frame after STREAM_RESET
      * @param errorCode - optional application level error code associated with the frame if the stream was terminated by STREAM_RESET frame
+     * @param isEarlyData - true if data originates from 0-RTT packets
      * @param data - frame data
      */
-    void onStreamDataReceived(long streamId, @NonNull QuicConnectionControl control, byte[] data, boolean isLastData, @Nullable Long errorCode);
+    void onStreamDataReceived(long streamId, @NonNull QuicConnectionControl control, byte[] data, boolean isLastData, @Nullable Long errorCode, boolean isEarlyData);
 
     /**
      * Called when DATAGRAM frame is received.

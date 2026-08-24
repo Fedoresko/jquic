@@ -220,7 +220,7 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
     }
 
     @Override
-    public void onNewClientStreamAllocated(long streamId, @NonNull QuicConnectionControl control, DataOutputStream outputStream, QuicConnectionControl.StreamType streamType) {
+    public void onNewClientStreamAllocated(long streamId, @NonNull QuicConnectionControl control, DataOutputStream outputStream, QuicConnectionControl.StreamType streamType, boolean isEarlyData) {
         boolean isUnidirectional = (streamId & 0x02) != 0;
         boolean isServerInitiated = (streamId & 0x01) != 0;
 
@@ -256,7 +256,7 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
 
     @Override
     public void onStreamDataReceived(long streamId, @NonNull QuicConnectionControl response,
-                                     byte[] data, boolean isLastData, @Nullable Long errorCode) {
+                                     byte[] data, boolean isLastData, @Nullable Long errorCode, boolean isEarlyData) {
         Http3StreamContext context = streams.get(streamId);
         if (context == null) {
             logger.warn("Received data for unknown stream {} on connection {}", streamId, connectionId);
@@ -276,7 +276,7 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
         Http3ClientStreamRole role = context.getRole();
         if (role != null && validateClientStreamRole(streamId, response, role)) {
            switch (role) {
-                case Http3ClientStreamRole.REQUEST -> handleRequestStream(streamId, response, isLastData, context);
+                case Http3ClientStreamRole.REQUEST -> handleRequestStream(streamId, response, isLastData, context, isEarlyData);
                 case Http3ClientStreamRole.CONTROL ->
                         handleControlStream(streamId, response, data, isLastData, context);
                 case Http3ClientStreamRole.QPACK_ENCODER ->
@@ -515,7 +515,7 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
         }
     }
 
-    private void handleRequestStream(long streamId, @NonNull QuicConnectionControl response, boolean isLastData, Http3StreamContext context) {
+    private void handleRequestStream(long streamId, @NonNull QuicConnectionControl response, boolean isLastData, Http3StreamContext context, boolean isEarlyData) {
         // Client-initiated bidirectional request stream.
         // Use a state machine to dispatch the request as soon as headers arrive,
         // then feed body DATA frames incrementally, without waiting for stream FIN.
@@ -537,6 +537,13 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
                                 String method = headersMap.getOrDefault(":method", "GET");
                                 String path = headersMap.getOrDefault(":path", "/");
                                 Long contentLength = Optional.ofNullable(headersMap.get(":content-length")).map(Long::valueOf).orElse(null);
+
+                                if (isEarlyData && !"GET".equals(method) && !"HEAD".equals(method) &&
+                                        !"OPTIONS".equals(method) && !"TRACE".equals(method)) {
+                                    putResponse(streamId, futures.get(streamId), new Http3Response(425, "text/plain",
+                                            "Too Early".getBytes(), List.of()));
+                                    return;
+                                }
 
                                 Http3Request request = new Http3Request(connectionId, method, path, contentLength);
                                 context.setRequest(request);

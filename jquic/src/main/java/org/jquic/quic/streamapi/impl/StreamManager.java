@@ -127,7 +127,7 @@ public class StreamManager implements ConnectionStreamManager {
      * This is always server-initiated (stream IDs are odd).
      */
     public long openStream(QuicConnectionControl.StreamType streamType) throws QuicStreamException {
-        if (connection.getState() != QuicConnection.State.ESTABLISHED) {
+        if (connection.getState() == QuicConnection.State.CLOSED || connection.getState() == QuicConnection.State.CLOSING) {
             throw new QuicStreamException("Connection is in wrong state " + connection.getState());
         }
 
@@ -206,7 +206,7 @@ public class StreamManager implements ConnectionStreamManager {
         }
 
         private void handleFrame(StreamFrameData frame) throws IOException {
-            if (connection.getState() != QuicConnection.State.ESTABLISHED) {
+            if (connection.getState() == QuicConnection.State.CLOSED || connection.getState() == QuicConnection.State.CLOSING) {
                 logger.warn("Connection is in wrong state " + connection.getState());
                 frame.data.release();
                 return;
@@ -234,7 +234,7 @@ public class StreamManager implements ConnectionStreamManager {
                     outputStream = createOutputStream(state);
                     streamOutputs.put(streamId, outputStream);
                 }
-                handler.onNewClientStreamAllocated(streamId, new QuicStreamResponseImpl(state), outputStream, streamType);
+                handler.onNewClientStreamAllocated(streamId, new QuicStreamResponseImpl(state), outputStream, streamType, frame.isEarlyData);
             }
 
             StreamBuffer streamBuffer = streamBuffers.get(streamId);
@@ -251,7 +251,7 @@ public class StreamManager implements ConnectionStreamManager {
 
             try {
                 if (streamBuffer.addIncomingData(offset, data, hasFin)) {
-                    deliverStreamData(state, null);
+                    deliverStreamData(state, null, frame.isEarlyData);
                 }
             } catch (QuicException e) {
                 logger.warn("Connection {} stream {} has encountered an error", getConnectionId(), streamId, e);
@@ -269,7 +269,7 @@ public class StreamManager implements ConnectionStreamManager {
 
             // Deliver any buffered data with error code
             if (state != null) {
-                frameProcessor.deliverStreamData(state, errorCode);
+                frameProcessor.deliverStreamData(state, errorCode, false);
             }
             streamOutputs.remove(streamId).close();
             streamBuffers.remove(streamId).free();
@@ -303,7 +303,7 @@ public class StreamManager implements ConnectionStreamManager {
         /**
          * Delivers stream data to handler. MUST be called from worker thread only.
          */
-        private void deliverStreamData(StreamState state, @Nullable Long errorCode) throws IOException {
+        private void deliverStreamData(StreamState state, @Nullable Long errorCode, boolean isEarlyData) throws IOException {
             long streamId = state.getStreamId();
             StreamBuffer buffer = streamBuffers.get(streamId);
             if (buffer == null) return;
@@ -317,7 +317,7 @@ public class StreamManager implements ConnectionStreamManager {
                 // Update totalBufferedBytes when data is freed from buffer
                 flightControl.bufferedBytesFreed(streamId, freedBytes);
 
-                handler.onStreamDataReceived(streamId, new QuicStreamResponseImpl(state), data.getData(), data.isLast(), errorCode);
+                handler.onStreamDataReceived(streamId, new QuicStreamResponseImpl(state), data.getData(), data.isLast(), errorCode, isEarlyData);
 
                 if (data.isLast()) {
                     flightControl.onStreamFin(state, false);
@@ -327,7 +327,7 @@ public class StreamManager implements ConnectionStreamManager {
                     }
                 }
             } else if (errorCode != null) {
-                handler.onStreamDataReceived(streamId, new QuicStreamResponseImpl(state) , new byte[0], true, errorCode);
+                handler.onStreamDataReceived(streamId, new QuicStreamResponseImpl(state) , new byte[0], true, errorCode, isEarlyData);
             }
         }
 
@@ -365,7 +365,7 @@ public class StreamManager implements ConnectionStreamManager {
      */
     public int appendOutgoingData(StreamState state, PoolBuffer data) throws IOException {
         long streamId = state.getStreamId();
-        if (connection.getState() != QuicConnection.State.ESTABLISHED) {
+        if (connection.getState() == QuicConnection.State.CLOSED || connection.getState() == QuicConnection.State.CLOSING) {
             logger.error("Connection is in wrong state " + connection.getState());
             data.release();
             throw new IOException("Connection is " + connection.getState());
@@ -431,7 +431,7 @@ public class StreamManager implements ConnectionStreamManager {
     public void closeStream(long streamId, StreamState state, long errorCode) throws QuicStreamException {
         if (state == null) return;
 
-        if (connection.getState() != QuicConnection.State.ESTABLISHED) {
+        if (connection.getState() == QuicConnection.State.CLOSED || connection.getState() == QuicConnection.State.CLOSING) {
             logger.info("Connection is in wrong state " + connection.getState());
             return;
         }
@@ -445,7 +445,7 @@ public class StreamManager implements ConnectionStreamManager {
         PoolBuffer frame = StreamFrameWriter.encodeMaxStreamsFrame(connection.getBufferPool(), maximumStreams, bidirectional);
         try {
             connection.send1RttPacket(frame);
-            logger.debug("Sent MAX_STREAMS frame: maxStreams={}, bidirectional={}", maximumStreams, bidirectional);
+            logger.info("Sent MAX_STREAMS frame: maxStreams={}, bidirectional={}", maximumStreams, bidirectional);
         } catch (Exception e) {
             logger.error("Failed to send MAX_STREAMS frame", e);
         }
@@ -455,6 +455,7 @@ public class StreamManager implements ConnectionStreamManager {
         PoolBuffer frame = StreamFrameWriter.encodeMaxStreamDataFrame(connection.getBufferPool(), streamId, maximumData);
         try {
             connection.send1RttPacket(frame);
+            logger.info("Sent MAX_STREAM_DATA frame: streamId={}, maximumData={}", streamId, maximumData);
         } catch (Exception e) {
             logger.warn("Failed to send MAX_STREAM_DATA frame", e);
         }

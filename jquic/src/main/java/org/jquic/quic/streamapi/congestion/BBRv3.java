@@ -31,14 +31,18 @@ public class BBRv3 implements CongestionControl {
     private State state = State.STARTUP;
     private ProbeBwSubState probeBwSubState = ProbeBwSubState.DOWN;
     private long maxBw = 0; // bytes per ms
+    private final long[] maxBwFilter = new long[10];
+    private int maxBwFilterIdx = 0;
+    private long lastBwFilterUpdateTimeMs = 0;
+
     private long minRtt = Long.MAX_VALUE;
     private long minRttTimestamp = 0;
 
     private double pacingGain = 2.89; // Startup gain
     private double cwndGain = 2.89;
 
-    private long startupMaxBw = 0;
     private long startupBwNotIncreasingCount = 0;
+    private long lastStartupRoundMs = 0;
 
     private static final long INITIAL_CWND = 12000; // 10 packets * 1200 bytes
     private static final long MIN_RTT_PROBE_INTERVAL_MS = 10000; // 10 seconds
@@ -51,14 +55,56 @@ public class BBRv3 implements CongestionControl {
     private long cwnd = INITIAL_CWND;
     private long lastSendTimeNs = -1;
 
+    private long prevRoundBw = 0;
+    
+    private long maxBwInProbe = 0;
+    private long extraAcked = 0;
+    private long lastExtraAckedTimestamp = 0;
+    private long maxExtraAcked = 0;
+    private long lastAckedBytes = 0;
+    private long lastLostBytes = 0;
+    private long lossEpochStartTime = -1;
+    private long lossEpochStartCwnd = 0;
+    
+    // For testing
+    public long getCwnd() {
+        return cwnd;
+    }
+
     @Override
     public long getDelay(long currentTimeMs, long dataSize, long connectionId, long smoothedRtt, long lastRtt, long minRtt,
                          long bytesAckedInRtt, long bytesLostInRtt, long bytesAckedInWindow, long bytesLostInWindow, long packetsAckedInWindow,
                          long lastLostTimeMs, long inFlightData, long receiveBufferRemaining, long sendBufferSize,
                          long ceCounter, long cePacketsInWindow) {
 
+        // 0. Update extraAcked (for CWND bound)
+        if (lastAckedBytes > 0 && bytesAckedInWindow > lastAckedBytes) {
+            long ackedDelta = bytesAckedInWindow - lastAckedBytes;
+            extraAcked += ackedDelta;
+        }
+        lastAckedBytes = bytesAckedInWindow;
+
+        if (currentTimeMs - lastExtraAckedTimestamp >= (smoothedRtt > 0 ? smoothedRtt * 10 : 1000)) {
+            maxExtraAcked = extraAcked;
+            extraAcked = 0;
+            lastExtraAckedTimestamp = currentTimeMs;
+        }
+
+        // 0.1 Loss Response (BBRv3)
+        if (bytesLostInWindow > lastLostBytes) {
+            if (lossEpochStartTime == -1 || currentTimeMs - lossEpochStartTime > (smoothedRtt > 0 ? smoothedRtt : 100)) {
+                lossEpochStartTime = currentTimeMs;
+                lossEpochStartCwnd = cwnd;
+                cwnd = (long) (cwnd * 0.7); // BBRv3 beta loss factor typically 0.7
+                logger.debug("Loss detected on connection {}. CWND reduced to {}", connectionId, cwnd);
+            }
+        } else if (lossEpochStartTime != -1 && currentTimeMs - lossEpochStartTime > (smoothedRtt > 0 ? smoothedRtt : 100)) {
+            lossEpochStartTime = -1;
+        }
+        lastLostBytes = bytesLostInWindow;
+
         // 1. Update minRtt
-        if (minRtt > 0 && minRtt < this.minRtt) {
+        if (minRtt < this.minRtt) {
             this.minRtt = minRtt;
             this.minRttTimestamp = currentTimeMs;
         } else if (this.minRtt == Long.MAX_VALUE && smoothedRtt > 0) {
@@ -72,18 +118,47 @@ public class BBRv3 implements CongestionControl {
         if (bytesAckedInRtt > 0) {
             currentBw = bytesAckedInRtt / rtt;
         }
-        if (currentBw > maxBw) {
-            maxBw = currentBw;
+
+        // Update maxBw filter (at most once per RTT)
+        if (currentTimeMs - lastBwFilterUpdateTimeMs >= rtt) {
+            maxBwFilter[maxBwFilterIdx] = currentBw;
+            maxBwFilterIdx = (maxBwFilterIdx + 1) % maxBwFilter.length;
+            lastBwFilterUpdateTimeMs = currentTimeMs;
+
+            long mBw = 0;
+            for (long bw : maxBwFilter) {
+                if (bw > mBw) mBw = bw;
+            }
+            maxBw = mBw;
+        } else {
+            if (currentBw > maxBw) {
+                maxBw = currentBw;
+                maxBwFilter[(maxBwFilterIdx + maxBwFilter.length - 1) % maxBwFilter.length] = currentBw;
+            }
         }
 
         // 3. State Machine
-        updateState(currentTimeMs, currentBw, rtt, inFlightData);
+        if (state == State.PROBE_BW && probeBwSubState == ProbeBwSubState.UP) {
+            if (currentBw > maxBwInProbe) {
+                maxBwInProbe = currentBw;
+            }
+        }
+        updateState(currentTimeMs, rtt, inFlightData);
 
         // 4. Calculate CWND
         if (state == State.PROBE_RTT) {
             cwnd = 4800; // Minimum CWND (4 packets)
         } else if (maxBw > 0 && this.minRtt != Long.MAX_VALUE) {
-            cwnd = (long) (maxBw * this.minRtt * cwndGain);
+            long bdp = maxBw * this.minRtt;
+            long targetCwnd = (long) (bdp * cwndGain) + maxExtraAcked;
+            if (lossEpochStartTime != -1) {
+                // If in loss recovery, we bound CWND to prevent it from growing beyond 
+                // the reduced level until the recovery period ends.
+                long recoveryCwnd = (long) (lossEpochStartCwnd * 0.7);
+                cwnd = Math.min(recoveryCwnd, targetCwnd);
+            } else {
+                cwnd = targetCwnd;
+            }
         }
         cwnd = Math.max(cwnd, INITIAL_CWND);
         if (state == State.PROBE_RTT) {
@@ -102,12 +177,13 @@ public class BBRv3 implements CongestionControl {
             } else {
                 delayNs = 1_000_000L; // Default 1ms
             }
+            logger.debug("CWND limited on connection {}: inFlight={}, dataSize={}, cwnd={}, delay={}ns", connectionId, inFlightData, dataSize, cwnd, delayNs);
         }
 
         // Pacing check
         if (pacingRate > 0) {
             long currentTimeNs = currentTimeMs * 1_000_000L;
-            if (lastSendTimeNs == -1) {
+            if (lastSendTimeNs == -1 || lastSendTimeNs < currentTimeNs - 1000_000_000L) {
                 lastSendTimeNs = (long)(currentTimeNs - (dataSize * 1_000_000.0 / pacingRate));
             }
             long nextSendTimeNs = (long)(lastSendTimeNs + (dataSize * 1_000_000.0 / pacingRate));
@@ -126,25 +202,33 @@ public class BBRv3 implements CongestionControl {
         return 0;
     }
 
-    private void updateState(long now, long currentBw, long rtt, long inFlightData) {
+    private void updateState(long now, long rtt, long inFlightData) {
         switch (state) {
             case STARTUP:
-                if (currentBw > 0 && currentBw < startupMaxBw * 1.25) {
-                    startupBwNotIncreasingCount++;
-                } else {
-                    startupMaxBw = Math.max(startupMaxBw, currentBw);
-                    startupBwNotIncreasingCount = 0;
+                if (lastStartupRoundMs == 0) {
+                    lastStartupRoundMs = now;
                 }
-                
+
+                if (maxBw >= prevRoundBw * 1.25) {
+                    prevRoundBw = maxBw;
+                    startupBwNotIncreasingCount = 0;
+                    lastStartupRoundMs = now;
+                } else if (now - lastStartupRoundMs >= rtt) {
+                    startupBwNotIncreasingCount++;
+                    lastStartupRoundMs = now;
+                }
+
                 if (startupBwNotIncreasingCount >= 3) {
                     state = State.DRAIN;
                     pacingGain = 1.0 / 2.89;
                     cwndGain = 2.89;
+                    logger.debug("Exiting STARTUP, entered DRAIN. maxBw: {}", maxBw);
                 }
                 break;
             case DRAIN:
                 // Transition to PROBE_BW when queue is drained (BDP reached)
-                if (inFlightData <= maxBw * minRtt) {
+                long drainBdp = maxBw * (minRtt == Long.MAX_VALUE ? rtt : minRtt);
+                if (inFlightData <= drainBdp) {
                     enterProbeBw(now);
                 }
                 break;
@@ -174,6 +258,7 @@ public class BBRv3 implements CongestionControl {
         probeBwSubState = ProbeBwSubState.DOWN;
         pacingGain = 0.9;
         cycleStartTimeMs = now;
+        maxBwInProbe = 0;
         logger.debug("Entering PROBE_BW (DOWN) at {}", now);
     }
 
@@ -209,7 +294,8 @@ public class BBRv3 implements CongestionControl {
                     probeBwSubState = ProbeBwSubState.DOWN;
                     pacingGain = 0.9;
                     cycleStartTimeMs = now;
-                    logger.debug("Transition to PROBE_BW (DOWN) at {}", now);
+                    logger.debug("Transition to PROBE_BW (DOWN) at {}, maxBw seen in probe: {}", now, maxBwInProbe);
+                    maxBwInProbe = 0;
                 }
                 break;
         }

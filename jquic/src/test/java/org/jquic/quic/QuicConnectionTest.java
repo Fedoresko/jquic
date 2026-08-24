@@ -136,7 +136,11 @@ class QuicConnectionTest {
     }
 
     private void updMeta(ConnectionMetadata mockMetadata) {
-        mockMetadata.negotiatedIdleTimeoutMs = 10_000;
+        mockMetadata.clientMetadata = new ConnectionMetadata.ClientMetadataNegotiated(
+                "h3", 10_000L, List.of((short) 0x001d), new HashMap<>(), 1450L,
+                1000000L, 65536L, 65536L, 65536L, 100L, 100L,
+                List.of((short) 0x0403), 3L, List.of(0x00000001), CipherMode.TLS_AES_128_GCM_SHA256_ID, null,
+                -1);
         mockMetadata.serverEphemeralPublicKey = new byte[32];
         mockMetadata.clientHandshakeCrypto = nCryptoMock;
         mockMetadata.serverHandshakeCrypto = nCryptoMock;
@@ -147,7 +151,7 @@ class QuicConnectionTest {
         mockMetadata.serverApplicationCrypto = nCryptoMock;
         mockMetadata.clientMetadata = new ConnectionMetadata.ClientMetadataNegotiated("h3", 1000, List.of(),
                 Map.of(), 1200, 1000, 0, 0,
-                0, 0, 0, List.of(), 3, List.of(), CipherMode.TLS_AES_128_GCM_SHA256_ID, new byte[0]);
+                0, 0, 0, List.of(), 3, List.of(), CipherMode.TLS_AES_128_GCM_SHA256_ID, new byte[0], -1);
         mockMetadata.handshakeSecretBytes = new byte[32];
         mockMetadata.selectedSignatureScheme = 0x0403;
         mockMetadata.serverHandshakeTrafficSecret = new byte[32];
@@ -204,9 +208,7 @@ class QuicConnectionTest {
 
         // Verify that client Finished message was verified
         cryptoMock.verify(() -> QuicCrypto.verifyClientFinished(
-                any(),           // finishedData - the CRYPTO frame content
-                any(),        // clientHandshakeSecret
-                any(byte[].class)            // transcriptHash (empty in simplified mode)
+                any(), any()           // finishedData - the CRYPTO frame content
         ), times(1));
     }
 
@@ -216,7 +218,7 @@ class QuicConnectionTest {
         // Initial state
         assertEquals(QuicConnection.State.INITIAL, connection.getState());
 
-        cryptoMock.when(() -> QuicCrypto.processClientHello(any(), any())).thenThrow(new QuicException("Err"));
+        cryptoMock.when(() -> QuicCrypto.processClientHello(anyLong(), any(), any())).thenThrow(new QuicException("Err"));
 
         // Process Initial packet with invalid ClientHello
         PoolBuffer initialPacket = createMockInitialPacket();
@@ -255,7 +257,7 @@ class QuicConnectionTest {
 
         // Override verifyClientFinished to return false (verification failed)
         // This overrides the default mock from mockQuicCrypto() which returns true
-        cryptoMock.when(() -> QuicCrypto.verifyClientFinished(any(), any(), any()))
+        cryptoMock.when(() -> QuicCrypto.verifyClientFinished(any(), any()))
                 .thenReturn(false);
 
         // Process Handshake packet with invalid Finished message
@@ -272,8 +274,7 @@ class QuicConnectionTest {
         // Verify that verifyClientFinished was called
         cryptoMock.verify(() -> QuicCrypto.verifyClientFinished(
                 any(),
-                any(),
-                any(byte[].class)
+                any()
         ), times(1));
     }
 
@@ -902,11 +903,16 @@ class QuicConnectionTest {
         connection.setState(QuicConnection.State.ESTABLISHED);
         connection.connectionMetadata.clientCid = ByteBuffer.allocate(8).putLong(TEST_CID).array();
         setupMockTlsMetadata();
+        connection.getConnectionPathController().onConnectionEstablished();
     }
 
     private void setupMockTlsMetadata() {
         ConnectionMetadata mockMetadata = new ConnectionMetadata();
-        mockMetadata.negotiatedIdleTimeoutMs = 10_000;
+        mockMetadata.clientMetadata = new ConnectionMetadata.ClientMetadataNegotiated(
+                "h3", 10_000L, List.of((short) 0x001d), new HashMap<>(), 1450L,
+                1000000L, 65536L, 65536L, 65536L, 100L, 100L,
+                List.of((short) 0x0403), 3L, List.of(0x00000001), CipherMode.TLS_AES_128_GCM_SHA256_ID, null,
+                -1);
         mockMetadata.clientInitialCrypto = new HashMap<>(Map.of(QuicVersion.QUIC_VERSION_1, nCryptoMock, QuicVersion.QUIC_VERSION_2, nCryptoMock));
         mockMetadata.serverInitialCrypto = new HashMap<>(Map.of(QuicVersion.QUIC_VERSION_1, nCryptoMock, QuicVersion.QUIC_VERSION_2, nCryptoMock));
         mockMetadata.clientHandshakeCrypto = nCryptoMock;//new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(clientHandshakeSecret, new byte[12], null));
@@ -1122,14 +1128,14 @@ class QuicConnectionTest {
     private MockedStatic<QuicCrypto> mockQuicCrypto() {
         MockedStatic<QuicCrypto> mock = Mockito.mockStatic(QuicCrypto.class, Answers.CALLS_REAL_METHODS);
         mock.when(() -> QuicCrypto.signData(any(byte[].class), anyShort())).thenReturn(new byte[16]);
-        mock.when(() -> QuicCrypto.processClientHello(any(ConnectionMetadata.class), any(ByteBuffer.class)))
+        mock.when(() -> QuicCrypto.processClientHello(anyLong(), any(ConnectionMetadata.class), any(ByteBuffer.class)))
                 .thenAnswer(invocation -> {
-                    ConnectionMetadata metadata = (ConnectionMetadata) invocation.getArguments()[0];
+                    ConnectionMetadata metadata = (ConnectionMetadata) invocation.getArguments()[1];
                     updMeta(metadata);
                     return null;
                 });
         // Mock client Finished verification - return true for valid Finished message
-        mock.when(() -> QuicCrypto.verifyClientFinished(any(ByteBuffer.class), any(byte[].class), any(byte[].class)))
+        mock.when(() -> QuicCrypto.verifyClientFinished(any(), any()))
                 .thenReturn(true);
         // Mock stateless reset token generation
         mock.when(() -> QuicCrypto.generateStatelessResetToken(any(byte[].class)))

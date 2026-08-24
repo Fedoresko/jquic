@@ -82,6 +82,9 @@ public class ConnectionPathController implements TimeoutHeap.Entry {
         handshakeDatagramBuilder = getDatagramBuilder(PacketPhase.HANDSHAKE);
         applicationDatagramBuilder = getDatagramBuilder(PacketPhase.APPLICATION);
 
+        initQueue.setReadyToPoll(true);
+        handshakeQueue.setReadyToPoll(true);
+
         pathMap.put(primaryAddress, new ConnectionPath(primaryAddress, connection.getCurrentTimestamp(), 32));
     }
     
@@ -163,6 +166,7 @@ public class ConnectionPathController implements TimeoutHeap.Entry {
     }
 
     public void onConnectionEstablished() {
+        applicationQueue.setReadyToPoll(true);
         if (pathMap.containsKey(primaryAddress)) {
             pathMap.get(primaryAddress).state = VERIFIED;
         }
@@ -205,8 +209,13 @@ public class ConnectionPathController implements TimeoutHeap.Entry {
                     case HANDSHAKE -> handshakeDatagramBuilder.makeDatagram(currentTimeMs, path.address, frame.data(), frame.ackEliciting());
                     case APPLICATION -> applicationDatagramBuilder.makeDatagram(currentTimeMs, path.address, frame.data(), frame.ackEliciting());
                 };
+                if (datagram.data() == null) {
+                    logger.error("Could not make datagram for frame phase {} in pahse {} to {}", frame.phase(), curPhase(), path);
+                    return null;
+                } else{
+                    logger.info("Sending Urgent frame to {} {} bytes", frame.dest(), datagram.data().buf().remaining());
+                }
                 nextShedNs = currentNanos;
-                logger.info("Sending Urgent frame to {} {} bytes", frame.dest(), datagram.data().buf().remaining());
                 return datagram;
             }
         }
@@ -379,6 +388,7 @@ public class ConnectionPathController implements TimeoutHeap.Entry {
         urgentQueue.offer(new UrgentFrame(poolBuffer, curPhase(), ackEliciting, dest));
     }
 
+    @SuppressWarnings("BooleanMethodIsAlwaysInverted")
     public boolean checkSenderAddress(InetSocketAddress sender, int packetSize) {
         if (sender == null) sender = primaryAddress;
 

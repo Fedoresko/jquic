@@ -55,13 +55,14 @@ class QuicCryptoRetryTokenTest {
 
         ByteBuffer retryTokenKeyBuf = ByteBuffer.allocateDirect(16);
         retryTokenKeyBuf.put(retryTokenKey).flip();
-        quicCryptoMock.when(QuicCrypto::retryTokenKeyBuf).thenReturn(retryTokenKeyBuf);
+        NativeCrypto retryTokenNativeCrypto = new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(retryTokenKeyBuf, null, null), CipherMode.TLS_AES_128_GCM_SHA256_ID);
+        quicCryptoMock.when(QuicCrypto::getRetryTokenCrypto).thenReturn(retryTokenNativeCrypto);
 
         nativeCrypto = QuicCrypto.getRetryTokenCrypto();
     }
 
     @AfterAll
-    static void tearDown() throws Exception {
+    static void tearDown() {
         if (quicCryptoMock != null) {
             quicCryptoMock.close();
         }

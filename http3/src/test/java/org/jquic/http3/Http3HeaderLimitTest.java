@@ -51,7 +51,7 @@ public class Http3HeaderLimitTest {
         // Create a request stream
         long requestStreamId = 0; // Client-initiated bidirectional
         ByteArrayOutputStream requestOut = new ByteArrayOutputStream();
-        connectionHandler.onNewClientStreamAllocated(requestStreamId, control, new DataOutputStream(requestOut), QuicConnectionControl.StreamType.Bidirectional);
+        connectionHandler.onNewClientStreamAllocated(requestStreamId, control, new DataOutputStream(requestOut), QuicConnectionControl.StreamType.Bidirectional, false);
         
         // Construct a HEADERS frame that is larger than the default limit (128KB + 1)
         int size = 128 * 1024 + 1;
@@ -76,8 +76,8 @@ public class Http3HeaderLimitTest {
         byte[] frameBytes = new byte[frameHeader.remaining()];
         frameHeader.get(frameBytes);
         
-        connectionHandler.onStreamDataReceived(requestStreamId, control, frameBytes, false, null);
-        connectionHandler.onStreamDataReceived(requestStreamId, control, largeHeadersPayload, false, null);
+        connectionHandler.onStreamDataReceived(requestStreamId, control, frameBytes, false, null, false);
+        connectionHandler.onStreamDataReceived(requestStreamId, control, largeHeadersPayload, false, null, false);
         
         // Verify that the stream was closed with H3_REQUEST_CANCELLED
         verify(control).closeStream(eq(requestStreamId), eq((long)Http3Server.H3_REQUEST_CANCELLED));

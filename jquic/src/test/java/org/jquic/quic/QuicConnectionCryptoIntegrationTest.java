@@ -218,6 +218,7 @@ class QuicConnectionCryptoIntegrationTest {
         connection.getConnectionPathController().updateIncomingLimits(TEST_ADDRESS, 1200);
 
         connection.setState(QuicConnection.State.ESTABLISHED);
+        connection.getConnectionPathController().onConnectionEstablished();
 
         ByteBuffer plaintext = ByteBuffer.allocateDirect(20);
         plaintext.put((byte) 0x01); // PING frame (ACK-eliciting)
@@ -352,6 +353,8 @@ class QuicConnectionCryptoIntegrationTest {
         assertEquals(QuicConnection.State.ESTABLISHED, connection.getState(),
                 "Server state should be ESTABLISHED after client Finished");
         assertNotNull(meta.clientApplicationCrypto, "1-RTT keys must be derived");
+
+        getOutboundPackets(connection);
 
         // -- Phase 3: 1-RTT packet (PING) --------------------------------------
         ByteBuffer pingFrame = ByteBuffer.allocateDirect(10);
@@ -680,8 +683,8 @@ class QuicConnectionCryptoIntegrationTest {
         ConnectionMetadata m = new ConnectionMetadata();
         m.clientMetadata = new ConnectionMetadata.ClientMetadataNegotiated("h3", 1000, List.of(),
                 Map.of(), 1200, 1000, 0, 0,
-                0, 0, 0, List.of(), 3, List.of(), CipherMode.TLS_AES_128_GCM_SHA256_ID, new byte[0]);
-        m.negotiatedIdleTimeoutMs = 10_000;
+                0, 0, 0, List.of(), 3, List.of(), CipherMode.TLS_AES_128_GCM_SHA256_ID, new byte[0], -1);
+        m.clientMetadata.maxIdleTimeoutMs = 10_000;
         m.clientHandshakeCrypto = new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(real1RttKey, new byte[12], hpSeg), CipherMode.TLS_AES_128_GCM_SHA256_ID);
         m.serverHandshakeCrypto = new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(real1RttKey, new byte[12], hpSeg), CipherMode.TLS_AES_128_GCM_SHA256_ID);
 
