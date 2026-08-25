@@ -289,8 +289,6 @@ public class QuicConnection implements TimeoutHeap.Entry {
             // Process each one and push any responses into the outbound queue so the
             // owning SelectorThread can pick them up without needing a callback.
             if (!earlyOneRttQueue.isEmpty()) {
-                logger.info("Draining {} early 1-RTT packet(s) for CID: {}",
-                        earlyOneRttQueue.size(), connectionId);
                 PoolBuffer snapshot;
                 while ((snapshot = earlyOneRttQueue.pollFirst()) != null) {
                     try {
@@ -940,20 +938,20 @@ public class QuicConnection implements TimeoutHeap.Entry {
         if (getState() == INITIAL) {
             PoolBuffer snapshot = packet.borrow();
             enqueueEarlyZeroRtt(snapshot);
-            packet.buf().position(packet.buf().limit());
+            SelectorThread.skipPacket(packet.buf());
             return;
         }
 
         if (getState() == CLOSED || getState() == CLOSING) {
             logger.debug("Not processing 0-RTT packet in {} state for CID: {}", getState(), connectionId);
-            packet.buf().position(packet.buf().limit());
+            SelectorThread.skipPacket(packet.buf());
             return;
         }
 
         if (connectionMetadata == null || connectionMetadata.zeroRttCrypto == null) {
             // Silently discard packets when 0-RTT keys are not available
             logger.warn("No 0-RTT keys available for CID: {}, discarding packet", connectionId);
-            packet.buf().position(packet.buf().limit());
+            SelectorThread.skipPacket(packet.buf());
             return;
         }
 
@@ -967,7 +965,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
         // Parse short header
         QuicPacketHeader header = QuicPacketHeader.parse(packet.buf(), connectionMetadata.zeroRttCrypto, applicationSpace.getLargestReceivedPacketNumber());
         if (header == null) {
-            packet.buf().position(packet.buf().limit());
+            SelectorThread.skipPacket(packet.buf());
             return;
         }
 
@@ -976,10 +974,10 @@ public class QuicConnection implements TimeoutHeap.Entry {
         updateTimeout();
 
         PoolBuffer plaintext;
-        int bodyLen = packet.buf().remaining();
+        int bodyLen = (int) header.payloadLength - header.pnLength;
 
         try {
-            plaintext = decryptAeadInPlace(packet, header, packet.buf().remaining(), connectionMetadata.zeroRttCrypto);
+            plaintext = decryptAeadInPlace(packet, header, (int) header.payloadLength - header.pnLength, connectionMetadata.zeroRttCrypto);
         } catch (Exception e) {
             logger.warn("0-RTT packet decryption/authentication failed for CID: {}, size: {} pn {} payloadLen {}",
                     connectionId, remaining, header.packetNumber, bodyLen, e);

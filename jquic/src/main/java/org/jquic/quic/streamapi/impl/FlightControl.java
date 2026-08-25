@@ -399,11 +399,11 @@ public class FlightControl {
      *  MAX_STREAM_DATA frame received.
      */
     public void onStreamMaxData(long streamId, long maximumData) {
-        logger.warn("Received MAX_STREAM_DATA for stream {}, new MAX {}", streamId,  maximumData);
+        logger.info("Received MAX_STREAM_DATA for stream {}, new MAX {}", streamId,  maximumData);
         StreamState state = streams.get(streamId);
         if (state != null && state.getMaxStreamData() < maximumData) {
             state.setMaxStreamData(maximumData);
-            logger.warn("Updated MAX_STREAM_DATA for stream {} to {}", streamId, maximumData);
+            logger.debug("Updated MAX_STREAM_DATA for stream {} to {}", streamId, maximumData);
         }
     }
 
@@ -411,10 +411,10 @@ public class FlightControl {
      *  MAX_DATA frame received.
      */
     public void onMaxData(long maximumData) {
-        logger.warn("Received MAX_DATA for connection, new MAX {}", maximumData);
+        logger.info("Received MAX_DATA for connection, new MAX {}", maximumData);
         if (maximumData > this.currentClientMaxData) {
             this.currentClientMaxData = maximumData;
-            logger.warn("Updated connection MAX_DATA to {}", maximumData);
+            logger.debug("Updated connection MAX_DATA to {}", maximumData);
         }
     }
 
@@ -458,19 +458,6 @@ public class FlightControl {
         }
     }
 
-//    /**
-//     * Stream data sent into a stream. Used to update byte counts.
-//     * @param offset - new offset
-//     */
-//    public void updateMaxSentOffset(StreamState state, long offset) {
-//        if (state == null) return;
-//
-//        long grow = state.updateMaxSentOffset(offset); // Also updates stream in-flight
-//        totalMaxSentOffsetsSum += grow;
-//        totalInFlightBytes.addAndGet(grow);
-//        logger.debug("Updated max offset by {} bytes for stream {} now it has {} offset and total in-flight {}", grow, state.getStreamId(), state.getMaxSentOffset(), totalInFlightBytes);
-//    }
-
     /**
      * User code has requested closing stream with an error.
      */
@@ -506,7 +493,7 @@ public class FlightControl {
         StreamState streamState = streams.get(streamId);
         if (streamState != null) {
             if (streamState.getState() != StreamState.State.RESET_SENT) {
-                logger.warn("Received ack for STREAM_RESET in state {} for stream {}", streamState.getState(), streamId);
+                logger.info("Received ack for STREAM_RESET in state {} for stream {}", streamState.getState(), streamId);
             }
             streamState.setState(StreamState.State.RESET_ACK_RECEIVED);
             streams.remove(streamId);

@@ -37,7 +37,7 @@ public class QuicKeyLogger {
     /**
      * Logs a secret to the SSLKEYLOGFILE if the property is set.
      *
-     * @param label        The secret label (e.g., "QUIC_CLIENT_HANDSHAKE_TRAFFIC_SECRET")
+     * @param label        The secret label (e.g., "CLIENT_HANDSHAKE_TRAFFIC_SECRET")
      * @param clientRandom The 32-byte client random
      * @param secret       The secret bytes
      */

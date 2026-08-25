@@ -326,7 +326,7 @@ public class SelectorThread extends Thread {
 
                 if (packetSummary.type() == QuicPacketHeader.PacketType.PADDING) continue;
 
-                if (packetSummary.type() != QuicPacketHeader.PacketType.ONE_RTT && packetSummary.version() == QuicVersion.UNKNOWN) {
+                if (packetSummary.type() != QuicPacketHeader.PacketType.ONE_RTT && packetSummary.type() != QuicPacketHeader.PacketType.ZERO_RTT && packetSummary.version() == QuicVersion.UNKNOWN) {
                     if (datagram.buf().position() > 0) {
                         break; // This is just trailing junk
                     }
@@ -494,6 +494,10 @@ public class SelectorThread extends Thread {
                         return conn;
                     });
 
+            if (connection.connectionMetadata.quicInitialVersion == QuicVersion.UNKNOWN) {
+                connection.connectionMetadata.quicInitialVersion = task.packetSummary.version();
+                connection.connectionMetadata.quicVersion = task.packetSummary.version();
+            }
 
             connection.setCurrentTimestamp(now);
             connection.connectionMetadata.retrySourceCid = retrySourceCid;
@@ -507,10 +511,10 @@ public class SelectorThread extends Thread {
             initializingConnections.remove(dcidKey);
 
             // Register this selector as the owner of the connection
-            logger.info("Selector-{}: Initial processed for CID: {}, first datagram processing finished",
+            logger.info("Selector-{}: queued datagram for CID: {}, processing finished",
                     threadId, task.allocatedCid);
         } catch (Exception e) {
-            logger.error("Selector-{}: Initial packet processing error for CID: {}", threadId, task.allocatedCid, e);
+            logger.error("Selector-{}: Queued packet processing error for CID: {}", threadId, task.allocatedCid, e);
         }
     }
 

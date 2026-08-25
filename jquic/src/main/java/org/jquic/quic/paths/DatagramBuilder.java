@@ -61,6 +61,7 @@ public class DatagramBuilder {
         frameSource.restart();
         if (readyPacket == null) {
             while (readyPacket == null && frameSource.peek() != null) {
+                logger.debug("Polling frame from queue ph: {} {} bytes", frameSource.peek().phase(), frameSource.peek().data().buf().remaining());
                 enqueueOneMoreFrame(currentTimeMs, dest, frameSource.poll());
             }
             if (forceBuffered && readyPacket == null) {
@@ -88,10 +89,10 @@ public class DatagramBuilder {
             throw new IllegalStateException("Packet already flushed");
         }
 
-        PoolBuffer packet = wrapPacket(currentTimeMs, dest);
+        DatagramToSend packet = wrapPacket(currentTimeMs, dest);
         if (packet != null) {
             if (space.phase == PacketPhase.INITIAL && firstPacket) {
-                ByteBuffer buf = packet.buf();
+                ByteBuffer buf = packet.data().buf();
                 int size = buf.remaining();
                 if (size < 1200) { // Zero padding
                     int start = buf.position();
@@ -103,7 +104,7 @@ public class DatagramBuilder {
                 }
                 firstPacket = false;
             }
-            readyPacket = new DatagramToSend(PacketSource.NEW, packet, ectMarking, dest);
+            readyPacket = packet;
         }
     }
 
@@ -126,7 +127,7 @@ public class DatagramBuilder {
         return maxFrameSize;
     }
 
-    public PoolBuffer wrapPacket(long currentTimestamp, InetSocketAddress dest) {
+    public DatagramToSend wrapPacket(long currentTimestamp, InetSocketAddress dest) {
         if (framesToSend.isEmpty())
             return null;
 
@@ -145,7 +146,7 @@ public class DatagramBuilder {
                         connectionMetadata.maxShortHeaderLength : connectionMetadata.maxLongHeaderLength;
                 int remaining = getMaxPacketSize() - GCM_TAG_LENGTH - maxHeaderLen;
 
-                logger.error("Strange overflow UDP max {} pack lim {} payload reminder {} (cap {}), frame size {} (send sum: {}, init start {})",
+                logger.error("Overflow UDP max {} pack lim {} payload reminder {} (cap {}), frame size {} (send sum: {}, init start {})",
                         connectionMetadata.clientMetadata.maxUdpPayloadSize, remaining, reminder, payload.buf().capacity(), frame.data().buf().remaining(),
                         framesToSendSumLen, start);
                 throw e;
@@ -161,14 +162,10 @@ public class DatagramBuilder {
     }
 
     public DatagramToSend makeDatagram(long currentTimestamp, InetSocketAddress dest, PoolBuffer payload, boolean ackEliciting) {
-        return new DatagramToSend(PacketSource.NEW,
-                makePacket(currentTimestamp, dest, payload, ackEliciting),
-                ectMarking,
-                dest
-                );
+        return makePacket(currentTimestamp, dest, payload, ackEliciting);
     }
 
-    private PoolBuffer makePacket(long currentTimestamp, InetSocketAddress dest, PoolBuffer payload, boolean ackEliciting) {
+    private DatagramToSend makePacket(long currentTimestamp, InetSocketAddress dest, PoolBuffer payload, boolean ackEliciting) {
         PoolBuffer datagram = writeBufferPool.requestWriteBuffer();
         try {
             long packetNumber = space.allocatePacketNumber();
@@ -220,7 +217,12 @@ public class DatagramBuilder {
             }
 
             space.onPacketSent(currentTimestamp, packetNumber, payload, ackEliciting, dest);
-            return datagram;
+            return new DatagramToSend(PacketSource.NEW,
+                    datagram,
+                    ectMarking,
+                    dest,
+                    packetNumber
+            );
         } catch (QuicException e) {
             datagram.release();
             payload.release();

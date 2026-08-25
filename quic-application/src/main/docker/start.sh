@@ -21,6 +21,8 @@ echo "Starting compiled BPF C program with root privileges..."
 chmod +x /app/loader
 strace -e bpf /app/loader &&
 
+export JQUIC_LOG_FILE=./jquic.log
+
 # Start the Java application in the background and capture its PID
 su - fedoresko -c "cd /app && ${JAVA_HOME}/bin/java -XX:+UnlockDiagnosticVMOptions -XX:+DebugNonSafepoints -Djava.net.preferIPv4Stack=true\
    -Dquic.defence.start_on=true --add-opens java.base/sun.nio.ch=ALL-UNNAMED --add-opens java.base/java.io=ALL-UNNAMED --enable-native-access=ALL-UNNAMED -Dlog.level=WARN\

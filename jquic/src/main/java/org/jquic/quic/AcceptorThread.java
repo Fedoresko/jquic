@@ -15,11 +15,11 @@
  */
 package org.jquic.quic;
 
-import org.apache.commons.codec.digest.MurmurHash3;
 import org.jquic.quic.buffers.BufferPool;
 import org.jquic.quic.buffers.PoolBuffer;
 import org.jquic.quic.crypto.QuicCrypto;
 import org.jquic.quic.struct.LruCache;
+import org.jquic.quic.struct.MurmurHash3;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -64,7 +64,7 @@ class AcceptorThread implements Runnable {
     }
 
     private static long getLongHash(byte[] bytes) {
-        long[] hash128 = MurmurHash3.hash128x64(bytes);
+        long[] hash128 = MurmurHash3.hash(bytes);
         return hash128[0] & Long.MAX_VALUE;
     }
 
@@ -88,7 +88,9 @@ class AcceptorThread implements Runnable {
                         continue; // skip remaining
                     }
 
-                    if (packetSummary.type() != QuicPacketHeader.PacketType.ONE_RTT && packetSummary.version() == QuicVersion.UNKNOWN) {
+                    if (packetSummary.type() != QuicPacketHeader.PacketType.ONE_RTT &&
+                        packetSummary.type() != QuicPacketHeader.PacketType.ZERO_RTT &&
+                        packetSummary.version() == QuicVersion.UNKNOWN) {
                         logger.info("[Acceptor] Unsupported QUIC version. Sending Version Negotiation.");
                         // Send Version Negotiation: DCID = received SCID, SCID = received DCID
 
@@ -105,7 +107,7 @@ class AcceptorThread implements Runnable {
                     }
 
                     byte[] dcid = packetSummary.dcid();
-                    logger.debug("[Acceptor] Received {} packet, DCID: {}, SCID {}", packetSummary.type(), dcid == null ? "null" : HexFormat.of().formatHex(dcid), packetSummary.scid() == null ? "null" : HexFormat.of().formatHex(packetSummary.scid()));
+                    logger.debug("[Acceptor] Received {} packet, DCID: {}, SCID {}", packetSummary.type(), HexFormat.of().formatHex(dcid), packetSummary.scid() == null ? "null" : HexFormat.of().formatHex(packetSummary.scid()));
 
                     SelectorCID assignedSelectorId = initialSelectorMap.get(ByteBuffer.wrap(dcid));
                     if (assignedSelectorId != null) {
@@ -125,7 +127,8 @@ class AcceptorThread implements Runnable {
                             // Forward this packet to the appropriate Selector
                             forwardToSelector(owningSelectorId, buffer, sender);
                         } else {
-                            if (packetSummary.type() == QuicPacketHeader.PacketType.INITIAL && buffer.buf().remaining() >= MINIMUM_INITIAL_PACKET) {
+                            if (packetSummary.type() == QuicPacketHeader.PacketType.INITIAL
+                                    && buffer.buf().remaining() >= MINIMUM_INITIAL_PACKET) {
                                 // LONG HEADER: Generate CID and enqueue for handshake processing
                                 long newCid = cidGenerator.getAndIncrement();
                                 logger.warn("[Acceptor] First initial packet, allocated CID: {}, enqueueing for handshake", newCid);
@@ -139,6 +142,18 @@ class AcceptorThread implements Runnable {
                                 selectors[selectorId].forwardHandshake(
                                         new HandshakeTask(buffer.borrow(), sender, newCid, packetSummary)
                                 );
+                            } else if (packetSummary.type() == QuicPacketHeader.PacketType.ZERO_RTT) {
+                                long newCid = cidGenerator.getAndIncrement();
+                                logger.warn("[Acceptor] First zero-rtt packet, allocated CID: {}, enqueueing for handshake", newCid);
+
+                                int selectorId = (int) (getLongHash(dcid) % selectors.length);
+                                initialSelectorMap.put(ByteBuffer.wrap(dcid), new SelectorCID(selectorId, newCid));
+                                cidToSelectorMap.put(newCid, selectorId);
+                                buffer.buf().rewind();
+                                selectors[selectorId].forwardHandshake(
+                                        new HandshakeTask(buffer.borrow(), sender, newCid, packetSummary)
+                                );
+
                             } else if (packetSummary.type() != QuicPacketHeader.PacketType.INITIAL) {
                                 skipPacket(buffer.buf());
 

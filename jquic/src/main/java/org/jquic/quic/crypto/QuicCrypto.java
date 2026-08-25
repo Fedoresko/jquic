@@ -561,6 +561,8 @@ public class QuicCrypto {
                 byte[] transcriptHash = metadata.transcriptHash();
                 byte [] zeroRttTrafficSecret = hkdfExpandLabel(earlySecret, "c e traffic", transcriptHash, 32);
 
+                QuicKeyLogger.log("CLIENT_EARLY_TRAFFIC_SECRET", metadata.clientMetadata.clientRandom, zeroRttTrafficSecret);
+
                 byte[] hp = deriveHp(metadata.quicVersion, zeroRttTrafficSecret, parsed.selectedCipherSuite);
                 SecretKey key = deriveKey(metadata.quicVersion, zeroRttTrafficSecret, parsed.selectedCipherSuite);
                 byte[] iv = deriveIv(metadata.quicVersion, zeroRttTrafficSecret);

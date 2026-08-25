@@ -62,7 +62,7 @@ public class ConnectionPathController implements TimeoutHeap.Entry {
     private InetSocketAddress primaryAddress;
     private long nextShedNs = 0;
     private final static Logger logger = LoggerFactory.getLogger(ConnectionPathController.class);
-    
+
     private CongestionControl congestionControl;
     private boolean hasAmpBlock = false;
 
@@ -239,11 +239,11 @@ public class ConnectionPathController implements TimeoutHeap.Entry {
             }
 
             if (path.nextSendSchedNs == 0) {
-                schedNextDatagram(path, currentTimeMs);
+                schedNextDatagram(path, currentTimeMs, currentNanos);
                 path.nextSendSchedNs = currentNanos;
             }
             if (path.nextDatagram == null) {
-                schedNextDatagram(path, currentTimeMs);
+                schedNextDatagram(path, currentTimeMs, currentNanos);
             }
 
             if (path.nextDatagram != null) {
@@ -253,11 +253,11 @@ public class ConnectionPathController implements TimeoutHeap.Entry {
 
                 path.nextDatagram = null;
 
-                schedNextDatagram(path, currentTimeMs);
+                schedNextDatagram(path, currentTimeMs, currentNanos);
 
                 return outboundPacket;
             } else {
-                schedNextDatagram(path, currentTimeMs);
+                schedNextDatagram(path, currentTimeMs, currentNanos);
             }
 
             if (path.nextSendSchedNs < currentNanos) { path.nextSendSchedNs = currentNanos; } // Do not let the schedule fall back too late.
@@ -275,9 +275,8 @@ public class ConnectionPathController implements TimeoutHeap.Entry {
                 : (int) defaultMax;
     }
 
-    private void schedNextDatagram(ConnectionPath path, long currentTimeMs) {
-        boolean urgent = false;
-        if ( path.nextDatagram == null) { path.nextDatagram = initDatagramBuilder.getPacket(currentTimeMs, path.address, true, getMaxPacketSize(path), initQueue); urgent = true; }
+    private void schedNextDatagram(ConnectionPath path, long currentTimeMs, long currentTimeNs) {
+        if ( path.nextDatagram == null) path.nextDatagram = initDatagramBuilder.getPacket(currentTimeMs, path.address, true, getMaxPacketSize(path), initQueue);
         if ( path.nextDatagram == null) path.nextDatagram = handshakeDatagramBuilder.getPacket(currentTimeMs, path.address, true, getMaxPacketSize(path), handshakeQueue);
         if ( path.nextDatagram == null) path.nextDatagram = applicationDatagramBuilder.getPacket(currentTimeMs, path.address, true, getMaxPacketSize(path), applicationQueue);
 
@@ -288,25 +287,28 @@ public class ConnectionPathController implements TimeoutHeap.Entry {
         WindowedStatCounter windowedStatCounter = path.windowedStatCounter;
         CongestionControl congestionControl = path.congestionControl != null ? path.congestionControl : INITAL_CC;
 
-        path.nextSendSchedNs += (urgent) ? 0 : congestionControl.getDelay(
-            currentTimeMs,
-            path.nextDatagram.data().buf().remaining(),
-            connection.getConnectionId(),
-            windowedStatCounter.getSmoothedRtt(),
-            windowedStatCounter.getLatestRtt(),
-            windowedStatCounter.getMinRtt(),
-            windowedStatCounter.getBytesAckedInLastRtt(),
-            windowedStatCounter.getBytesLostInLastRtt(),
-            windowedStatCounter.getBytesAcked(),
-            windowedStatCounter.getBytesLost(),
-            windowedStatCounter.getPacketsAcked(),
-            windowedStatCounter.getLossTime(),
-            windowedStatCounter.totalInFlightBytes(),
-            10000,
-            0,
-            windowedStatCounter.getServerCeCounter(),
-            windowedStatCounter.getIntervalCePackets()
+        long delay = congestionControl.getDelay(
+                currentTimeNs, currentTimeMs,
+                path.nextDatagram.data().buf().remaining(),
+                connection.getConnectionId(),
+                windowedStatCounter.getSmoothedRtt(),
+                windowedStatCounter.getLatestRtt(),
+                windowedStatCounter.getMinRtt(),
+                windowedStatCounter.getBytesAckedInLastRtt(),
+                windowedStatCounter.getBytesLostInLastRtt(),
+                windowedStatCounter.getBytesAcked(),
+                windowedStatCounter.getBytesLost(),
+                windowedStatCounter.getPacketsAcked(),
+                windowedStatCounter.getLossTime(),
+                windowedStatCounter.getLastAckTime(),
+                windowedStatCounter.totalInFlightBytes(),
+                10000,
+                0,
+                windowedStatCounter.getServerCeCounter(),
+                windowedStatCounter.getIntervalCePackets()
         );
+
+        path.nextSendSchedNs += delay;
     }
 
     private boolean isAmplificationBlock(ConnectionPath path) {
@@ -393,7 +395,7 @@ public class ConnectionPathController implements TimeoutHeap.Entry {
         if (sender == null) sender = primaryAddress;
 
         if (!pathMap.containsKey(sender)) {
-            logger.error("New Sender address not found for CID {}: {}", connection.getConnectionId(), sender);
+            logger.info("New Sender address not found for CID {}: {}", connection.getConnectionId(), sender);
             if (pathMap.size() >= MAX_PATH_ID) {
                 connection.closeConnection(QuicTransportError.PROTOCOL_VIOLATION, "Too many active paths for CID: " + connection.getConnectionId());
                 return false;

@@ -21,5 +21,5 @@ import org.jquic.quic.linux.ECT;
 
 import java.net.SocketAddress;
 
-public record DatagramToSend(PacketSource packetSource, PoolBuffer data, ECT ectMarking, SocketAddress dest) {
+public record DatagramToSend(PacketSource packetSource, PoolBuffer data, ECT ectMarking, SocketAddress dest, long packetNumber) {
 }

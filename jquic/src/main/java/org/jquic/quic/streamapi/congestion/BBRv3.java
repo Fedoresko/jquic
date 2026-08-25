@@ -15,6 +15,7 @@
  */
 package org.jquic.quic.streamapi.congestion;
 
+import org.jquic.quic.linux.ECT;
 import org.jquic.quic.streamapi.CongestionControl;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,9 +45,17 @@ public class BBRv3 implements CongestionControl {
     private long startupBwNotIncreasingCount = 0;
     private long lastStartupRoundMs = 0;
 
-    private static final long INITIAL_CWND = 12000; // 10 packets * 1200 bytes
+    private static final long INITIAL_CWND = 38400; // 32 packets * 1200 bytes
     private static final long MIN_RTT_PROBE_INTERVAL_MS = 10000; // 10 seconds
     private static final long PROBE_RTT_DURATION_MS = 200; // 200ms
+    
+    // BBRv3 L4S (ECN) parameters
+    private static final double G = 0.0625; // EWMA weight for alpha (1/16)
+    private double alpha = 0.0;
+    private long lastAlphaUpdateTimeMs = -1;
+    private long lastEcnReactionTimeMs = -1;
+    private long lastCeCounterAtLastReaction = 0;
+
     private long probeRttDoneTime = 0;
 
     // PROBE_BW parameters
@@ -64,7 +73,8 @@ public class BBRv3 implements CongestionControl {
     private long lastAckedBytes = 0;
     private long lastLostBytes = 0;
     private long lossEpochStartTime = -1;
-    private long lossEpochStartCwnd = 0;
+    private long lastLossRoundTimeMs = 0;
+    private boolean lossInRound = false;
     
     // For testing
     public long getCwnd() {
@@ -72,10 +82,12 @@ public class BBRv3 implements CongestionControl {
     }
 
     @Override
-    public long getDelay(long currentTimeMs, long dataSize, long connectionId, long smoothedRtt, long lastRtt, long minRtt,
+    public long getDelay(long currentTimeNanos, long currentTimeMs, long dataSize, long connectionId, long smoothedRtt, long lastRtt, long minRtt,
                          long bytesAckedInRtt, long bytesLostInRtt, long bytesAckedInWindow, long bytesLostInWindow, long packetsAckedInWindow,
-                         long lastLostTimeMs, long inFlightData, long receiveBufferRemaining, long sendBufferSize,
+                         long lastLostTimeMs, long lastAckedTimeMs, long inFlightData, long receiveBufferRemaining, long sendBufferSize,
                          long ceCounter, long cePacketsInWindow) {
+
+        long rtt = smoothedRtt > 0 ? smoothedRtt : 100;
 
         // 0. Update extraAcked (for CWND bound)
         if (lastAckedBytes > 0 && bytesAckedInWindow > lastAckedBytes) {
@@ -84,25 +96,69 @@ public class BBRv3 implements CongestionControl {
         }
         lastAckedBytes = bytesAckedInWindow;
 
-        if (currentTimeMs - lastExtraAckedTimestamp >= (smoothedRtt > 0 ? smoothedRtt * 10 : 1000)) {
+        if (currentTimeMs - lastExtraAckedTimestamp >= rtt * 10) {
             maxExtraAcked = extraAcked;
             extraAcked = 0;
             lastExtraAckedTimestamp = currentTimeMs;
         }
 
-        // 0.1 Loss Response (BBRv3)
-        if (bytesLostInWindow > lastLostBytes) {
-            if (lossEpochStartTime == -1 || currentTimeMs - lossEpochStartTime > (smoothedRtt > 0 ? smoothedRtt : 100)) {
-                lossEpochStartTime = currentTimeMs;
-                lossEpochStartCwnd = cwnd;
-                cwnd = (long) (cwnd * 0.7); // BBRv3 beta loss factor typically 0.7
-                logger.debug("Loss detected on connection {}. CWND reduced to {}", connectionId, cwnd);
+        // 0.1 ECN (L4S) Handling
+        if (currentTimeMs - lastAlphaUpdateTimeMs >= rtt) {
+            if (packetsAckedInWindow > 0) {
+                double fraction = (double) cePacketsInWindow / packetsAckedInWindow;
+                alpha = (1.0 - G) * alpha + G * fraction;
+                lastAlphaUpdateTimeMs = currentTimeMs;
+            } else if (cePacketsInWindow > 0) {
+                // If we have marks but no packets acked (shouldn't happen with these params usually, 
+                // but just in case), we still want to move alpha.
+                alpha = (1.0 - G) * alpha + G;
+                lastAlphaUpdateTimeMs = currentTimeMs;
             }
-        } else if (lossEpochStartTime != -1 && currentTimeMs - lossEpochStartTime > (smoothedRtt > 0 ? smoothedRtt : 100)) {
-            lossEpochStartTime = -1;
+        }
+
+        // 0.2 Loss Response (BBRv3)
+        if (bytesLostInWindow > lastLostBytes) {
+            lossInRound = true;
+            if (lossEpochStartTime == -1) {
+                lossEpochStartTime = currentTimeMs;
+            }
+        }
+        
+        if (currentTimeMs - lastLossRoundTimeMs >= rtt) {
+            if (!lossInRound) {
+                lossEpochStartTime = -1;
+            }
+            lossInRound = false;
+            lastLossRoundTimeMs = currentTimeMs;
         }
         lastLostBytes = bytesLostInWindow;
 
+        // 0.3 ECN Reaction
+        long ecnReduction = 0;
+        if (ceCounter > lastCeCounterAtLastReaction) {
+            if (currentTimeMs - lastEcnReactionTimeMs >= rtt) {
+                // BBRv3 reduction due to ECN: similar to Prague/DCTCP but integrated into BBR logic
+                // We apply a multiplicative decrease to CWND based on alpha.
+                double reductionFactor = alpha / 2.0;
+                ecnReduction = (long) (cwnd * reductionFactor);
+                
+                // Ensure at least some reduction if alpha is positive and CWND is large enough
+                if (ecnReduction == 0 && alpha > 0.001 && cwnd > 0) {
+                    ecnReduction = 1;
+                }
+                
+                if (ecnReduction > 0) {
+                    lastEcnReactionTimeMs = currentTimeMs;
+                    lastCeCounterAtLastReaction = ceCounter;
+                    logger.debug("ECN CE detected on connection {}. Alpha: {}, CWND reduction: {}",
+                            connectionId, alpha, ecnReduction);
+                } else {
+                    lastEcnReactionTimeMs = currentTimeMs;
+                    lastCeCounterAtLastReaction = ceCounter;
+                }
+            }
+        }
+        
         // 1. Update minRtt
         if (minRtt < this.minRtt) {
             this.minRtt = minRtt;
@@ -114,7 +170,6 @@ public class BBRv3 implements CongestionControl {
 
         // 2. Update Bandwidth Estimate (maxBw)
         long currentBw = 0;
-        long rtt = smoothedRtt > 0 ? smoothedRtt : 100;
         if (bytesAckedInRtt > 0) {
             currentBw = bytesAckedInRtt / rtt;
         }
@@ -152,17 +207,23 @@ public class BBRv3 implements CongestionControl {
             long bdp = maxBw * this.minRtt;
             long targetCwnd = (long) (bdp * cwndGain) + maxExtraAcked;
             if (lossEpochStartTime != -1) {
-                // If in loss recovery, we bound CWND to prevent it from growing beyond 
-                // the reduced level until the recovery period ends.
-                long recoveryCwnd = (long) (lossEpochStartCwnd * 0.7);
-                cwnd = Math.min(recoveryCwnd, targetCwnd);
-            } else {
-                cwnd = targetCwnd;
+                // In BBRv3, loss response is more integrated. 
+                // We apply a Beta factor (0.7) to the target CWND if losses were recently seen.
+                targetCwnd = (long) (targetCwnd * 0.7);
             }
+            
+            cwnd = targetCwnd - ecnReduction;
         }
-        cwnd = Math.max(cwnd, INITIAL_CWND);
-        if (state == State.PROBE_RTT) {
-            cwnd = 4800; // Force it again to override Math.max(cwnd, INITIAL_CWND)
+        
+        // Final sanity checks on CWND
+        if (state != State.PROBE_RTT) {
+            // During STARTUP, we keep CWND at least at INITIAL_CWND to allow fast ramp-up.
+            // In other states, we allow CWND to drop to MIN_CWND (4800) to respond to congestion.
+            if (state == State.STARTUP) {
+                cwnd = Math.max(cwnd, INITIAL_CWND);
+            } else {
+                cwnd = Math.max(cwnd, 4800);
+            }
         }
 
         // 5. Decision & Pacing
@@ -302,8 +363,13 @@ public class BBRv3 implements CongestionControl {
     }
 
     @Override
+    public ECT getEctMarking() {
+        return ECT.ECT_1; // Use ECT(1) for BBRv3 L4S optimization
+    }
+
+    @Override
     public int timeWindowMs() {
-        return 0; // 0ms
+        return 32; // Standard 32ms window for L4S stats
     }
 }
 

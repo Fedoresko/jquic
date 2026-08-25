@@ -353,7 +353,7 @@ class PacketNumberSpaceTest {
         PacketNumberSpace space = new PacketNumberSpace(PacketPhase.INITIAL);
         space.setConnectionPathController(connectionPathController1);
         connectionPathController1.setCongestionControl(new CongestionControl() {
-            public long getDelay(long currentTimeMs, long dataSize, long connectionId, long smoothedRtt, long lastRtt, long minRtt, long bytesAckedInRtt, long bytesLostInRtt, long bytesAckedInWindow, long bytesLostInWindow, long packetsAckedInWindow, long lastLostTimeMs, long inFlightData, long receiveBufferRemaining, long sendBufferSize, long ceCounter, long cePacketsInWindow) {
+            public long getDelay(long currentTimeNanos, long currentTimeMs, long dataSize, long connectionId, long smoothedRtt, long lastRtt, long minRtt, long bytesAckedInRtt, long bytesLostInRtt, long bytesAckedInWindow, long bytesLostInWindow, long packetsAckedInWindow, long lastLostTimeMs, long lastAckedTimeMs, long inFlightData, long receiveBufferRemaining, long sendBufferSize, long ceCounter, long cePacketsInWindow) {
                 return 0;
             }
             public int timeWindowMs() {

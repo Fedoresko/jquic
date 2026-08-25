@@ -49,9 +49,9 @@ public class TcpPrague implements CongestionControl {
     private long lastCeCounterAtLastReaction = 0;
 
     @Override
-    public long getDelay(long currentTimeMs, long dataSize, long connectionId, long smoothedRtt, long lastRtt, long minRtt,
+    public long getDelay(long currentTimeNanos, long currentTimeMs, long dataSize, long connectionId, long smoothedRtt, long lastRtt, long minRtt,
                          long bytesAckedInRtt, long bytesLostInRtt, long bytesAckedInWindow, long bytesLostInWindow, long packetsAckedInWindow,
-                         long lastLostTimeMs, long inFlightData, long receiveBufferRemaining, long sendBufferSize,
+                         long lastLostTimeMs, long lastAckedTimeMs, long inFlightData, long receiveBufferRemaining, long sendBufferSize,
                          long ceCounter, long cePacketsInWindow) {
 
         if (lastUpdateTimeMs == -1) {

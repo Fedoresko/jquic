@@ -343,8 +343,6 @@ public class LinuxEcnSocket implements AutoCloseable {
 
             InetAddress address = InetAddress.getByAddress(ipBytes);
 
-            log.warn("Packet pos: {} len: {} addr: {} port: {}", dst.position(), bytesRead, address, port);
-
             return new InetSocketAddress(address, port);
         } catch (Throwable t) {
             throw new IOException(t);

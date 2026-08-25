@@ -1,5 +1,5 @@
 ARG BASE_IMAGE=martenseemann/quic-network-simulator-endpoint:latest
-ARG JAR_FILE=build/libs/quic-application-1.0-all.jar
+ARG JAR_FILE=build/libs/quic-application-1.1-all.jar
 ARG ENTRYPOINT_SCRIPT=/app/start.sh
 
 # --- Stage 1: Temporary Workspace (Will be completely discarded) ---

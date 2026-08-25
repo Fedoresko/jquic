@@ -26,6 +26,7 @@ import org.jquic.quic.crypto.NativeCrypto;
 import org.jquic.quic.crypto.QuicCrypto;
 import org.jquic.quic.packets.PacketNumberSpace;
 import org.jquic.quic.paths.DatagramToSend;
+import org.jquic.quic.streamapi.CongestionControl;
 import org.jquic.quic.streamapi.ConnectionStreamManager;
 import org.jquic.quic.streamapi.QuicApplicationProtocol;
 import org.jquic.quic.streamapi.QuicApplicationProtocolConnectionHandler;
@@ -168,9 +169,6 @@ class QuicConnectionTest {
         if (frameBuilderMock != null) {
             frameBuilderMock.close();
         }
-//        if (mockedConnectionMetadata != null) {
-//            mockedConnectionMetadata.close();
-//        }
     }
 
     // ========================================================================
@@ -904,6 +902,16 @@ class QuicConnectionTest {
         connection.connectionMetadata.clientCid = ByteBuffer.allocate(8).putLong(TEST_CID).array();
         setupMockTlsMetadata();
         connection.getConnectionPathController().onConnectionEstablished();
+        connection.getConnectionPathController().setCongestionControl(new CongestionControl() {
+            @Override
+            public long getDelay(long currentTimeNanos, long currentTimeMs, long dataSize, long connectionId, long smoothedRtt, long lastRtt, long minRtt, long bytesAckedInRtt, long bytesLostInRtt, long bytesAckedInWindow, long bytesLostInWindow, long packetsAckedInWindow, long lastLostTimeMs, long lastAckedTimeMs, long inFlightData, long receiveBufferRemaining, long sendBufferSize, long ceCounter, long cePacketsInWindow) {
+                return 0;
+            }
+            @Override
+            public int timeWindowMs() {
+                return 0;
+            }
+        });
     }
 
     private void setupMockTlsMetadata() {

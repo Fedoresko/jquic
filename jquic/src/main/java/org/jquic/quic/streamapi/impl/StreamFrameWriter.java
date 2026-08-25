@@ -103,7 +103,6 @@ public class StreamFrameWriter {
      * Format: type(0x10) | maximum_data
      */
     public static PoolBuffer encodeMaxDataFrame(BufferPool pool, long maximumData) {
-        logger.warn("maximum data frame is {}", maximumData);
         PoolBuffer buffer = pool.requestWriteBuffer();
         int start = buffer.buf().position();
         buffer.buf().put(FRAME_TYPE_MAX_DATA);
@@ -119,7 +118,7 @@ public class StreamFrameWriter {
      * Frame type: 0x14
      */
     public static PoolBuffer encodeDataBlockedFrame(BufferPool pool, long limit) {
-        logger.warn("Encoding data blocked frame");
+        logger.info("Encoding data blocked frame");
         PoolBuffer buffer = pool.requestWriteBuffer();
         int start = buffer.buf().position();
         buffer.buf().put((byte) 0x14); // DATA_BLOCKED frame type
@@ -135,7 +134,7 @@ public class StreamFrameWriter {
      * Format: type(0x05) | stream_id | error_code
      */
     public static PoolBuffer encodeStopSendingFrame(BufferPool pool, long streamId, long errorCode) {
-        logger.warn("Stream {} has stop sending", streamId);
+        logger.info("Stream {} has stop sending", streamId);
         PoolBuffer buffer = pool.requestWriteBuffer();
         int start = buffer.buf().position();
         buffer.buf().put(FRAME_TYPE_STOP_SENDING);

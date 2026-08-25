@@ -142,6 +142,8 @@ public class SessionTicketService {
                     log.debug("Found suitable PSK identity: {}", selectedIdentityIdx);
                 } catch (Exception e) {
                     log.info("Failed to parse PSK identity: {}", selectedIdentityIdx, e);
+                } finally {
+                    buf.position(currentPos + identityLen + 4);
                 }
             } else {
                 buf.position(buf.position() + identityLen + 4);
@@ -287,27 +289,18 @@ public class SessionTicketService {
     static void verifyBinder(byte[] transcriptHash, byte[] psk, byte[] binderProvided) throws QuicException {
         try {
             // Early Secret = HKDF-Extract(0, PSK)
-            log.warn("PSK: {}", HexFormat.of().formatHex(psk));
-
             byte[] earlySecret = QuicCrypto.hkdfExtract(new byte[32], psk);
-
-            log.warn("Early secret {} ", HexFormat.of().formatHex(earlySecret));
 
             // resumption_binder_key = HKDF-Expand-Label(earlySecret, "res binder",   transcript_hash(empty))
             // Empty transcript hash (SHA-256) is e3b0c442... but HKDF-Expand-Label in TLS 1.3
             // uses a zero-length context if no context is provided.
             // RFC 8446 Section 7.1: "The 'context' for the resumption binder is a zero-length Octet String."
             byte[] resumptionBinderKey = QuicCrypto.hkdfExpandLabel(earlySecret, "res binder", QuicCrypto.sha256(new byte[0]), 32);
-
-            log.warn("RESUMPTION KEY {} ", HexFormat.of().formatHex(resumptionBinderKey));
-
             byte[] verifier = QuicCrypto.hkdfExpandLabel(resumptionBinderKey, "finished", new byte[0], 32);
 
             // Binder = HMAC(resumptionBinderKey, transcriptHash)
             Mac mac = QuicCrypto.MAC.get();
             mac.init(new SecretKeySpec(verifier, "HmacSHA256"));
-
-            log.warn("TRANSCRIPT HASH {} ", HexFormat.of().formatHex(transcriptHash));
 
             byte[] expectedBinder = mac.doFinal(transcriptHash);
 

@@ -727,6 +727,7 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
                 // HTTP/3 framing: each frame = type (varint) + length (varint) + payload
                 putHttp3Frame(outputStream, 0x01, headerBlock);
                 putHttp3Frame(outputStream, 0x00, body);
+                outputStream.close();
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }

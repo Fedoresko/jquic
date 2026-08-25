@@ -24,7 +24,8 @@ public class WindowedStatCounter {
     long bytesLostInWindow = 0;
     long bytesLostInLastRtt = 0;
     // Loss detection
-    private long lossTime = 0; // Time at which next packet will be considered lost
+    private long lossTime = 0; // Time at which packet loss detected
+    private long ackedTime = 0; // Time at which last packed was acked
 
     long totalSentBytes = 0;
     long totalAckedBytes = 0;
@@ -52,6 +53,8 @@ public class WindowedStatCounter {
     }
 
     public void onAckReceived(long timestampMs, long ceCounter) {
+        ackedTime = timestampMs;
+
         if (serverCeCounter == -1) {
             serverCeCounter = ceCounter;
         }
@@ -88,13 +91,7 @@ public class WindowedStatCounter {
      * @param ackDelay ACK delay reported by peer (in microseconds)
      */
     public void updateRtt(long timestampMs, long packetSentTime, long ackDelay) {
-        latestRtt = (int)(timestampMs - packetSentTime);
-
-        // Adjust for ack delay (convert from microseconds to milliseconds)
-        int adjustedRtt = latestRtt;
-        if (latestRtt > minRtt + (ackDelay / 1000)) {
-            adjustedRtt = latestRtt - (int)(ackDelay / 1000);
-        }
+        latestRtt = (int)(timestampMs - packetSentTime) - (int)(ackDelay / 1000);
 
         // Update min RTT
         if (latestRtt < minRtt) {
@@ -107,9 +104,9 @@ public class WindowedStatCounter {
             rttVar = latestRtt / 2;
         } else {
             // EWMA smoothing (RFC 9002 Section 5.3)
-            int rttVarSample = Math.abs(smoothedRtt - adjustedRtt);
+            int rttVarSample = Math.abs(smoothedRtt - latestRtt);
             rttVar = (3 * rttVar + rttVarSample) / 4;
-            smoothedRtt = (7 * smoothedRtt + adjustedRtt) / 8;
+            smoothedRtt = (7 * smoothedRtt + latestRtt) / 8;
         }
 
         log.debug("RTT updated - latest: {}ms, smoothed: {}ms, var: {}ms, min: {}ms",
@@ -190,5 +187,9 @@ public class WindowedStatCounter {
 
     public long getServerCeCounter() {
         return serverCeCounter;
+    }
+
+    public long getLastAckTime() {
+        return ackedTime;
     }
 }

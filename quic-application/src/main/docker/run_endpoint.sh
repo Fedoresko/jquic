@@ -21,7 +21,7 @@ else
 fi
 
 case "$TESTCASE" in
-    "handshake"|"transfer"|"multistream"|"multiple_connections"|"retry"|"chacha20"|"http3"|"multiplexing"|"ecn"|"longrtt"|"resumption"|"zerortt"|"blackhole"|"keyupdate"|"amplificationlimit"|"handshakeloss"|"transferloss"|"handshakecorruption"|"transfercorruption"|"ipv6"|"v2"|"rebind-port"|"rebind-addr"|"connectionmigration")
+    "handshake"|"transfer"|"multistream"|"multiple_connections"|"retry"|"chacha20"|"http3"|"multiplexing"|"ecn"|"longrtt"|"resumption"|"zerortt"|"blackhole"|"keyupdate"|"amplificationlimit"|"handshakeloss"|"transferloss"|"handshakecorruption"|"transfercorruption"|"ipv6"|"v2"|"rebind-port"|"rebind-addr")
         echo "Valid testcase matched: $TESTCASE. Proceeding to boot..."
         ;;
     *)
@@ -32,8 +32,9 @@ esac
 
 echo "Starting compiled BPF C program with root privileges..."
 chmod +x /app/loader
-strace -e bpf /app/loader &
-mkdir /logs
+/app/loader
+mkdir -p /logs
+chmod 777 /logs
 tcpdump -i any -w /logs/capture.pcap -U &
 
 # Give tcpdump half a second to initialize its hook into the kernel
@@ -52,6 +53,8 @@ QUIC_DEFENCE_DEFAULT="false"
 if [ "$TESTCASE" == "retry" ]; then
   QUIC_DEFENCE_DEFAULT="true"
 fi
+
+export JQUIC_LOG_FILE="/logs/jquic.log"
 
 exec ${JAVA_HOME}/bin/java -Djava.net.preferIPv4Stack=false\
    --add-opens java.base/sun.nio.ch=ALL-UNNAMED --add-opens java.base/java.io=ALL-UNNAMED --enable-native-access=ALL-UNNAMED -Dlog.level=INFO\

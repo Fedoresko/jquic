@@ -20,8 +20,10 @@ import org.jquic.quic.linux.ECT;
 public interface CongestionControl {
     /**
      * Make a decision to delay packet sending.
+     * currentTimeNanos and currentTimeMs do not relate and may have different 0-points in time
      *
-     * @param currentTimeMs          - current time milliseconds
+     * @param currentTimeNanos       - current time nanoseconds (could be different time scales with currentTimeMs)
+     * @param currentTimeMs          - current time milliseconds (could be different time scales with currentTimeNanos)
      * @param dataSize               - packet size
      * @param connectionId           - connectionId
      * @param smoothedRtt            - EWMA smoothed RTT
@@ -33,6 +35,7 @@ public interface CongestionControl {
      * @param bytesLostInWindow      - number of bytes of timed out packets during the last time window
      * @param packetsAckedInWindow   - number of packets acknowledged during the last time window
      * @param lastLostTimeMs         - time last loss detected in milliseconds
+     * @param lastAckedTimeMs        - time last ACK received in milliseconds
      * @param inFlightData           - amount of data sent, not yet acknowledged
      * @param receiveBufferRemaining - amount of free space in receive buffer (buffer capacity minus received data, not yet processed)
      * @param sendBufferSize         - number of bytes queued for sending
@@ -40,9 +43,9 @@ public interface CongestionControl {
      * @param cePacketsInWindow      - number of CE marked packets in the last time window
      * @return the number of nanoseconds paket should be delayed.
      */
-    long getDelay(long currentTimeMs, long dataSize, long connectionId, long smoothedRtt, long lastRtt, long minRtt,
+    long getDelay(long currentTimeNanos, long currentTimeMs, long dataSize, long connectionId, long smoothedRtt, long lastRtt, long minRtt,
                   long bytesAckedInRtt, long bytesLostInRtt, long bytesAckedInWindow, long bytesLostInWindow, long packetsAckedInWindow,
-                  long lastLostTimeMs, long inFlightData, long receiveBufferRemaining, long sendBufferSize,
+                  long lastLostTimeMs, long lastAckedTimeMs, long inFlightData, long receiveBufferRemaining, long sendBufferSize,
                   long ceCounter, long cePacketsInWindow);
 
     /**

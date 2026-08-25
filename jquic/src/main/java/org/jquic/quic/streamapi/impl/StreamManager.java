@@ -280,7 +280,7 @@ public class StreamManager implements ConnectionStreamManager {
         }
 
         private void handleFrame(MaxStreamDataFrameData frame) {
-            logger.warn("Processing MaxStreamDataFrameData {} max: {}", frame.streamId, frame.maximumData);
+            logger.info("Processing MaxStreamDataFrameData {} max: {}", frame.streamId, frame.maximumData);
             flightControl.onStreamMaxData(frame.streamId, frame.maximumData);
         }
 
@@ -337,7 +337,7 @@ public class StreamManager implements ConnectionStreamManager {
             if (buffer != null) {
                 buffer.free();
             } else {
-                logger.warn("onStreamResetAck: stream {} is already gone", streamId);
+                logger.info("onStreamResetAck: stream {} is already gone", streamId);
             }
         }
     }
@@ -404,12 +404,13 @@ public class StreamManager implements ConnectionStreamManager {
     private void trySendData(TriStateQueue<ApplicationData> queue, long streamId, PoolBuffer data) throws TimeoutException {
         boolean needWake = queue.put(new ApplicationData(connection, flightControl, streamId, data), 10_000L,
                 60_000_000_000L);
+        logger.debug("Put app data stream {} {} bytes", streamId, data.buf().remaining());
         if (needWake) {
             connection.getConnectionPathController().appendsAppData(queue);
+            logger.debug("App queue put to wake queue");
         }
     }
 
-    @SuppressWarnings("resource")
     @Override
     public void onConnectionClose() {
         handler.onConnectionClose();
@@ -465,7 +466,7 @@ public class StreamManager implements ConnectionStreamManager {
         PoolBuffer frame = StreamFrameWriter.encodeMaxDataFrame(connection.getBufferPool(), maximumData);
         try {
             connection.send1RttPacket(frame);
-            logger.warn("Sent MAX_DATA frame: maxData={}", maximumData);
+            logger.info("Sent MAX_DATA frame: maxData={}", maximumData);
         } catch (Exception e) {
             logger.error("Failed to send MAX_DATA frame", e);
         }

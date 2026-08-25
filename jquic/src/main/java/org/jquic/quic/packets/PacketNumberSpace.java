@@ -96,7 +96,7 @@ public class PacketNumberSpace {
     public void onPacketSent(long sentTime, long packetNumber, PoolBuffer unencryptedPayload, boolean ackEliciting, InetSocketAddress destinationAddress) {
         if (isClosed) {
             unencryptedPayload.release();
-            logger.warn("PacketNumberSpace is already closed");
+            logger.info("PacketNumberSpace is already closed");
             return;
         }
 
@@ -278,10 +278,11 @@ public class PacketNumberSpace {
                     WindowedStatCounter windowedStatCounter = getWindowedStatCounter(packet.getDestinationAddress());
                     if (windowedStatCounter != null) {
                         windowedStatCounter.onLostPacket(timestampMs, packet.getSize());
+                        windowedStatCounter.totalSentBytes -= packet.getSize(); // do not add this to in-flight
                     }
                     num++;
                 } else { // the queue is full
-                    logger.info("Retransmitted {} lost packets. Blocked by queue.", num);
+                    logger.info("{}: Retransmitted {} lost packets. Blocked by queue.", timestampMs, num);
                     return;
                 }
             } else {
