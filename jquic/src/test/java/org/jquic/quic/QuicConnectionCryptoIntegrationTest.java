@@ -107,6 +107,139 @@ class QuicConnectionCryptoIntegrationTest {
     }
 
     @Test
+    void testSplitClientHelloCryptoFrame() throws Exception {
+        // Test that a ClientHello split across multiple CRYPTO frames in separate Initial packets
+        // is correctly reassembled and processed.
+
+        byte[] destinationCid = new byte[8];
+        ByteBuffer.wrap(destinationCid).putLong(TEST_CONNECTION_ID);
+
+        QuicCrypto.PacketProtectionKeysWithHP[] keys = ConnectionMetadata.deriveInitialKeys(QuicVersion.QUIC_VERSION_1, destinationCid);
+        NativeCrypto clientKeys = new NativeCrypto(keys[0], CipherMode.TLS_AES_128_GCM_SHA256_ID);
+
+        ByteBuffer clientHello = buildMinimalClientHello();
+        int totalLength = clientHello.remaining();
+        int part1Len = 10;
+        int part2Len = 10;
+        int part3Len = totalLength - part1Len - part2Len;
+
+        assertTrue(part3Len > 0, "ClientHello too small for this test");
+
+        byte[] chBytes = new byte[totalLength];
+        clientHello.get(chBytes);
+
+        QuicConnection connection = new QuicConnection(TEST_CONNECTION_ID, QuicVersion.QUIC_VERSION_1, TEST_ADDRESS, selectorMock, new byte[8]);
+        connection.getConnectionPathController().updateIncomingLimits(TEST_ADDRESS, 10000);
+
+        // Part 1
+        ByteBuffer cryptoFrame1 = ByteBuffer.allocateDirect(100);
+        cryptoFrame1.put((byte) 0x06);
+        QuicVarint.write(cryptoFrame1, 0);
+        QuicVarint.write(cryptoFrame1, part1Len);
+        cryptoFrame1.put(chBytes, 0, part1Len);
+        cryptoFrame1.flip();
+
+        PoolBuffer packet1 = QuicPacketBuilder.buildInitialPacket(QuicVersion.QUIC_VERSION_1, new NonReusableBuffer(500),
+                destinationCid, TEST_CID, 0, 0, cryptoFrame1, clientKeys);
+        connection.processInitialAndRespond(packet1, 0, TEST_ADDRESS);
+        assertEquals(QuicConnection.State.INITIAL, connection.getState(), "Should still be in INITIAL after part 1");
+        assertTrue(getOutboundPackets(connection).isEmpty(), "Should not send response yet");
+
+        // Part 2
+        ByteBuffer cryptoFrame2 = ByteBuffer.allocateDirect(100);
+        cryptoFrame2.put((byte) 0x06);
+        QuicVarint.write(cryptoFrame2, part1Len);
+        QuicVarint.write(cryptoFrame2, part2Len);
+        cryptoFrame2.put(chBytes, part1Len, part2Len);
+        cryptoFrame2.flip();
+
+        PoolBuffer packet2 = QuicPacketBuilder.buildInitialPacket(QuicVersion.QUIC_VERSION_1, new NonReusableBuffer(500),
+                destinationCid, TEST_CID, 1, 0, cryptoFrame2, clientKeys);
+        connection.processInitialAndRespond(packet2, 0, TEST_ADDRESS);
+        assertEquals(QuicConnection.State.INITIAL, connection.getState(), "Should still be in INITIAL after part 2");
+
+        // Part 3
+        ByteBuffer cryptoFrame3 = ByteBuffer.allocateDirect(100 + part3Len);
+        cryptoFrame3.put((byte) 0x06);
+        QuicVarint.write(cryptoFrame3, part1Len + part2Len);
+        QuicVarint.write(cryptoFrame3, part3Len);
+        cryptoFrame3.put(chBytes, part1Len + part2Len, part3Len);
+        cryptoFrame3.flip();
+
+        PoolBuffer packet3 = QuicPacketBuilder.buildInitialPacket(QuicVersion.QUIC_VERSION_1, new NonReusableBuffer(500 + part3Len),
+                destinationCid, TEST_CID, 2, 0, cryptoFrame3, clientKeys);
+        connection.processInitialAndRespond(packet3, 0, TEST_ADDRESS);
+
+        assertEquals(QuicConnection.State.HANDSHAKE, connection.getState(), "Should advance to HANDSHAKE after all parts");
+        assertFalse(getOutboundPackets(connection).isEmpty(), "Initial response should be generated after full ClientHello");
+    }
+
+    @Test
+    void testOutOfOrderSplitClientHelloCryptoFrame() throws Exception {
+        // Test that a ClientHello split across multiple CRYPTO frames
+        // is correctly reassembled even if they arrive out-of-order.
+
+        byte[] destinationCid = new byte[8];
+        ByteBuffer.wrap(destinationCid).putLong(TEST_CONNECTION_ID);
+
+        QuicCrypto.PacketProtectionKeysWithHP[] keys = ConnectionMetadata.deriveInitialKeys(QuicVersion.QUIC_VERSION_1, destinationCid);
+        NativeCrypto clientKeys = new NativeCrypto(keys[0], CipherMode.TLS_AES_128_GCM_SHA256_ID);
+
+        ByteBuffer clientHello = buildMinimalClientHello();
+        int totalLength = clientHello.remaining();
+        int part1Len = 10;
+        int part2Len = 10;
+        int part3Len = totalLength - part1Len - part2Len;
+
+        byte[] chBytes = new byte[totalLength];
+        clientHello.get(chBytes);
+
+        QuicConnection connection = new QuicConnection(TEST_CONNECTION_ID, QuicVersion.QUIC_VERSION_1, TEST_ADDRESS, selectorMock, new byte[8]);
+        connection.getConnectionPathController().updateIncomingLimits(TEST_ADDRESS, 10000);
+
+        // Send Part 2 first (Out-of-order)
+        ByteBuffer cryptoFrame2 = ByteBuffer.allocateDirect(100);
+        cryptoFrame2.put((byte) 0x06);
+        QuicVarint.write(cryptoFrame2, part1Len);
+        QuicVarint.write(cryptoFrame2, part2Len);
+        cryptoFrame2.put(chBytes, part1Len, part2Len);
+        cryptoFrame2.flip();
+
+        PoolBuffer packet2 = QuicPacketBuilder.buildInitialPacket(QuicVersion.QUIC_VERSION_1, new NonReusableBuffer(500),
+                destinationCid, TEST_CID, 1, 0, cryptoFrame2, clientKeys);
+        connection.processInitialAndRespond(packet2, 0, TEST_ADDRESS);
+        assertEquals(QuicConnection.State.INITIAL, connection.getState());
+
+        // Send Part 3 (Out-of-order)
+        ByteBuffer cryptoFrame3 = ByteBuffer.allocateDirect(100 + part3Len);
+        cryptoFrame3.put((byte) 0x06);
+        QuicVarint.write(cryptoFrame3, part1Len + part2Len);
+        QuicVarint.write(cryptoFrame3, part3Len);
+        cryptoFrame3.put(chBytes, part1Len + part2Len, part3Len);
+        cryptoFrame3.flip();
+
+        PoolBuffer packet3 = QuicPacketBuilder.buildInitialPacket(QuicVersion.QUIC_VERSION_1, new NonReusableBuffer(500 + part3Len),
+                destinationCid, TEST_CID, 2, 0, cryptoFrame3, clientKeys);
+        connection.processInitialAndRespond(packet3, 0, TEST_ADDRESS);
+        assertEquals(QuicConnection.State.INITIAL, connection.getState());
+
+        // Send Part 1 (The head, contains TLS length info)
+        ByteBuffer cryptoFrame1 = ByteBuffer.allocateDirect(100);
+        cryptoFrame1.put((byte) 0x06);
+        QuicVarint.write(cryptoFrame1, 0);
+        QuicVarint.write(cryptoFrame1, part1Len);
+        cryptoFrame1.put(chBytes, 0, part1Len);
+        cryptoFrame1.flip();
+
+        PoolBuffer packet1 = QuicPacketBuilder.buildInitialPacket(QuicVersion.QUIC_VERSION_1, new NonReusableBuffer(500),
+                destinationCid, TEST_CID, 3, 0, cryptoFrame1, clientKeys);
+        connection.processInitialAndRespond(packet1, 0, TEST_ADDRESS);
+
+        assertEquals(QuicConnection.State.HANDSHAKE, connection.getState(), "Should advance to HANDSHAKE after head arrives");
+        assertFalse(getOutboundPackets(connection).isEmpty(), "Initial response should be generated");
+    }
+
+    @Test
     void testGcmTagVerificationInitialPacketValidTag() throws Exception {
         // Verify that a properly encrypted Initial packet carrying a real ClientHello
         // is decrypted successfully and advances the connection to HANDSHAKE state.
@@ -232,7 +365,7 @@ class QuicConnectionCryptoIntegrationTest {
         List<ByteBuffer> responses = getOutboundPackets(connection);
 
         assertNotNull(responses, "Should process packet with valid GCM tag");
-        assertFalse(responses.isEmpty(), "ACK should be generated for PING frame");
+        assertEquals(1, responses.size(), "ACK should be generated for PING frame");
     }
 
     public static List<ByteBuffer> getOutboundPackets(QuicConnection connection) {

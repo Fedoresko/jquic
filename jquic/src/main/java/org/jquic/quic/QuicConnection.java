@@ -313,6 +313,11 @@ public class QuicConnection implements TimeoutHeap.Entry {
                 buffer.release();
             }
 
+            if (cryptoFrameRebuilder != null) {
+                cryptoFrameRebuilder.clear();
+                cryptoFrameRebuilder = null;
+            }
+
             if (state == State.CLOSING) {
                 this.timeoutTimestamp = currentTimestamp + 3 * connectionPathController.getPto();
             }
@@ -644,7 +649,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
     void process1RttPacket(PoolBuffer packet, int ecnFlags, SocketAddress sender) {
         logger.debug("Processing 1-RTT packet for CID: {} in state: {}, len: {}", connectionId, state, packet.buf().remaining());
 
-        if (peerState == HANDSHAKE) {
+        if (peerState != ESTABLISHED) {
             handshakeSpace.discardSentPackets();
             connectionMetadata.dropHandshakeSecrets();
             peerState = ESTABLISHED;

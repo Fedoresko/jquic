@@ -60,9 +60,9 @@ public class DatagramBuilder {
         maxFrameSize = maxSize;
         frameSource.restart();
         if (readyPacket == null) {
-            while (readyPacket == null && frameSource.peek() != null) {
-                logger.debug("Polling frame from queue ph: {} {} bytes", frameSource.peek().phase(), frameSource.peek().data().buf().remaining());
-                enqueueOneMoreFrame(currentTimeMs, dest, frameSource.poll());
+            Frame frame;
+            while ( (frame = frameSource.poll()) != null) {
+                if (enqueueOneMoreFrame(currentTimeMs, dest, frame)) break;
             }
             if (forceBuffered && readyPacket == null) {
                 flushPacket(currentTimeMs, dest);
@@ -84,7 +84,7 @@ public class DatagramBuilder {
         framesToSend.clear();
     }
 
-    public void flushPacket(long currentTimeMs, InetSocketAddress dest) {
+    public boolean flushPacket(long currentTimeMs, InetSocketAddress dest) {
         if (readyPacket != null) {
             throw new IllegalStateException("Packet already flushed");
         }
@@ -105,22 +105,26 @@ public class DatagramBuilder {
                 firstPacket = false;
             }
             readyPacket = packet;
+            return true;
         }
+        return false;
     }
 
-    private void enqueueOneMoreFrame(long currentTimeMs, InetSocketAddress dest,  Frame frame) {
+    private boolean enqueueOneMoreFrame(long currentTimeMs, InetSocketAddress dest,  Frame frame) {
         int maxHeaderLen = (space.phase == PacketPhase.APPLICATION) ?
                 connectionMetadata.maxShortHeaderLength : connectionMetadata.maxLongHeaderLength;
 
         int remaining = getMaxPacketSize() - GCM_TAG_LENGTH - maxHeaderLen - framesToSendSumLen;
 
+        boolean res = false;
         if (remaining < frame.data().buf().remaining() && !framesToSend.isEmpty())
         {
-            flushPacket(currentTimeMs, dest);
+            res = flushPacket(currentTimeMs, dest);
         }
 
         framesToSendSumLen += frame.data().buf().remaining();
         framesToSend.add(frame);
+        return res;
     }
 
     private int getMaxPacketSize() {
@@ -217,7 +221,7 @@ public class DatagramBuilder {
             }
 
             space.onPacketSent(currentTimestamp, packetNumber, payload, ackEliciting, dest);
-            return new DatagramToSend(PacketSource.NEW,
+            return new DatagramToSend(
                     datagram,
                     ectMarking,
                     dest,

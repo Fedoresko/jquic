@@ -186,13 +186,12 @@ public class SelectorThread extends Thread {
 
 
                 for (QuicDatagramChannel.ReceivedPacket packet : batch) {
-                    if (packet.sender() != null) {
+                    if (packet != null) {
                         processDatagram(now, nowNs, packet.data().borrow(), packet.sender(), "socket", packet.ecnFlags());
+                        packet.data().release();
                         hadWork = true;
                     }
-                    packet.data().release();
                 }
-
 
                 // Process forwarded packets
                 PacketData forwarded;
@@ -229,10 +228,6 @@ public class SelectorThread extends Thread {
                     }
 
                     packetsToSendPerConnection.add(new PacketToSend(outbound.dest(), outbound.data(), outbound.ectMarking()));
-                    switch (outbound.packetSource()) {
-                        case NEW -> sentPackets++;
-                        case RETRANSMISSION -> retransmittedPackets++;
-                    }
                     i++;
                     hadWork = true;
                 }

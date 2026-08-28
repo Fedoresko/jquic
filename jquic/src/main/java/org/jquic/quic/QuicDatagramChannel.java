@@ -76,11 +76,14 @@ public class QuicDatagramChannel {
         }
     }
 
-    public SocketAddress receive(ByteBuffer dst, int[] outMetrics) throws IOException {
+    public ReceivedPacket receive(PoolBuffer dst) throws IOException {
         if (socket != null) {
-            return socket.receive(dst, outMetrics);
+            return socket.receive(dst);
         } else {
-            return channel.receive(dst);
+            SocketAddress sender = channel.receive(dst.buf().rewind());
+            if (sender == null) return null;
+            dst.buf().flip();
+            return new ReceivedPacket(dst, sender, 0);
         }
     }
 
@@ -113,33 +116,26 @@ public class QuicDatagramChannel {
             for (int i = 0; i < buffers.length; i++) {
                 ByteBuffer buf = buffers[i].buf();
                 buf.clear();
-                int startPos = buf.position();
-                SocketAddress sender;
                 if (i == 0) {
-                    sender = receiveBlocking(buf, null);
+                    results.add( receiveBlocking(buffers[i]) );
                 } else {
-                    sender = channel.receive(buf);
+                    results.add( receive(buffers[i]) );
                 }
-
-                if (sender == null) {
-                    break;
-                }
-                buf.limit(buf.position());
-                buf.position(startPos);
-                results.add(new ReceivedPacket(buffers[i], sender, 0));
             }
             return results;
         }
     }
 
-    public SocketAddress receiveBlocking(ByteBuffer dst, int[] outMetrics) throws IOException {
+    public ReceivedPacket receiveBlocking(PoolBuffer dst) throws IOException {
         if (socket != null) {
-            return socket.receiveBlocking(dst, outMetrics);
+            return socket.receiveBlocking(dst);
         } else {
             try (Selector idleSelector = Selector.open()) {
                 channel.register(idleSelector, SelectionKey.OP_READ);
                 idleSelector.select(10);
-                return channel.receive(dst);
+                SocketAddress sender = channel.receive(dst.buf().rewind());
+                dst.buf().flip();
+                return new  ReceivedPacket(dst, sender, 0);
             }
         }
     }

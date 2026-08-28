@@ -140,7 +140,7 @@ public class LinuxEcnSocket implements AutoCloseable {
                             ValueLayout.ADDRESS, // data_ptrs
                             ValueLayout.ADDRESS, // lengths
                             ValueLayout.ADDRESS, // sockaddr_ptrs
-                            ValueLayout.ADDRESS, // ecn_flags
+                            ValueLayout.ADDRESS, // ecnFlagsInTcpSock
                             ValueLayout.JAVA_INT
                     ),
                     Linker.Option.critical(true)
@@ -296,31 +296,24 @@ public class LinuxEcnSocket implements AutoCloseable {
         }
     }
 
-    public SocketAddress receiveBlocking(ByteBuffer dst, int[] outMetrics) throws IOException {
-        return receiveImpl(dst, outMetrics, quic_receive_ecn_blocking);
+    public QuicDatagramChannel.ReceivedPacket receiveBlocking(PoolBuffer dst) throws IOException {
+        return receiveImpl(dst, quic_receive_ecn_blocking);
     }
 
-    public SocketAddress receive(ByteBuffer dst, int[] outMetrics) throws IOException {
-        return receiveImpl(dst, outMetrics, quic_receive_ecn);
+    public QuicDatagramChannel.ReceivedPacket receive(PoolBuffer dst) throws IOException {
+        return receiveImpl(dst, quic_receive_ecn);
     }
 
-    private SocketAddress receiveImpl(ByteBuffer dst, int[] outMetrics, MethodHandle handle) throws IOException {
-        if (dst.isReadOnly()) {
-            throw new IllegalArgumentException("Read-only buffer");
-        }
-        if (outMetrics == null || outMetrics.length < 1) {
-            throw new IllegalArgumentException("outMetrics array must be at least size 1");
-        }
-        if (dst.remaining() <= 0) {
-            return null;
-        }
+    private QuicDatagramChannel.ReceivedPacket receiveImpl(PoolBuffer dst, MethodHandle handle) throws IOException {
+        dst.buf().clear();
 
-        MemorySegment dstSegment = dst.isDirect() 
-            ? MemorySegment.ofBuffer(dst)
-            : MemorySegment.ofArray(dst.array()).asSlice(dst.arrayOffset() + dst.position(), dst.remaining());
+        MemorySegment dstSegment = dst.buf().isDirect()
+            ? MemorySegment.ofBuffer(dst.buf())
+            : MemorySegment.ofArray(dst.buf().array()).asSlice(dst.buf().arrayOffset() + dst.buf().position(), dst.buf().remaining());
 
         try {
-            int bytesRead = (int) handle.invokeExact(fd, dstSegment, dst.remaining(), nativeMetadata);
+//            log.warn("Invoke native read FD {}, max sz: {}", fd, dst.buf().remaining());
+            int bytesRead = (int) handle.invokeExact(fd, dstSegment, dst.buf().remaining(), nativeMetadata);
 
             if (bytesRead < 0) {
                 int err = nativeMetadata.getAtIndex(ValueLayout.JAVA_INT, 0); // errno is at index 0 when bytesRead < 0
@@ -334,16 +327,15 @@ public class LinuxEcnSocket implements AutoCloseable {
             int ecnFlags = nativeMetadata.getAtIndex(ValueLayout.JAVA_INT, 1);
             int addrLen = nativeMetadata.getAtIndex(ValueLayout.JAVA_INT, 2);
 
-            dst.position(dst.position() + bytesRead);
-            outMetrics[0] = ecnFlags;
-
+            dst.buf().limit(bytesRead);
 
             byte[] ipBytes = new byte[addrLen];
             MemorySegment.copy(nativeMetadata, ValueLayout.JAVA_BYTE, 16, ipBytes, 0, addrLen);
 
             InetAddress address = InetAddress.getByAddress(ipBytes);
 
-            return new InetSocketAddress(address, port);
+            InetSocketAddress sender = new InetSocketAddress(address, port);
+            return new  QuicDatagramChannel.ReceivedPacket(dst, sender, ecnFlags);
         } catch (Throwable t) {
             throw new IOException(t);
         }
@@ -417,13 +409,13 @@ public class LinuxEcnSocket implements AutoCloseable {
             // Включаем IP_RECVTOS для IPv4
             int resV4 = (int) setsockoptHandle.invokeExact(fd, IPPROTO_IP, IP_RECVTOS, optval, optlen);
             if (resV4 < 0) {
-                throw new RuntimeException("Failed to set IP_RECVTOS, errno code is negative");
+                log.error("Failed to set IP_RECVTOS, errno code is negative");
             }
 
             // Включаем IPV6_RECVTCLASS для IPv6
             int resV6 = (int) setsockoptHandle.invokeExact(fd, IPPROTO_IPV6, IPV6_RECVTCLASS, optval, optlen);
             if (resV6 < 0) {
-                throw new RuntimeException("Failed to set IPV6_RECVTCLASS, errno code is negative");
+                log.error("Failed to set IPV6_RECVTCLASS, errno code is negative");
             }
         } catch (Throwable t) {
             throw new IOException(t);
