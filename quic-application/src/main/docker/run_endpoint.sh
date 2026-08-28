@@ -54,9 +54,8 @@ if [ "$TESTCASE" == "retry" ]; then
   QUIC_DEFENCE_DEFAULT="true"
 fi
 
-export JQUIC_LOG_FILE="/logs/jquic.log"
-
 exec ${JAVA_HOME}/bin/java -Djava.net.preferIPv4Stack=false\
    --add-opens java.base/sun.nio.ch=ALL-UNNAMED --add-opens java.base/java.io=ALL-UNNAMED --enable-native-access=ALL-UNNAMED -Dlog.level=INFO\
+   -DJQUIC_LOG_FILE=./logs/jquic.log\
    -Dquic.prefer_v2=$QUIC_V2_PREFERENCE -Dquic.defence.start_on=$QUIC_DEFENCE_DEFAULT -Dquic.port=443 -Dquic.keystore_type=PEM\
    -Dquic.cert_path=/certs/cert.pem -Dquic.key_path=/certs/priv.key -jar jquic.jar

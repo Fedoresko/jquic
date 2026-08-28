@@ -187,4 +187,9 @@ public class CryptoFrameRebuilder {
         temp.flip();
         return temp;
     }
+
+    public void clear() {
+        earlyFragments.values().forEach(PoolBuffer::release);
+        earlyFragments.clear();
+    }
 }

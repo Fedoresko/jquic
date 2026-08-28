@@ -91,7 +91,7 @@ public class ConnectionPathController implements TimeoutHeap.Entry {
     public ConnectionPath getConnectionPath(SocketAddress socketAddress) {
         return pathMap.get(socketAddress);
     }
-    
+
     public long getSmoothedRtt() {
         ConnectionPath path = getDefaultPath();
         if (path == null) return 333;
@@ -190,7 +190,7 @@ public class ConnectionPathController implements TimeoutHeap.Entry {
      * @return the next ready-to-send encrypted packet, or {@code null} if the queue is empty
      */
     public DatagramToSend pollOutbound(long currentTimeMs, long currentNanos) {
-        checkConnectionPaths();
+//        checkConnectionPaths();
         return getOutboundDatagram(currentTimeMs, currentNanos);
     }
 
@@ -215,7 +215,10 @@ public class ConnectionPathController implements TimeoutHeap.Entry {
                 } else{
                     logger.info("Sending Urgent frame to {} {} bytes", frame.dest(), datagram.data().buf().remaining());
                 }
-                nextShedNs = currentNanos;
+                if (!urgentQueue.isEmpty()) {
+                    nextShedNs = currentTimeMs;
+                }
+//                setNextShedNs(currentNanos);
                 return datagram;
             }
         }
@@ -248,7 +251,9 @@ public class ConnectionPathController implements TimeoutHeap.Entry {
 
             if (path.nextDatagram != null) {
                 path.sentBytes += path.nextDatagram.data().buf().remaining();
-                logger.debug("Sending more bytes: {} total sent: {}", path.nextDatagram.data().buf().remaining(), path.sentBytes);
+                if (logger.isDebugEnabled()) {
+                    logger.debug("Sending more bytes: {} total sent: {}", path.nextDatagram.data().buf().remaining(), path.sentBytes);
+                }
                 DatagramToSend outboundPacket = path.nextDatagram;
 
                 path.nextDatagram = null;
@@ -276,39 +281,24 @@ public class ConnectionPathController implements TimeoutHeap.Entry {
     }
 
     private void schedNextDatagram(ConnectionPath path, long currentTimeMs, long currentTimeNs) {
-        if ( path.nextDatagram == null) path.nextDatagram = initDatagramBuilder.getPacket(currentTimeMs, path.address, true, getMaxPacketSize(path), initQueue);
-        if ( path.nextDatagram == null) path.nextDatagram = handshakeDatagramBuilder.getPacket(currentTimeMs, path.address, true, getMaxPacketSize(path), handshakeQueue);
-        if ( path.nextDatagram == null) path.nextDatagram = applicationDatagramBuilder.getPacket(currentTimeMs, path.address, true, getMaxPacketSize(path), applicationQueue);
+        QuicConnection.State peerState = connection.getPeerState();
+        QuicConnection.State state = connection.getState();
+        if ( path.nextDatagram == null && peerState == QuicConnection.State.INITIAL ) path.nextDatagram = initDatagramBuilder.getPacket(currentTimeMs, path.address, true, getMaxPacketSize(path), initQueue);
+        if ( path.nextDatagram == null &&
+                ( (peerState == QuicConnection.State.INITIAL && state == QuicConnection.State.HANDSHAKE)
+                || peerState == QuicConnection.State.HANDSHAKE) ) path.nextDatagram = handshakeDatagramBuilder.getPacket(currentTimeMs, path.address, true, getMaxPacketSize(path), handshakeQueue);
+        if ( path.nextDatagram == null &&
+                ( (peerState == QuicConnection.State.HANDSHAKE && state == QuicConnection.State.ESTABLISHED)
+                || peerState == QuicConnection.State.ESTABLISHED)) path.nextDatagram = applicationDatagramBuilder.getPacket(currentTimeMs, path.address, true, getMaxPacketSize(path), applicationQueue);
 
         if (path.nextDatagram == null) {
             return;
         }
 
-        WindowedStatCounter windowedStatCounter = path.windowedStatCounter;
-        CongestionControl congestionControl = path.congestionControl != null ? path.congestionControl : INITAL_CC;
-
-        long delay = congestionControl.getDelay(
-                currentTimeNs, currentTimeMs,
-                path.nextDatagram.data().buf().remaining(),
-                connection.getConnectionId(),
-                windowedStatCounter.getSmoothedRtt(),
-                windowedStatCounter.getLatestRtt(),
-                windowedStatCounter.getMinRtt(),
-                windowedStatCounter.getBytesAckedInLastRtt(),
-                windowedStatCounter.getBytesLostInLastRtt(),
-                windowedStatCounter.getBytesAcked(),
-                windowedStatCounter.getBytesLost(),
-                windowedStatCounter.getPacketsAcked(),
-                windowedStatCounter.getLossTime(),
-                windowedStatCounter.getLastAckTime(),
-                windowedStatCounter.totalInFlightBytes(),
-                10000,
-                0,
-                windowedStatCounter.getServerCeCounter(),
-                windowedStatCounter.getIntervalCePackets()
-        );
+        long delay = getCongestionDelay(currentTimeNs, currentTimeMs, path);
 
         path.nextSendSchedNs += delay;
+        nextShedNs = path.nextSendSchedNs;
     }
 
     private boolean isAmplificationBlock(ConnectionPath path) {
@@ -448,5 +438,30 @@ public class ConnectionPathController implements TimeoutHeap.Entry {
     @Override
     public long getTimeoutTimestamp() {
         return nextShedNs;
+    }
+
+    private long getCongestionDelay(long currentTimeNs, long currentTimeMs, ConnectionPath path) {
+        CongestionControl congestionControl = path.congestionControl != null ? path.congestionControl : INITAL_CC;
+        WindowedStatCounter windowedStatCounter = path.windowedStatCounter;
+        return congestionControl.getDelay(
+                currentTimeNs, currentTimeMs,
+                1200,
+                connection.getConnectionId(),
+                windowedStatCounter.getSmoothedRtt(),
+                windowedStatCounter.getLatestRtt(),
+                windowedStatCounter.getMinRtt(),
+                windowedStatCounter.getBytesAckedInLastRtt(),
+                windowedStatCounter.getBytesLostInLastRtt(),
+                windowedStatCounter.getBytesAcked(),
+                windowedStatCounter.getBytesLost(),
+                windowedStatCounter.getPacketsAcked(),
+                windowedStatCounter.getLossTime(),
+                windowedStatCounter.getLastAckTime(),
+                windowedStatCounter.totalInFlightBytes(),
+                10000,
+                0,
+                windowedStatCounter.getServerCeCounter(),
+                windowedStatCounter.getIntervalCePackets()
+        );
     }
 }

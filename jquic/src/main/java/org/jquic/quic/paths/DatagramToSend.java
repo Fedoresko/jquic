@@ -15,11 +15,10 @@
  */
 package org.jquic.quic.paths;
 
-import org.jquic.quic.PacketSource;
 import org.jquic.quic.buffers.PoolBuffer;
 import org.jquic.quic.linux.ECT;
 
 import java.net.SocketAddress;
 
-public record DatagramToSend(PacketSource packetSource, PoolBuffer data, ECT ectMarking, SocketAddress dest, long packetNumber) {
+public record DatagramToSend(PoolBuffer data, ECT ectMarking, SocketAddress dest, long packetNumber) {
 }

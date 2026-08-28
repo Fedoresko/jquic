@@ -64,13 +64,11 @@ class QuicDatagramChannelTest {
 
         quicClientChannel.send(sendBuf, serverAddr, ECT.NONE);
 
-        ByteBuffer recvBuf = ByteBuffer.allocate(1024);
-        int[] metrics = new int[1];
-        SocketAddress sender = quicServerChannel.receiveBlocking(recvBuf, metrics);
+        TestPoolBuffer recvBuf = new TestPoolBuffer(ByteBuffer.allocate(1024));
+        org.jquic.quic.QuicDatagramChannel.ReceivedPacket res = quicServerChannel.receiveBlocking(recvBuf);
 
-        assertNotNull(sender);
-        recvBuf.flip();
-        assertEquals(message, new String(recvBuf.array(), 0, recvBuf.remaining()));
+        assertNotNull(res);
+        assertEquals(message, new String(recvBuf.buf().array(), recvBuf.buf().position(), recvBuf.buf().limit()));
     }
 
     @Test
@@ -108,10 +106,9 @@ class QuicDatagramChannelTest {
 
     @Test
     void testReceiveNonBlocking() throws IOException {
-        ByteBuffer recvBuf = ByteBuffer.allocate(1024);
-        int[] metrics = new int[1];
-        SocketAddress sender = quicServerChannel.receive(recvBuf, metrics);
-        assertNull(sender, "Should not receive anything on empty socket");
+        TestPoolBuffer recvBuf = new TestPoolBuffer( ByteBuffer.allocate(1024) );
+        QuicDatagramChannel.ReceivedPacket packet = quicServerChannel.receive(recvBuf);
+        assertNull(packet, "Should not receive anything on empty socket");
     }
 
     @Test
