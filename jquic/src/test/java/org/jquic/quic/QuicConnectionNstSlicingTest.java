@@ -63,7 +63,7 @@ class QuicConnectionNstSlicingTest {
                 "h3", 30000, new ArrayList<>(), new HashMap<>(), 1200,
                 1000000, 65536, 65536, 65536, 100, 100,
                 new ArrayList<>(), 3, new ArrayList<>(), CipherMode.TLS_AES_128_GCM_SHA256_ID, new byte[32],
-                -1);
+                -1, null);
 
         SelectorThread selectorMock = mock(SelectorThread.class);
         org.jquic.quic.buffers.BufferPool poolMock = mock(org.jquic.quic.buffers.BufferPool.class);
@@ -128,18 +128,15 @@ class QuicConnectionNstSlicingTest {
                 "h3", 30000, new ArrayList<>(), new HashMap<>(), maxUdpPayloadSize,
                 1000000, 65536, 65536, 65536, 100, 100,
                 new ArrayList<>(), 3, new ArrayList<>(), CipherMode.TLS_AES_128_GCM_SHA256_ID, new byte[32],
-                -1);
+                -1, null);
 
-        cryptoMock.when(() -> SessionTicketService.createNewSessionTicket(any(), any(), anyLong(), any()))
+        cryptoMock.when(() -> SessionTicketService.createNewSessionTicket(any(), any(), anyLong(), any(), any()))
                 .thenAnswer(inv -> {
-                    java.io.DataOutputStream dos = inv.getArgument(3);
+                    java.io.DataOutputStream dos = inv.getArgument(4);
                     dos.write(new byte[dataSize]);
                     return null;
                 });
 
-        Method method = QuicConnection.class.getDeclaredMethod("sendNewSessionTicket");
-        method.setAccessible(true);
-        
         mockMetadata.serverApplicationCrypto = mock(NativeCrypto.class);
         
         org.jquic.quic.paths.ConnectionPathController pathControllerMock = mock(org.jquic.quic.paths.ConnectionPathController.class);
@@ -147,7 +144,7 @@ class QuicConnectionNstSlicingTest {
         pathControllerField.setAccessible(true);
         pathControllerField.set(connection, pathControllerMock);
 
-        method.invoke(connection);
+        connection.sendNewSessionTicket(null);
 
         ArgumentCaptor<PoolBuffer> captor = ArgumentCaptor.forClass(PoolBuffer.class);
         verify(pathControllerMock, atLeast(1)).sendFrame(captor.capture(), eq(org.jquic.quic.packets.PacketPhase.APPLICATION));

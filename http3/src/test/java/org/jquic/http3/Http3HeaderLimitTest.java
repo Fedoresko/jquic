@@ -35,7 +35,7 @@ public class Http3HeaderLimitTest {
         QuicConnectionControl control = mock(QuicConnectionControl.class);
         
         // Setup mandatory streams
-        connectionHandler.onConnectionEstablished(control);
+        connectionHandler.onConnectionEstablished(control, null);
         
         // Setup Decoder and Encoder streams
         ByteArrayOutputStream decoderOut = new ByteArrayOutputStream();

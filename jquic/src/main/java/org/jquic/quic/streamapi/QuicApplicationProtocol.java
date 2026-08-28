@@ -18,9 +18,10 @@ package org.jquic.quic.streamapi;
 import org.jquic.quic.streamapi.congestion.BBRv3;
 import org.jspecify.annotations.Nullable;
 
+import java.io.Serializable;
 import java.util.function.Function;
 
-public interface QuicApplicationProtocol {
+public interface QuicApplicationProtocol <T extends Serializable> {
     /**
      * Returns the name of the application protocol.
      */
@@ -43,10 +44,15 @@ public interface QuicApplicationProtocol {
     int getMaxData();
 
     /**
+     * Returns class used to retrieve and put session data to TLS Session Ticket
+     */
+    default Class<T> getSessionDataClass() { return null; }
+
+    /**
      * Called when a new connection is established.
      * @return Connection handler
      */
-    Function<Long, QuicApplicationProtocolConnectionHandler> getConnectionHandler();
+    Function<Long, QuicApplicationProtocolConnectionHandler<T>> getConnectionHandler();
 
     /**
      * Called when the connection is closed.

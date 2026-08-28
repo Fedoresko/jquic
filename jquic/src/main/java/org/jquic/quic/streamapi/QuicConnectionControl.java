@@ -15,6 +15,8 @@
  */
 package org.jquic.quic.streamapi;
 
+import java.io.Serializable;
+
 public interface QuicConnectionControl {
     enum StreamType {
         Bidirectional,
@@ -41,5 +43,12 @@ public interface QuicConnectionControl {
      * @param errorCode - application level error code from STOP_SENDING frame
      */
     void closeStream(long streamId, long errorCode) throws QuicStreamException;
+
+    /**
+     * Issues NEW_SEESION_TICKET frame for a client and stores provided data in it.
+     * @param sessionData - any data. Consider making it small enough to fit in one datagram.
+     *        The less, the better. Put here user id, timestamp, session key, but avoid storing business data.
+     */
+    void saveSessionData(Serializable sessionData) throws QuicStreamException;
 }
 

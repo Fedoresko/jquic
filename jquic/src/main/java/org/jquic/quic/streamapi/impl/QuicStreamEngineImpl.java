@@ -75,7 +75,7 @@ public class QuicStreamEngineImpl implements QuicStreamEngine {
      * @param protocolName Application protocol name
      */
     public ConnectionStreamManager createConnection(long connectionId, QuicConnection connection, String protocolName) {
-        QuicApplicationProtocol protocol = protocols.get(protocolName);
+        QuicApplicationProtocol<?> protocol = protocols.get(protocolName);
         if (protocol == null) {
             logger.error("Protocol {} not registered", protocolName);
             return null;
@@ -87,7 +87,7 @@ public class QuicStreamEngineImpl implements QuicStreamEngine {
         int workerIndex = getWorkerIndex(connectionId);
 
         // Create stream manager - always server-side (isServer = true)
-        StreamManager manager = new StreamManager(
+        StreamManager<?> manager = new StreamManager<>(
                 connection,
                 protocol,
                 workerPool.getStreamWorker(workerIndex)

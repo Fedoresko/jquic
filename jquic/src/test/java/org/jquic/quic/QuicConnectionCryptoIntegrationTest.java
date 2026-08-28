@@ -816,7 +816,7 @@ class QuicConnectionCryptoIntegrationTest {
         ConnectionMetadata m = new ConnectionMetadata();
         m.clientMetadata = new ConnectionMetadata.ClientMetadataNegotiated("h3", 1000, List.of(),
                 Map.of(), 1200, 1000, 0, 0,
-                0, 0, 0, List.of(), 3, List.of(), CipherMode.TLS_AES_128_GCM_SHA256_ID, new byte[0], -1);
+                0, 0, 0, List.of(), 3, List.of(), CipherMode.TLS_AES_128_GCM_SHA256_ID, new byte[0], -1, null);
         m.clientMetadata.maxIdleTimeoutMs = 10_000;
         m.clientHandshakeCrypto = new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(real1RttKey, new byte[12], hpSeg), CipherMode.TLS_AES_128_GCM_SHA256_ID);
         m.serverHandshakeCrypto = new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(real1RttKey, new byte[12], hpSeg), CipherMode.TLS_AES_128_GCM_SHA256_ID);

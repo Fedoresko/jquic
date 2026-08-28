@@ -25,11 +25,12 @@ import org.slf4j.LoggerFactory;
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.io.Serializable;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
  
-public class HqInteropConnectionHandler implements QuicApplicationProtocolConnectionHandler {
+public class HqInteropConnectionHandler implements QuicApplicationProtocolConnectionHandler<Serializable> {
     private static final Logger logger = LoggerFactory.getLogger(HqInteropConnectionHandler.class);
 
     private final HqInteropRequestHandler requestHandler;

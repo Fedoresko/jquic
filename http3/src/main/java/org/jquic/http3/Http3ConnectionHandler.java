@@ -34,6 +34,7 @@ import org.jquic.http3.qpack.QpackRequiredInsertCountException;
 
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.io.Serializable;
 import java.nio.ByteBuffer;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
@@ -46,7 +47,7 @@ import java.util.stream.Collectors;
  * HTTP/3 connection handler.
  * Manages HTTP/3 streams for a single QUIC connection.
  */
-class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler {
+class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler<Serializable> {
     private static final Logger logger = LoggerFactory.getLogger(Http3ConnectionHandler.class);
 
     private static final long SETTINGS_QPACK_MAX_TABLE_CAPACITY = 100;// 0x01;
@@ -89,7 +90,7 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
     }
 
     @Override
-    public void onConnectionEstablished(@NonNull QuicConnectionControl control) {
+    public void onConnectionEstablished(@NonNull QuicConnectionControl control, Serializable sessionData) {
         this.connectionControl = control;
         try {
             // Trigger opening of mandatory streams.

@@ -29,7 +29,7 @@ import static org.mockito.Mockito.*;
 
 class FlightControlTest {
 
-    private StreamManager streamManager;
+    private StreamManager<?> streamManager;
     private FlightControl flightControl;
 
     private static final long INITIAL_MAX_STREAM_DATA = 5000;

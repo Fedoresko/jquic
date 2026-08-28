@@ -24,13 +24,14 @@ import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.Serializable;
 import java.util.function.Function;
 
 /**
  * HTTP/3 protocol implementation.
  * Implements QUIC application protocol interface for HTTP/3.
  */
-public class Http3Protocol implements QuicApplicationProtocol {
+public class Http3Protocol implements QuicApplicationProtocol<Serializable> {
     private static final Logger logger = LoggerFactory.getLogger(Http3Protocol.class);
 
     private static final String PROTOCOL_NAME = "h3";
@@ -71,7 +72,7 @@ public class Http3Protocol implements QuicApplicationProtocol {
     }
 
     @Override
-    public Function<Long, QuicApplicationProtocolConnectionHandler> getConnectionHandler() {
+    public Function<Long, QuicApplicationProtocolConnectionHandler<Serializable>> getConnectionHandler() {
         return connectionId -> {
             logger.debug("Creating HTTP/3 connection handler for connection {}", connectionId);
             return new Http3ConnectionHandler(connectionId, requestHandler);

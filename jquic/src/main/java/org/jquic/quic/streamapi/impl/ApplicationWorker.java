@@ -40,7 +40,7 @@ public class ApplicationWorker extends StreamWorker {
      * IMPORTANT: This method takes ownership of the framePayload ByteBuffer.
      * The caller must NOT access or modify the buffer after calling this method.
      */
-    public void enqueueFrame(StreamManager manager, ProtocolFrame frame) {
+    public void enqueueFrame(StreamManager<?> manager, ProtocolFrame frame) {
         // Transfer ownership of the ByteBuffer to the worker thread via the queue
         frameQueue.offer(new FrameTask(manager, frame));
 
@@ -53,7 +53,7 @@ public class ApplicationWorker extends StreamWorker {
         }
     }
 
-    public void enqueueAck(StreamManager manager, long streamId, long offset, long length) {
+    public void enqueueAck(StreamManager<?> manager, long streamId, long offset, long length) {
         // Transfer ownership of the ByteBuffer to the worker thread via the queue
         ackQueue.offer(new AckTask(manager, streamId, offset, length));
 
@@ -88,22 +88,22 @@ public class ApplicationWorker extends StreamWorker {
      * Frame task for worker processing.
      */
     public static class FrameTask {
-        public final StreamManager manager;
+        public final StreamManager<?> manager;
         ProtocolFrame frameData;
 
-        public FrameTask(StreamManager manager, ProtocolFrame frameData) {
+        public FrameTask(StreamManager<?> manager, ProtocolFrame frameData) {
             this.manager = manager;
             this.frameData = frameData;
         }
     }
 
     public static class AckTask {
-        public final StreamManager manager;
+        public final StreamManager<?> manager;
         long sreamId;
         long offset;
         long length;
 
-        public AckTask(StreamManager manager, long sreamId, long offset, long length) {
+        public AckTask(StreamManager<?> manager, long sreamId, long offset, long length) {
             this.manager = manager;
             this.sreamId = sreamId;
             this.offset = offset;

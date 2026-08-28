@@ -18,9 +18,11 @@ package org.jquic.quic.crypto;
 import org.jquic.quic.ConnectionMetadata;
 import org.jquic.quic.QuicException;
 import org.jquic.quic.QuicTransportError;
+import org.jquic.quic.QuicVarint;
 import org.jquic.quic.buffers.CryptoBufferPool;
 import org.jquic.quic.buffers.PoolBuffer;
 import org.jquic.quic.struct.BloomFilter;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -195,6 +197,7 @@ public class SessionTicketService {
                     selectedMetadata.ackDelayExponent,
                     selectedMetadata.availableVersions,
                     selectedMetadata.selectedCipherSuite,
+                    selectedMetadata.sessionData,
                     null, selectedIdentityIdx, selectedPsk
             );
         }
@@ -273,6 +276,12 @@ public class SessionTicketService {
             long timestamp = ticket.getLong();
             long ticketAgeAdd = ticket.getLong();
 
+            long dataLength = QuicVarint.read(ticket);
+            byte [] sessionData = null;
+            if (dataLength > 0) {
+                sessionData = new byte[(int) dataLength];
+                ticket.get(sessionData);
+            }
 
             ConnectionMetadata.ClientMetadataNegotiated ticketMetadata = new ConnectionMetadata.ClientMetadataNegotiated(
                     alpn, maxIdleTimeoutMs, groups, new HashMap<>(), maxUdpPayloadSize,
@@ -280,7 +289,7 @@ public class SessionTicketService {
                     signatures, ackDelayExponent, versions, cipherSuite, null, -1, psk
             );
 
-            return new SessionTicketInfo(psk, ticketMetadata, uniqueNumber, timestamp, ticketAgeAdd);
+            return new SessionTicketInfo(psk, ticketMetadata, uniqueNumber, timestamp, ticketAgeAdd, sessionData);
         } catch (Exception e) {
             throw new QuicException("Failed to parse session ticket", e);
         }
@@ -316,7 +325,7 @@ public class SessionTicketService {
     /**
      * Generates an encrypted session ticket directly into the output buffer.
      */
-    public static void generateSessionTicket(ByteBuffer output, byte[] PSK, ConnectionMetadata.ClientMetadataNegotiated metadata, long uniqueNumber, long timestamp, long ticketAgeAdd) throws QuicException {
+    public static void generateSessionTicket(ByteBuffer output, byte[] PSK, ConnectionMetadata.ClientMetadataNegotiated metadata, long uniqueNumber, long timestamp, long ticketAgeAdd, byte @Nullable [] sessionData) throws QuicException {
         Stek stek = SessionTicketService.getCurrentStek();
 
         NativeCrypto stekCrypto = stek.crypto().get();
@@ -376,6 +385,13 @@ public class SessionTicketService {
         output.putLong(timestamp);
         output.putLong(ticketAgeAdd);
 
+        if (sessionData != null) {
+            QuicVarint.write(output, sessionData.length);
+            output.put(sessionData);
+        } else {
+            QuicVarint.write(output, 0);
+        }
+
         output.limit(output.position());
         output.position(startPayload);
 
@@ -386,8 +402,8 @@ public class SessionTicketService {
         output.position(start);
     }
 
-    public static void generateSessionTicket(PoolBuffer output, byte[] PSK, ConnectionMetadata.ClientMetadataNegotiated metadata, long uniqueNumber, long timestamp, long ticketAgeAdd) throws QuicException {
-        generateSessionTicket(output.buf(), PSK, metadata, uniqueNumber, timestamp, ticketAgeAdd);
+    public static void generateSessionTicket(PoolBuffer output, byte[] PSK, ConnectionMetadata.ClientMetadataNegotiated metadata, long uniqueNumber, long timestamp, long ticketAgeAdd, byte @Nullable [] sessionData) throws QuicException {
+        generateSessionTicket(output.buf(), PSK, metadata, uniqueNumber, timestamp, ticketAgeAdd, sessionData);
     }
 
     /**
@@ -404,13 +420,14 @@ public class SessionTicketService {
      *   extensions      (2 + n)
      * </pre>
      *
-     * @param metadata  the live {@link ConnectionMetadata}
-     * @param timestamp the creation timestamp
-     * @param output    the stream to write to
+     * @param metadata    the live {@link ConnectionMetadata}
+     * @param timestamp   the creation timestamp
+     * @param sessionData additional data to store in session
+     * @param output      the stream to write to
      * @throws QuicException if ticket generation fails
      * @throws IOException   if writing to the stream fails
      */
-    public static void createNewSessionTicket(CryptoBufferPool pool, ConnectionMetadata metadata, long timestamp, DataOutputStream output) throws QuicException, IOException {
+    public static void createNewSessionTicket(CryptoBufferPool pool, ConnectionMetadata metadata, long timestamp, byte @Nullable [] sessionData, DataOutputStream output) throws QuicException, IOException {
         long ticketId = ticketIdGenerator.incrementAndGet();
         long ticketAgeAdd = QuicCrypto.secureRandom.get().nextInt() & 0xFFFFFFFFL;
 
@@ -422,7 +439,7 @@ public class SessionTicketService {
 
         PoolBuffer buffer = pool.requestCryptoBuffer(QuicCrypto.MAX_SESSION_TICKET_SIZE);
         try {
-            generateSessionTicket(buffer, PSK, metadata.clientMetadata, ticketId, timestamp, ticketAgeAdd);
+            generateSessionTicket(buffer, PSK, metadata.clientMetadata, ticketId, timestamp, ticketAgeAdd, sessionData);
 
             // ticket_lifetime (4) + ticket_age_add (4) + nonce_len(1) + nonce(12) + ticket_len(2) + ticket + extensions_len(2) + extension_early_data(2+2+4)
             int extensionsLen = 2 + 2 + 4; // EARLY_DATA extension type(2) + len(2) + max_early_data_size(4)
@@ -455,6 +472,6 @@ public class SessionTicketService {
     }
 
     public record SessionTicketInfo(byte[] psk, ConnectionMetadata.ClientMetadataNegotiated metadata, long uniqueNumber,
-                                    long timestamp, long ticketAgeAdd) {
+                                    long timestamp, long ticketAgeAdd, byte @Nullable [] sessionData) {
     }
 }

@@ -30,6 +30,7 @@ import org.jquic.quic.streamapi.QuicApplicationProtocol;
 import org.jquic.quic.streamapi.frames.*;
 import org.jquic.quic.streamapi.impl.QuicStreamEngineImpl;
 import org.jquic.quic.struct.TimeoutHeap;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -629,7 +630,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
                 sendHandshakeDonePacket();
 
                 if (QuicProperties.ENABLE_SESSION_RESUMPTION) {
-                    sendNewSessionTicket();
+                    sendNewSessionTicket(null);
                 }
 
                 logger.info("Handshake COMPLETE for CID: {}, connection ESTABLISHED", connectionId);
@@ -1387,7 +1388,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
      * in separate 1-RTT application packet(s).
      * Uses SlicingOutputStreamWithAmendments to split the ticket into multiple chunks if needed.
      */
-    private void sendNewSessionTicket() {
+    public void sendNewSessionTicket(byte @Nullable [] sessionData) {
         try {
             int maxChunkSize = (int) (connectionMetadata.clientMetadata.maxUdpPayloadSize - CRYPTO_FRAME_MAX_HEADER_LENGTH - GCM_TAG_LENGTH - MAX_SHORT_HEADER_LENGTH);
 
@@ -1407,7 +1408,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
                     }
             );
 
-            SessionTicketService.createNewSessionTicket(getBufferPool(), connectionMetadata, currentTimestamp, out);
+            SessionTicketService.createNewSessionTicket(getBufferPool(), connectionMetadata, currentTimestamp, sessionData, out);
             out.close();
         } catch (Exception e) {
             logger.error("Failed to create and send NewSessionTicket", e);

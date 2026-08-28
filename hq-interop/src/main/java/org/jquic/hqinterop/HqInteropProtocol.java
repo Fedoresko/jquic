@@ -23,9 +23,10 @@ import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.Serializable;
 import java.util.function.Function;
 
-public class HqInteropProtocol implements QuicApplicationProtocol {
+public class HqInteropProtocol implements QuicApplicationProtocol<Serializable> {
     private static final Logger logger = LoggerFactory.getLogger(HqInteropProtocol.class);
 
     private static final String PROTOCOL_NAME = "hq-interop";
@@ -66,7 +67,7 @@ public class HqInteropProtocol implements QuicApplicationProtocol {
     }
 
     @Override
-    public Function<Long, QuicApplicationProtocolConnectionHandler> getConnectionHandler() {
+    public Function<Long, QuicApplicationProtocolConnectionHandler<Serializable>> getConnectionHandler() {
         return connectionId -> {
             logger.debug("Creating hq-interop connection handler for connection {}", connectionId);
             return new HqInteropConnectionHandler(requestHandler);

@@ -90,7 +90,7 @@ class QuicCryptoSessionTicketTest {
                 "h3", 30000L, groups, new HashMap<>(), 1450L,
                 1000000L, 65536L, 65536L, 65536L, 100L, 100L,
                 sigs, 3L, versions, CipherMode.TLS_AES_128_GCM_SHA256_ID, null,
-                -1);
+                -1, null);
         metadata.maxIdleTimeoutMs = 15000L;
 
         long uniqueNumber = 123456789L;
@@ -98,7 +98,7 @@ class QuicCryptoSessionTicketTest {
         long ticketAgeAdd = 987654321L;
 
         ByteBuffer output = ByteBuffer.allocateDirect(4048);
-        SessionTicketService.generateSessionTicket(output, psk, metadata, uniqueNumber, timestamp, ticketAgeAdd);
+        SessionTicketService.generateSessionTicket(output, psk, metadata, uniqueNumber, timestamp, ticketAgeAdd, null);
 
         assertTrue(output.remaining() > 0);
 
@@ -133,7 +133,7 @@ class QuicCryptoSessionTicketTest {
                 "h3", 30000L, groups, new HashMap<>(), 1450L,
                 1000000L, 65536L, 65536L, 65536L, 100L, 100L,
                 sigs, 3L, versions, CipherMode.TLS_AES_128_GCM_SHA256_ID, null,
-                -1);
+                -1, null);
 
         ConnectionMetadata connMetadata = mock(ConnectionMetadata.class);
         connMetadata.resumptionMasterSecret = rms;
@@ -143,7 +143,7 @@ class QuicCryptoSessionTicketTest {
         DataOutputStream dos = new DataOutputStream(baos);
 
         long timestamp = System.currentTimeMillis();
-        SessionTicketService.createNewSessionTicket(sz -> new TestPoolBuffer(ByteBuffer.allocateDirect(sz)), connMetadata, timestamp, dos);
+        SessionTicketService.createNewSessionTicket(sz -> new TestPoolBuffer(ByteBuffer.allocateDirect(sz)), connMetadata, timestamp, null, dos);
         dos.flush();
 
         byte[] result = baos.toByteArray();
@@ -211,12 +211,12 @@ class QuicCryptoSessionTicketTest {
                 "h3", 30000L, List.of((short) 0x001d), new HashMap<>(), 1450L,
                 1000000L, 65536L, 65536L, 65536L, 100L, 100L,
                 List.of((short) 0x0403), 3L, List.of(0x00000001), CipherMode.TLS_AES_128_GCM_SHA256_ID, null,
-                -1);
+                -1, null);
 
         ByteBuffer ticketBuf = ByteBuffer.allocateDirect(4048);
         long ticketAgeAdd = 12345L;
         long timestamp = 67890L;
-        SessionTicketService.generateSessionTicket(ticketBuf, psk, metadata, 1L, timestamp, ticketAgeAdd);
+        SessionTicketService.generateSessionTicket(ticketBuf, psk, metadata, 1L, timestamp, ticketAgeAdd, null);
         byte[] ticket = new byte[ticketBuf.remaining()];
         ticketBuf.get(ticket);
 

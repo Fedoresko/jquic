@@ -18,6 +18,7 @@ package org.jquic.quic.crypto;
 import org.jquic.quic.*;
 import org.jquic.quic.buffers.PoolBuffer;
 import org.jquic.quic.buffers.SlicingOutputStreamWithAmendments;
+import org.jspecify.annotations.NonNull;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -25,6 +26,8 @@ import org.mockito.MockedStatic;
 
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
 import java.security.KeyPairGenerator;
 import java.security.PrivateKey;
 import java.util.HashMap;
@@ -80,19 +83,77 @@ class QuicCryptoPskTest {
 
     @Test
     void testParseClientHelloWithPsk() throws Exception {
-        System.out.println("[DEBUG_LOG] Starting testParseClientHelloWithPsk");
+        long timestamp = System.currentTimeMillis();
+        ByteBuffer ch = writeClientHello(timestamp);
+
+        ConnectionMetadata.ClientMetadataNegotiated result = QuicCrypto.parseClientHello(timestamp, new ConnectionMetadata(), ch);
+        // This is expected to succeed and have selectedIdentity = 0 after implementation
+        assertEquals(0, result.selectedIdentity);
+    }
+
+    @Test
+    void testProcessClientHelloWithPsk() throws Exception {
+        long timestamp = System.currentTimeMillis();
         // 1. Create a valid session ticket
+        ByteBuffer ch = writeClientHello(timestamp);
+
+        ConnectionMetadata connMetadata = new ConnectionMetadata();
+        connMetadata.quicVersion = org.jquic.quic.QuicVersion.QUIC_VERSION_1;
+        ch.position(0);
+
+        // Mock getKeystoreManager to return something that won't fail signature scheme selection
+        KeystoreManager km = QuicCrypto.getKeystoreManager();
+        when(km.selectSignatureScheme(any())).thenReturn((short) 0x0403);
+
+        QuicCrypto.processClientHello(timestamp, connMetadata, ch);
+
+        org.junit.jupiter.api.Assertions.assertNotNull(connMetadata.zeroRttCrypto, "0-RTT crypto should be initialized");
+        org.junit.jupiter.api.Assertions.assertNotNull(connMetadata.handshakeSecretBytes, "Handshake secret should be derived");
+    }
+
+    @Test
+    void testSessionDataInSessionTicket() throws Exception {
+        byte[] psk = new byte[32];
+        for (int i = 0; i < 32; i++) psk[i] = (byte) i;
+
+        byte[] sessionData = "test-session-data".getBytes(StandardCharsets.UTF_8);
+
+        ConnectionMetadata.ClientMetadataNegotiated metadata = new ConnectionMetadata.ClientMetadataNegotiated(
+                "h3", 30000L, List.of((short) 0x001d), new HashMap<>(), 1450L,
+                1000000L, 65536L, 65536L, 65536L, 100L, 100L,
+                List.of((short) 0x0403), 3L, List.of(0x00000001), CipherMode.TLS_AES_128_GCM_SHA256_ID, null,
+                -1, null);
+
+        ByteBuffer ticketBuf = ByteBuffer.allocateDirect(1024);
+        long timestamp = System.currentTimeMillis();
+        long uniqueNumber = 12345L;
+        long ticketAgeAdd = 67890L;
+
+        SessionTicketService.generateSessionTicket(ticketBuf, psk, metadata, uniqueNumber, timestamp, ticketAgeAdd, sessionData);
+
+        // Now parse it back
+        SessionTicketService.SessionTicketInfo info = SessionTicketService.parseSessionTicket(ticketBuf);
+
+        assertNotNull(info);
+        assertArrayEquals(psk, info.psk());
+        assertArrayEquals(sessionData, info.sessionData());
+        assertEquals(uniqueNumber, info.uniqueNumber());
+        assertEquals(timestamp, info.timestamp());
+        assertEquals(ticketAgeAdd, info.ticketAgeAdd());
+        assertEquals(metadata.alpn, info.metadata().alpn);
+    }
+
+    private static @NonNull ByteBuffer writeClientHello(long timestamp) throws QuicException, GeneralSecurityException {
         byte[] psk = HexFormat.of().parseHex("c50b367e1da534e796ed80ce199f4939230b1f300bc155f1ebd44f41705b8239");
 
         ConnectionMetadata.ClientMetadataNegotiated metadata = new ConnectionMetadata.ClientMetadataNegotiated(
                 "h3", 30000L, List.of((short) 0x001d), new HashMap<>(), 1450L,
                 1000000L, 65536L, 65536L, 65536L, 100L, 100L,
                 List.of((short) 0x0403), 3L, List.of(0x00000001), CipherMode.TLS_AES_128_GCM_SHA256_ID, null,
-                -1);
+                -1, null);
 
         ByteBuffer ticketBuf = ByteBuffer.allocateDirect(1024);
-        long timestamp = System.currentTimeMillis();
-        SessionTicketService.generateSessionTicket(ticketBuf, psk, metadata, 1L, timestamp, 12344523L);
+        SessionTicketService.generateSessionTicket(ticketBuf, psk, metadata, (long)(Math.random() * Long.MAX_VALUE), timestamp, 12344523L, null);
         // generateSessionTicket returns the buffer with position at start and limit at end of ticket
         byte[] ticket = new byte[ticketBuf.remaining()];
         ticketBuf.get(ticket);
@@ -165,7 +226,7 @@ class QuicCryptoPskTest {
         ch.putShort((short) (2 + 32)); // length of one key share
         ch.putShort((short) 0x001d); // x25519
         ch.putShort((short) 32);
-        
+
         // Use a valid X25519 public key (point with large order)
         // A simple one is for private key 1: base point G.
         // Or just generate one.
@@ -204,25 +265,7 @@ class QuicCryptoPskTest {
         ch.put(binderPos, binder);
 
         ch.flip();
-
-        // 3. Call parseClientHello
-        ConnectionMetadata.ClientMetadataNegotiated result = QuicCrypto.parseClientHello(timestamp, new ConnectionMetadata(), ch);
-        // This is expected to succeed and have selectedIdentity = 0 after implementation
-        assertEquals(0, result.selectedIdentity);
-
-        // 4. Test processClientHello with PSK
-        ConnectionMetadata connMetadata = new ConnectionMetadata();
-        connMetadata.quicVersion = org.jquic.quic.QuicVersion.QUIC_VERSION_1;
-        ch.position(0);
-        
-        // Mock getKeystoreManager to return something that won't fail signature scheme selection
-        KeystoreManager km = QuicCrypto.getKeystoreManager();
-        when(km.selectSignatureScheme(any())).thenReturn((short) 0x0403);
-        
-        QuicCrypto.processClientHello(timestamp, connMetadata, ch);
-
-        org.junit.jupiter.api.Assertions.assertNotNull(connMetadata.zeroRttCrypto, "0-RTT crypto should be initialized");
-        org.junit.jupiter.api.Assertions.assertNotNull(connMetadata.handshakeSecretBytes, "Handshake secret should be derived");
+        return ch;
     }
 
     @Test
@@ -232,7 +275,7 @@ class QuicCryptoPskTest {
                 "h3", 30000L, List.of((short) 0x001d), new HashMap<>(), 1450L,
                 1000000L, 65536L, 65536L, 65536L, 100L, 100L,
                 List.of((short) 0x0403), 3L, List.of(0x00000001), CipherMode.TLS_AES_128_GCM_SHA256_ID, null,
-                0); // Selected identity 0
+                0, null); // Selected identity 0
 
         metadata.serverEphemeralPublicKey = new byte[32];
         metadata.selectedKeyScheme = 0x001d;
@@ -292,7 +335,7 @@ class QuicCryptoPskTest {
                     "h3", 30000L, List.of((short) 0x001d), new HashMap<>(), 1450L,
                     1000000L, 65536L, 65536L, 65536L, 100L, 100L,
                     List.of((short) 0x0403), 3L, List.of(0x00000001), CipherMode.TLS_AES_128_GCM_SHA256_ID, null,
-                    0); // Selected identity 0
+                    0, null); // Selected identity 0
             metadata.handshakeSecretBytes = new byte[32];
             metadata.clientHandshakeTrafficSecret = new byte[32];
             metadata.serverHandshakeTrafficSecret = new byte[32];

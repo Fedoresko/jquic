@@ -141,7 +141,7 @@ class QuicConnectionTest {
                 "h3", 10_000L, List.of((short) 0x001d), new HashMap<>(), 1450L,
                 1000000L, 65536L, 65536L, 65536L, 100L, 100L,
                 List.of((short) 0x0403), 3L, List.of(0x00000001), CipherMode.TLS_AES_128_GCM_SHA256_ID, null,
-                -1);
+                -1, null);
         mockMetadata.serverEphemeralPublicKey = new byte[32];
         mockMetadata.clientHandshakeCrypto = nCryptoMock;
         mockMetadata.serverHandshakeCrypto = nCryptoMock;
@@ -152,7 +152,7 @@ class QuicConnectionTest {
         mockMetadata.serverApplicationCrypto = nCryptoMock;
         mockMetadata.clientMetadata = new ConnectionMetadata.ClientMetadataNegotiated("h3", 1000, List.of(),
                 Map.of(), 1200, 1000, 0, 0,
-                0, 0, 0, List.of(), 3, List.of(), CipherMode.TLS_AES_128_GCM_SHA256_ID, new byte[0], -1);
+                0, 0, 0, List.of(), 3, List.of(), CipherMode.TLS_AES_128_GCM_SHA256_ID, new byte[0], -1, null);
         mockMetadata.handshakeSecretBytes = new byte[32];
         mockMetadata.selectedSignatureScheme = 0x0403;
         mockMetadata.serverHandshakeTrafficSecret = new byte[32];
@@ -920,7 +920,7 @@ class QuicConnectionTest {
                 "h3", 10_000L, List.of((short) 0x001d), new HashMap<>(), 1450L,
                 1000000L, 65536L, 65536L, 65536L, 100L, 100L,
                 List.of((short) 0x0403), 3L, List.of(0x00000001), CipherMode.TLS_AES_128_GCM_SHA256_ID, null,
-                -1);
+                -1, null);
         mockMetadata.clientInitialCrypto = new HashMap<>(Map.of(QuicVersion.QUIC_VERSION_1, nCryptoMock, QuicVersion.QUIC_VERSION_2, nCryptoMock));
         mockMetadata.serverInitialCrypto = new HashMap<>(Map.of(QuicVersion.QUIC_VERSION_1, nCryptoMock, QuicVersion.QUIC_VERSION_2, nCryptoMock));
         mockMetadata.clientHandshakeCrypto = nCryptoMock;//new NativeCrypto(new QuicCrypto.PacketProtectionKeysWithHP(clientHandshakeSecret, new byte[12], null));

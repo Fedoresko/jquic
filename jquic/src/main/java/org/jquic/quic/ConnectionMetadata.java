@@ -418,15 +418,17 @@ public class ConnectionMetadata {
         public final Map<Short, byte[]> clientKeys;
         public final CipherMode selectedCipherSuite;
         public final List<Integer> availableVersions;
+        public final byte[] sessionData;
 
         public final byte[] clientRandom;
         public final long selectedIdentity;             // Selected Session Ticket Identity
         public final byte[] psk;                        // Pre-Shared Key
 
-        public ClientMetadataNegotiated(String alpn, long maxIdleTimeoutMs, List<Short> supportedGroups, Map<Short, byte[]> clientKeys, long maxUdpPayloadSize, long initialMaxData, long initialMaxStreamDataBidiLocal, long initialMaxStreamDataBidiRemote, long initialMaxStreamDataUni, long initialMaxStreamsBidi, long initialMaxStreamsUni, List<Short> supportedSignatures, long ackDelayExponent, List<Integer> availableVersions, CipherMode selectedCipherSuite, byte[] clientRandom, long selectedIdentity, byte[] psk) {
+        public ClientMetadataNegotiated(String alpn, long maxIdleTimeoutMs, List<Short> supportedGroups, Map<Short, byte[]> clientKeys, long maxUdpPayloadSize, long initialMaxData, long initialMaxStreamDataBidiLocal, long initialMaxStreamDataBidiRemote, long initialMaxStreamDataUni, long initialMaxStreamsBidi, long initialMaxStreamsUni, List<Short> supportedSignatures, long ackDelayExponent, List<Integer> availableVersions, CipherMode selectedCipherSuite, byte[] sessionData, byte[] clientRandom, long selectedIdentity, byte[] psk) {
             this.alpn = alpn;
             this.maxIdleTimeoutMs = maxIdleTimeoutMs;
             this.maxUdpPayloadSize = maxUdpPayloadSize;
+            this.sessionData = sessionData;
             this.initialStreamLimits.maxData = initialMaxData;
             this.initialStreamLimits.maxStreamDataBidiLocal = initialMaxStreamDataBidiLocal;
             this.initialStreamLimits.maxStreamDataBidiRemote = initialMaxStreamDataBidiRemote;
@@ -448,8 +450,8 @@ public class ConnectionMetadata {
             this.psk = psk;
         }
 
-        public ClientMetadataNegotiated(String alpn, long maxIdleTimeoutMs, List<Short> supportedGroups, Map<Short, byte[]> clientKeys, long maxUdpPayloadSize, long initialMaxData, long initialMaxStreamDataBidiLocal, long initialMaxStreamDataBidiRemote, long initialMaxStreamDataUni, long initialMaxStreamsBidi, long initialMaxStreamsUni, List<Short> supportedSignatures, long ackDelayExponent, List<Integer> availableVersions, CipherMode selectedCipherSuite, byte[] clientRandom, long selectedIdentity) {
-            this(alpn, maxIdleTimeoutMs, supportedGroups, clientKeys, maxUdpPayloadSize, initialMaxData, initialMaxStreamDataBidiLocal, initialMaxStreamDataBidiRemote, initialMaxStreamDataUni, initialMaxStreamsBidi, initialMaxStreamsUni, supportedSignatures, ackDelayExponent, availableVersions, selectedCipherSuite, clientRandom, selectedIdentity, null);
+        public ClientMetadataNegotiated(String alpn, long maxIdleTimeoutMs, List<Short> supportedGroups, Map<Short, byte[]> clientKeys, long maxUdpPayloadSize, long initialMaxData, long initialMaxStreamDataBidiLocal, long initialMaxStreamDataBidiRemote, long initialMaxStreamDataUni, long initialMaxStreamsBidi, long initialMaxStreamsUni, List<Short> supportedSignatures, long ackDelayExponent, List<Integer> availableVersions, CipherMode selectedCipherSuite, byte[] clientRandom, long selectedIdentity, byte[] sessionData) {
+            this(alpn, maxIdleTimeoutMs, supportedGroups, clientKeys, maxUdpPayloadSize, initialMaxData, initialMaxStreamDataBidiLocal, initialMaxStreamDataBidiRemote, initialMaxStreamDataUni, initialMaxStreamsBidi, initialMaxStreamsUni, supportedSignatures, ackDelayExponent, availableVersions, selectedCipherSuite, sessionData, clientRandom, selectedIdentity, null);
         }
     }
 }

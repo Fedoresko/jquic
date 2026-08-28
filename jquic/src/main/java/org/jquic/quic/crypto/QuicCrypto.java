@@ -479,6 +479,7 @@ public class QuicCrypto {
                 throw new QuicException("ClientHello: no transport parameters", QuicTransportError.TLS_ERROR_MISSING_EXTENSION);
             }
 
+            byte [] sessionData = null;
 
             logger.debug("Initials negotiated max_data {}, max stream data bidi local {}, max stream data bidi remote {}, max stream data uni {}, max streams bidi {}, max streams uni {}", initialMaxData, initialMaxStreamDataBidiLocal, initialMaxStreamDataBidiRemote, initialMaxStreamDataUni, initialMaxStreamsBidi, initialMaxStreamsUni);
 
@@ -499,11 +500,12 @@ public class QuicCrypto {
                 ackDelayExponent = pskMetadata.ackDelayExponent;
                 availableQuicVersions = pskMetadata.availableVersions;
                 selected = pskMetadata.selectedCipherSuite;
+                sessionData = pskMetadata.sessionData;
             }
 
             logger.debug("Selected Cypher Suite: {}", selected);
 
-            return new ConnectionMetadata.ClientMetadataNegotiated(alpn, maxIdleTimeout, supportedGroups, clientKeys, maxUdpPayloadSize, initialMaxData, initialMaxStreamDataBidiLocal, initialMaxStreamDataBidiRemote, initialMaxStreamDataUni, initialMaxStreamsBidi, initialMaxStreamsUni, signatures, ackDelayExponent, availableQuicVersions, selected, clientRandom, selectedIdentity, pskMetadata != null ? pskMetadata.psk : null);
+            return new ConnectionMetadata.ClientMetadataNegotiated(alpn, maxIdleTimeout, supportedGroups, clientKeys, maxUdpPayloadSize, initialMaxData, initialMaxStreamDataBidiLocal, initialMaxStreamDataBidiRemote, initialMaxStreamDataUni, initialMaxStreamsBidi, initialMaxStreamsUni, signatures, ackDelayExponent, availableQuicVersions, selected, sessionData, clientRandom, selectedIdentity, pskMetadata != null ? pskMetadata.psk : null);
         } catch (QuicException ce) {
             throw ce;
         } catch (Exception e) {

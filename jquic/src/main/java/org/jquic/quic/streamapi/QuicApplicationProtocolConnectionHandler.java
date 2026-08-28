@@ -19,13 +19,16 @@ import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
 import java.io.DataOutputStream;
+import java.io.Serializable;
 
-public interface QuicApplicationProtocolConnectionHandler {
+public interface QuicApplicationProtocolConnectionHandler <T extends Serializable> {
     /**
      * Called when the QUIC connection is fully established and ready for application data.
-     * @param control - connection control object to open mandatory protocol streams.
+     *
+     * @param control     - connection control object to open mandatory protocol streams.
+     * @param sessionData - optional session data stored in connection previously
      */
-    default void onConnectionEstablished(@NonNull QuicConnectionControl control) {}
+    default void onConnectionEstablished(@NonNull QuicConnectionControl control, @Nullable T sessionData) {}
 
     /**
      * Called when the server allocates a new stream.

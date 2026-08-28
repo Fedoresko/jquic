@@ -49,7 +49,7 @@ public class FlightControl {
     private final AtomicLong totalBufferedBytes = new AtomicLong(0); // Total bytes currently stored in all stream buffers
     // Connection-level flow control - sending side (in-flight bytes)
     private final AtomicLong totalInFlightBytes = new AtomicLong(0);
-    private final StreamManager streamManager;
+    private final StreamManager<?> streamManager;
 
     private long bidirectionalOutgoingStreamCap;
     private long unidirectionalOutgoingStreamCap;
@@ -69,7 +69,7 @@ public class FlightControl {
      * Accepts protocol negotiated flight limits
      * @param streamManager - needed to send responses \ close connections according to flight-control QUIC specs
      */
-    FlightControl(InitialStreamLimits serverLimits, InitialStreamLimits clientLimits, StreamManager streamManager) {
+    FlightControl(InitialStreamLimits serverLimits, InitialStreamLimits clientLimits, StreamManager<?> streamManager) {
         serverInitialLimits = serverLimits;
         clientInitialLimits = clientLimits;
         this.maxStreamDataCap = serverLimits.maxStreamDataUni;

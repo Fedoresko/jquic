@@ -27,7 +27,7 @@ import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
+import java.io.*;
 import java.nio.ByteBuffer;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -45,7 +45,7 @@ import static org.jquic.quic.streamapi.impl.StreamFrameWriter.FRAME_TYPE_RESET_S
  * Thread-safety: ALL methods except {#onStreamFrame} and {#onPacketAcknowledged} are called from
  * worker thread only - no synchronization needed.
  */
-public class StreamManager implements ConnectionStreamManager {
+public class StreamManager <T extends Serializable> implements ConnectionStreamManager {
     private static final Logger logger = LoggerFactory.getLogger(StreamManager.class);
     public static final int STREAM_BUFFER_CAPACITY = 50_000;
     public static final int DATAGRAM_FRAMES = -1;
@@ -54,7 +54,7 @@ public class StreamManager implements ConnectionStreamManager {
     private final QuicStreamResponseImpl datagramConnectionControl = new QuicStreamResponseImpl(null);
 
     private final QuicConnection connection;
-    private final QuicApplicationProtocolConnectionHandler handler;
+    private final QuicApplicationProtocolConnectionHandler<T> handler;
     private final ApplicationWorker streamWorker;
     private final FlightControl flightControl;
 
@@ -67,7 +67,7 @@ public class StreamManager implements ConnectionStreamManager {
     private long nextServerUniStreamId = 3;
 
     public StreamManager(QuicConnection connection,
-                         QuicApplicationProtocol protocol,
+                         QuicApplicationProtocol<T> protocol,
                          ApplicationWorker streamWorker) {
         this.connection = connection;
         this.streamWorker = streamWorker;
@@ -76,7 +76,24 @@ public class StreamManager implements ConnectionStreamManager {
 
         handler = protocol.getConnectionHandler().apply(connection.getConnectionId());
         handler.setOutgoingDatagramStream(createOutputStream(new StreamState(DATAGRAM_FRAMES, QuicConnectionControl.StreamType.Bidirectional, Long.MAX_VALUE, Long.MAX_VALUE)));
-        handler.onConnectionEstablished(new QuicStreamResponseImpl(null));
+
+        T sessionClass = tryGetSessionData(connection, protocol);
+        handler.onConnectionEstablished(new QuicStreamResponseImpl(null), sessionClass);
+    }
+
+    private static <T extends Serializable> @Nullable T tryGetSessionData(QuicConnection connection, QuicApplicationProtocol<T> protocol) {
+        T sessionClass = null;
+
+        Class<T> dataClass = protocol.getSessionDataClass();
+        if (dataClass != null && connection.connectionMetadata.clientMetadata.sessionData != null) {
+            try (ByteArrayInputStream bais = new ByteArrayInputStream(connection.connectionMetadata.clientMetadata.sessionData);
+                 ObjectInputStream ois = new ObjectInputStream(bais)) {
+                sessionClass = protocol.getSessionDataClass().cast(ois.readObject());
+            } catch (IOException | ClassNotFoundException e) {
+                logger.warn("Can't read session data from client", e);
+            }
+        }
+        return sessionClass;
     }
 
     // Called from Selector thread
@@ -442,6 +459,20 @@ public class StreamManager implements ConnectionStreamManager {
         flightControl.closeStream(state,  errorCode);
     }
 
+    private void saveSessionData(Serializable sessionData) throws QuicStreamException {
+        if (QuicProperties.ENABLE_SESSION_RESUMPTION) {
+            try (ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                ObjectOutputStream oos = new ObjectOutputStream(baos)) {
+                oos.writeObject(sessionData);
+                connection.sendNewSessionTicket(baos.toByteArray());
+            } catch (IOException e) {
+                throw new QuicStreamException("Failed serialising session data", e);
+            }
+        } else {
+            throw new QuicStreamException("Session resumption is disabled");
+        }
+    }
+
     void sendMaxStreamsFrame(long maximumStreams, boolean bidirectional) {
         PoolBuffer frame = StreamFrameWriter.encodeMaxStreamsFrame(connection.getBufferPool(), maximumStreams, bidirectional);
         try {
@@ -539,6 +570,11 @@ public class StreamManager implements ConnectionStreamManager {
         @Override
         public void closeStream(long streamId, long errorCode) throws QuicStreamException {
             StreamManager.this.closeStream(streamId, streamState, errorCode);
+        }
+
+        @Override
+        public void saveSessionData(Serializable sessionData) throws QuicStreamException {
+            StreamManager.this.saveSessionData(sessionData);
         }
     }
 }
