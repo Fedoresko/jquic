@@ -15,11 +15,11 @@
  */
 package org.jquic.quic.streamapi;
 
-import org.jquic.quic.packets.PacketNumberSpace;
 import org.jquic.quic.streamapi.frames.ProtocolFrame;
 
-public interface ConnectionStreamManager extends PacketNumberSpace.AckCallback {
+public interface ConnectionStreamManager {
     void onProtocolFrame(ProtocolFrame frame);
+    void onStreamAck(long streamId, long offset, long length);
     void onConnectionClose();
 }
 

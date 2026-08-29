@@ -35,6 +35,17 @@ public class QuicFrameBuilder {
     public static final int MAX_SHORT_HEADER_LENGTH = 25;
     public static final int MAX_LONG_HEADER_LENGTH = 44; //No token
 
+    public static final byte PING = (byte) 0x01;
+    public static final byte ACK_ECN = (byte) 0x03;
+    public static final byte CRYPTO = (byte) 0x06;
+    public static final byte NEW_TOKEN = (byte) 0x07;
+    public static final byte NEW_CONNECTION_ID = 0x18;
+    public static final byte RETIRE_CONNECTION_ID = 0x19;
+    public static final byte PATH_CHALLENGE = (byte) 0x1a;
+    public static final byte PATH_RESPONSE = (byte) 0x1b;
+    public static final byte CONNECTION_CLOSE = (byte) 0x1c;
+    public static final byte HANDSHAKE_DONE = (byte) 0x1e;
+
     private static void writeAckRanges(SortedIntervals ranges, ByteBuffer out) {
         if (ranges.isEmpty()) {
             QuicVarint.write(out, 0); // No ranges
@@ -87,7 +98,7 @@ public class QuicFrameBuilder {
 
         byte[] reasonBytes = reason.getBytes();
 
-        out.put((byte) 0x1c); // CONNECTION_CLOSE (QUIC transport error)
+        out.put(CONNECTION_CLOSE); // CONNECTION_CLOSE (QUIC transport error)
         QuicVarint.write(out, errorCode); // Error code
         QuicVarint.write(out, 0); // Frame type (0 = not triggered by specific frame)
         QuicVarint.write(out, reasonBytes.length); // Reason length
@@ -103,14 +114,14 @@ public class QuicFrameBuilder {
         int headerLen = 1 + QuicVarint.sizeOf(offset) + QuicVarint.sizeOf(length);
 
         data.position(data.position() - headerLen);
-        data.put((byte) 0x06); // CRYPTO frame type
+        data.put(CRYPTO); // CRYPTO frame type
         QuicVarint.write(data, offset);
         QuicVarint.write(data, length);
         data.position(data.position() - headerLen);
     }
 
     public static void writeHandshakeDoneFrame(ByteBuffer frame) {
-        frame.put((byte) 0x1e);
+        frame.put(HANDSHAKE_DONE);
         frame.put((byte) 0x0);
         frame.put((byte) 0x0);
         frame.put((byte) 0x0);
@@ -275,7 +286,7 @@ public class QuicFrameBuilder {
         long largestAcknowledged = space.getLargestReceivedPacketNumber();
         long ackDelay = space.getAckDelay(currentTimestampMs);
 
-        out.put((byte) 0x03); // ACK + ECN frame type
+        out.put(ACK_ECN); // ACK + ECN frame type
         QuicVarint.write(out, largestAcknowledged);
         QuicVarint.write(out, ackDelay);
 
@@ -308,7 +319,7 @@ public class QuicFrameBuilder {
             throw new IllegalArgumentException("PATH_CHALLENGE data must be 8 bytes long");
         }
         int start = out.position();
-        out.put((byte) 0x1a);
+        out.put(PATH_CHALLENGE);
         out.put(data);
         out.limit(out.position());
         out.position(start);
@@ -326,7 +337,7 @@ public class QuicFrameBuilder {
             throw new IllegalArgumentException("PATH_RESPONSE data must be 8 bytes long");
         }
         int start = out.position();
-        out.put((byte) 0x1b);
+        out.put(PATH_RESPONSE);
         out.put(data);
         out.limit(out.position());
         out.position(start);
@@ -335,10 +346,56 @@ public class QuicFrameBuilder {
     public static void writePingFrame(PoolBuffer poolBuffer) {
         int start = poolBuffer.buf().position();
         byte[] packet = new byte[16];
-        packet[0] = (byte) 0x01;
+        packet[0] = PING;
         poolBuffer.buf().put(packet);
         poolBuffer.buf().limit(poolBuffer.buf().position());
         poolBuffer.buf().position(start);
+    }
+
+    /**
+     * Creates a NEW_CONNECTION_ID frame (RFC 9000 Section 19.15).
+     * Format: type(0x18) | sequence_number(varint) | retire_prior_to(varint) |
+     *         length(8) | connection_id(8..160) | stateless_reset_token(128)
+     *
+     * @param sequenceNumber The sequence number assigned to the connection ID.
+     * @param retirePriorTo  The value indicates which connection IDs should be retired.
+     * @param connectionId   The connection ID.
+     * @param resetToken     The stateless reset token.
+     */
+    public static void writeNewConnectionIdFrame(ByteBuffer out, long sequenceNumber, long retirePriorTo, byte[] connectionId, byte[] resetToken) {
+        if (connectionId.length < 1 || connectionId.length > 20) {
+            throw new IllegalArgumentException("Invalid Connection ID length: " + connectionId.length);
+        }
+        if (resetToken.length != 16) {
+            throw new IllegalArgumentException("Invalid Stateless Reset Token length: " + resetToken.length);
+        }
+        if (retirePriorTo > sequenceNumber) {
+            throw new IllegalArgumentException("retire_prior_to cannot be greater than sequence_number");
+        }
+
+        int start = out.position();
+        out.put(NEW_CONNECTION_ID);
+        QuicVarint.write(out, sequenceNumber);
+        QuicVarint.write(out, retirePriorTo);
+        out.put((byte) connectionId.length);
+        out.put(connectionId);
+        out.put(resetToken);
+        out.limit(out.position());
+        out.position(start);
+    }
+
+    /**
+     * Creates a RETIRE_CONNECTION_ID frame (RFC 9000 Section 19.16).
+     * Format: type(0x19) | sequence_number(varint)
+     *
+     * @param sequenceNumber The sequence number of the connection ID being retired.
+     */
+    public static void writeRetireConnectionIdFrame(ByteBuffer out, long sequenceNumber) {
+        int start = out.position();
+        out.put(RETIRE_CONNECTION_ID);
+        QuicVarint.write(out, sequenceNumber);
+        out.limit(out.position());
+        out.position(start);
     }
 }
 

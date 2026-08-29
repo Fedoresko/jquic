@@ -32,6 +32,7 @@ import java.nio.channels.DatagramChannel;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class QuicEngine {
     private static final int PORT = QuicProperties.PORT;
@@ -47,8 +48,11 @@ public class QuicEngine {
     private static ArrayList<SelectorThread> selectorThreads;
     private static Thread acceptorThread;
 
+    @SuppressWarnings("unused")
     private static volatile boolean defenceModeOn;
     private static long defenceModeLastSet;
+
+    private static final AtomicLong cidGenerator = new AtomicLong(1); // Start from 1
 
     private static final VarHandle FLAG_HANDLE;
 
@@ -145,7 +149,9 @@ public class QuicEngine {
 
         BpfRouting.registerAcceptor(acceptorChannel);
 
-        AcceptorThread acceptor = new AcceptorThread(acceptorChannel, cidToSelectorMap);
+
+
+        AcceptorThread acceptor = new AcceptorThread(acceptorChannel, cidToSelectorMap, cidGenerator);
 
         selectorThreads = new ArrayList<>();
         // 2. Initialize Worker Selector Threads
@@ -157,7 +163,7 @@ public class QuicEngine {
             BpfRouting.registerSelector(selectorThreadId+1, selectorChannel);
 
             SelectorThread thread = new SelectorThread(selectorThreadId, selectorChannel,
-                    cidToSelectorMap, "Selector-Thread-" + selectorThreadId);
+                    cidToSelectorMap, "Selector-Thread-" + selectorThreadId, cidGenerator);
             thread.start();
             selectorThreads.add(thread);
         }

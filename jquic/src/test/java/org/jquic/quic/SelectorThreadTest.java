@@ -23,6 +23,7 @@ import org.junit.jupiter.api.Test;
 import java.nio.ByteBuffer;
 import java.nio.channels.DatagramChannel;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -32,7 +33,6 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class SelectorThreadTest {
 
-    private SelectorThread selectorThread;
     private DatagramChannel channel;
 
     @BeforeEach
@@ -40,8 +40,6 @@ class SelectorThreadTest {
         // Create SelectorThread components
         channel = DatagramChannel.open();
         ConcurrentHashMap<Long, Integer> cidToSelectorMap = new ConcurrentHashMap<>();
-
-        selectorThread = new SelectorThread(0, channel, cidToSelectorMap, "Test");
     }
 
     @AfterEach

@@ -52,11 +52,11 @@ class AcceptorThread implements Runnable {
 
     private final LruCache<ByteBuffer, SelectorCID> initialSelectorMap = new LruCache<>(INITIAL_CONNECTIONS_MAP_SIZE);
 
-    public AcceptorThread(DatagramChannel channel, ConcurrentHashMap<Long, Integer> cidToSelectorMap) {
+    public AcceptorThread(DatagramChannel channel, ConcurrentHashMap<Long, Integer> cidToSelectorMap, AtomicLong cidGenerator) {
         this.channel = channel;
+        this.cidGenerator = cidGenerator;
         this.selectors = null; // Will be set after selectors are initialized
         this.cidToSelectorMap = cidToSelectorMap;
-        this.cidGenerator = new AtomicLong(1); // Start from 1
     }
 
     public void setSelectors(SelectorThread[] selectors) {

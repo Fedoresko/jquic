@@ -18,7 +18,6 @@ package org.jquic.quic.streamapi.impl;
 import org.jquic.quic.*;
 import org.jquic.quic.buffers.ChunkedOutputStreamWithAmendments;
 import org.jquic.quic.buffers.PoolBuffer;
-import org.jquic.quic.packets.PacketNumberSpace;
 import org.jquic.quic.streamapi.*;
 import org.jquic.quic.streamapi.frames.*;
 import org.jquic.quic.struct.TriStateQueue;
@@ -36,7 +35,6 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.locks.LockSupport;
 
 import static org.jquic.quic.crypto.QuicCrypto.GCM_TAG_LENGTH;
-import static org.jquic.quic.streamapi.impl.StreamFrameWriter.FRAME_TYPE_RESET_STREAM;
 
 /**
  * Manages all streams for a single QUIC connection.
@@ -85,40 +83,10 @@ public class StreamManager implements ConnectionStreamManager {
         streamWorker.enqueueFrame(this, frame);
     }
 
-    //Called from Selector thread
+    // Called from Selector thread
     @Override
-    public void onPacketAcknowledged(long packetNumber, PacketNumberSpace.SentPacket packet) {
-        try {
-            ByteBuffer payload = packet.getUnencryptedPayload().buf().duplicate();
-            if (payload.hasRemaining()) {
-                byte frameType = payload.get();
-                if (frameType >= 0x08 && frameType <= 0x0f) {
-                    SreamFrameDetails frameDetails = parseStreamFrameDetails(frameType, payload);
-                    // Check if this is a STREAM frame (0x08-0x0f)
-                    payload.position(Math.min(payload.limit(), payload.position() + (int) frameDetails.length()));
-                    streamWorker.enqueueAck(this, frameDetails.streamId(), frameDetails.offset(), frameDetails.length());
-                }
-                if (frameType == FRAME_TYPE_RESET_STREAM) {
-                    long streamId = QuicVarint.read(payload);
-                    streamWorker.enqueueFrame(this, new StreamResetFrameAck(streamId));
-                }
-            }
-        } catch (Exception ex) {
-            logger.error("Error while processing packet acknowledged packet", ex);
-        }
-    }
-
-    private static @NonNull SreamFrameDetails parseStreamFrameDetails(byte frameType, ByteBuffer payload) {
-        boolean hasLength = (frameType & 0x02) != 0;
-        long streamId = QuicVarint.read(payload);
-        boolean hasOffset = (frameType & 0x04) != 0;
-        long offset = 0;
-        if (hasOffset) offset = QuicVarint.read(payload);
-        long length = (hasLength) ? QuicVarint.read(payload) : payload.remaining();
-        return new SreamFrameDetails(streamId, length, offset);
-    }
-
-    private record SreamFrameDetails(long streamId, long length, long offset) {
+    public void onStreamAck(long streamId, long offset, long length) {
+        streamWorker.enqueueAck(this, streamId, offset, length);
     }
 
     /**
@@ -377,9 +345,9 @@ public class StreamManager implements ConnectionStreamManager {
 
         ByteBuffer payload = data.buf().duplicate();
         byte frameType = payload.get();
-        SreamFrameDetails details = parseStreamFrameDetails(frameType, payload);
+        AckedPacketsHandler.SreamFrameDetails details = AckedPacketsHandler.parseStreamFrameDetails(frameType, payload);
 
-        while (streamId != DATAGRAM_FRAMES && !flightControl.tryIncreaseOffset(state, details.offset + details.length)) {
+        while (streamId != DATAGRAM_FRAMES && !flightControl.tryIncreaseOffset(state, details.offset() + details.length())) {
             long smoothedRtt = connection.getConnectionPathController().getSmoothedRtt();
             LockSupport.parkNanos(smoothedRtt * 1_000_000L);
             if (connection.getState() != QuicConnection.State.ESTABLISHED) {

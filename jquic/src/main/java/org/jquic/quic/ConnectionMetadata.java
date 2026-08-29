@@ -399,7 +399,7 @@ public class ConnectionMetadata {
         public Long maxStreamDataBidiLocal = QuicProperties.INITIAL_MAX_STREAM_DATA_BIDI_LOCAL; // Maximum data per bidirectional stream (opened by us) we are ready to accept from it initially
         public Long maxStreamDataBidiRemote = QuicProperties.INITIAL_MAX_STREAM_DATA_BIDI_REMOTE; // Maximum data per bidirectional stream (opened by peer) we are ready to accept from it initially
         public Long maxData = QuicProperties.INITIAL_MAX_DATA; // Total maximum data per connection we are ready to accept from the start
-        public long maxConnections = QuicProperties.INITIAL_MAX_CONNECTIONS; // Total number of simultaneous connections from the client
+        public long connectionIdsPoolSize = QuicProperties.CONNECTION_IDS_LIMIT; // Size of connection ids pool
     }
 
     /**
@@ -413,6 +413,7 @@ public class ConnectionMetadata {
         public final long maxUdpPayloadSize;
         public final InitialStreamLimits initialStreamLimits = new InitialStreamLimits();
         public final long ackDelayExponent;
+        public final long clientMaxAllowedCids;
         public final List<Short> supportedSignatures;
         public final List<Short> supportedGroups;
         public final Map<Short, byte[]> clientKeys;
@@ -423,7 +424,7 @@ public class ConnectionMetadata {
         public final long selectedIdentity;             // Selected Session Ticket Identity
         public final byte[] psk;                        // Pre-Shared Key
 
-        public ClientMetadataNegotiated(String alpn, long maxIdleTimeoutMs, List<Short> supportedGroups, Map<Short, byte[]> clientKeys, long maxUdpPayloadSize, long initialMaxData, long initialMaxStreamDataBidiLocal, long initialMaxStreamDataBidiRemote, long initialMaxStreamDataUni, long initialMaxStreamsBidi, long initialMaxStreamsUni, List<Short> supportedSignatures, long ackDelayExponent, List<Integer> availableVersions, CipherMode selectedCipherSuite, byte[] clientRandom, long selectedIdentity, byte[] psk) {
+        public ClientMetadataNegotiated(String alpn, long maxIdleTimeoutMs, List<Short> supportedGroups, Map<Short, byte[]> clientKeys, long maxUdpPayloadSize, long initialMaxData, long initialMaxStreamDataBidiLocal, long initialMaxStreamDataBidiRemote, long initialMaxStreamDataUni, long initialMaxStreamsBidi, long initialMaxStreamsUni, List<Short> supportedSignatures, long ackDelayExponent, List<Integer> availableVersions, CipherMode selectedCipherSuite, long clientMaxAllowedCids, byte[] clientRandom, long selectedIdentity, byte[] psk) {
             this.alpn = alpn;
             this.maxIdleTimeoutMs = maxIdleTimeoutMs;
             this.maxUdpPayloadSize = maxUdpPayloadSize;
@@ -439,6 +440,7 @@ public class ConnectionMetadata {
             this.clientKeys = clientKeys;
             this.availableVersions = availableVersions;
             this.selectedCipherSuite = selectedCipherSuite;
+            this.clientMaxAllowedCids = clientMaxAllowedCids;
             if (SSLKEYLOGFILE != null) {
                 this.clientRandom = clientRandom;
             } else  {
@@ -449,7 +451,7 @@ public class ConnectionMetadata {
         }
 
         public ClientMetadataNegotiated(String alpn, long maxIdleTimeoutMs, List<Short> supportedGroups, Map<Short, byte[]> clientKeys, long maxUdpPayloadSize, long initialMaxData, long initialMaxStreamDataBidiLocal, long initialMaxStreamDataBidiRemote, long initialMaxStreamDataUni, long initialMaxStreamsBidi, long initialMaxStreamsUni, List<Short> supportedSignatures, long ackDelayExponent, List<Integer> availableVersions, CipherMode selectedCipherSuite, byte[] clientRandom, long selectedIdentity) {
-            this(alpn, maxIdleTimeoutMs, supportedGroups, clientKeys, maxUdpPayloadSize, initialMaxData, initialMaxStreamDataBidiLocal, initialMaxStreamDataBidiRemote, initialMaxStreamDataUni, initialMaxStreamsBidi, initialMaxStreamsUni, supportedSignatures, ackDelayExponent, availableVersions, selectedCipherSuite, clientRandom, selectedIdentity, null);
+            this(alpn, maxIdleTimeoutMs, supportedGroups, clientKeys, maxUdpPayloadSize, initialMaxData, initialMaxStreamDataBidiLocal, initialMaxStreamDataBidiRemote, initialMaxStreamDataUni, initialMaxStreamsBidi, initialMaxStreamsUni, supportedSignatures, ackDelayExponent, availableVersions, selectedCipherSuite, 0, clientRandom, selectedIdentity, null);
         }
     }
 }
