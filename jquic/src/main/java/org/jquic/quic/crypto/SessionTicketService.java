@@ -195,7 +195,7 @@ public class SessionTicketService {
                     selectedMetadata.ackDelayExponent,
                     selectedMetadata.availableVersions,
                     selectedMetadata.selectedCipherSuite,
-                    null, selectedIdentityIdx, selectedPsk
+                    0, null, selectedIdentityIdx, selectedPsk
             );
         }
 
@@ -277,7 +277,7 @@ public class SessionTicketService {
             ConnectionMetadata.ClientMetadataNegotiated ticketMetadata = new ConnectionMetadata.ClientMetadataNegotiated(
                     alpn, maxIdleTimeoutMs, groups, new HashMap<>(), maxUdpPayloadSize,
                     maxData, bidiLocal, bidiRemote, uni, maxBidi, maxUni,
-                    signatures, ackDelayExponent, versions, cipherSuite, null, -1, psk
+                    signatures, ackDelayExponent, versions, cipherSuite, 0, null, -1, psk
             );
 
             return new SessionTicketInfo(psk, ticketMetadata, uniqueNumber, timestamp, ticketAgeAdd);

@@ -21,6 +21,7 @@ import org.jquic.quic.buffers.*;
 import org.jquic.quic.crypto.CipherMode;
 import org.jquic.quic.crypto.NativeCrypto;
 import org.jquic.quic.crypto.QuicCrypto;
+import org.jquic.quic.crypto.SessionTicketService;
 import org.jquic.quic.paths.DatagramToSend;
 import org.jquic.quic.streamapi.QuicApplicationProtocol;
 import org.junit.jupiter.api.*;
@@ -30,7 +31,9 @@ import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
+import java.security.PrivateKey;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 
@@ -44,7 +47,7 @@ import static org.mockito.Mockito.*;
  * Initial → Handshake → 1-RTT sequence works higher-to-higher.
  * NO MOCKING of QuicCrypto - all encryption/decryption is real.
  */
-@SuppressWarnings("ResultOfMethodCallIgnored")
+@SuppressWarnings({"ResultOfMethodCallIgnored", "DataFlowIssue"})
 class QuicConnectionCryptoIntegrationTest {
 
     private static final SelectorThread selectorMock = mock(SelectorThread.class);
@@ -57,24 +60,32 @@ class QuicConnectionCryptoIntegrationTest {
     private static MockedStatic<QuicCrypto> quicCryptoMock;
 
     @BeforeAll
-    static void beforeAll() {
+    static void beforeAll() throws Exception {
         quicCryptoMock = mockStatic(QuicCrypto.class, CALLS_REAL_METHODS);
         KeystoreManager km = mock(KeystoreManager.class);
         quicCryptoMock.when(QuicCrypto::getKeystoreManager).thenReturn(km);
 
+        KeyPairGenerator kpg = KeyPairGenerator.getInstance("RSA");
+        kpg.initialize(2048);
+        PrivateKey privateKey = kpg.generateKeyPair().getPrivate();
+        when(km.getPrivateKey()).thenReturn(privateKey);
+
+        byte[] keyBytes = QuicCrypto.sha256(privateKey.getEncoded());
+        byte[] stek = QuicCrypto.hkdfExpandLabel(keyBytes, "stek", new byte[0], 32);
+        ByteBuffer stekBuf = ByteBuffer.allocateDirect(32);
+        stekBuf.put(stek).flip();
+        byte[] stekUuid = HexFormat.of().parseHex("c50b367e1da534e796ed80ce199f493a");
+        SessionTicketService.addStekKey(stekUuid, stek);
+
+
         // Ensure static field keystoreManager in QuicCrypto is also set to avoid NPE in some code paths
 
         try {
-            // Mock PrivateKey for stateless reset token generation
-            KeyPairGenerator kpg = KeyPairGenerator.getInstance("RSA");
-            kpg.initialize(2048);
-            java.security.PrivateKey privateKey = kpg.generateKeyPair().getPrivate();
-            when(km.getPrivateKey()).thenReturn(privateKey);
-
             // Mock signature scheme selection
             when(km.selectSignatureScheme(anyList())).thenReturn((short) 0x0403); // ecdsa_secp256r1_sha256
 
             when(pool.requestWriteBuffer()).thenAnswer((_) -> new TestPoolBuffer(ByteBuffer.allocateDirect(2000).position(100)).borrow());
+            when(pool.requestCryptoBuffer(anyInt())).thenAnswer((_) -> new TestPoolBuffer(ByteBuffer.allocateDirect(2000).position(100)).borrow());
             when(selectorMock.getBufferPool()).thenReturn(pool);
 
             // Initialize QuicStreamEngineImpl in QuicEngine
@@ -457,6 +468,8 @@ class QuicConnectionCryptoIntegrationTest {
         List<ByteBuffer> serverFlight = getOutboundPackets(connection);
         assertFalse(serverFlight.isEmpty(), "Server should have sent Handshake response");
 
+        QuicPacketHeader.PacketSummary summary = QuicPacketHeader.parseSummary(serverFlight.getFirst());
+
         // TlsMetadata now contains derived Handshake secrets
         ConnectionMetadata meta = connection.getTlsMetadata();
         assertNotNull(meta.clientHandshakeTrafficSecret, "Handshake secrets must be derived");
@@ -489,6 +502,7 @@ class QuicConnectionCryptoIntegrationTest {
 
         getOutboundPackets(connection);
 
+
         // -- Phase 3: 1-RTT packet (PING) --------------------------------------
         ByteBuffer pingFrame = ByteBuffer.allocateDirect(10);
         pingFrame.put((byte) 0x01); // PING
@@ -498,9 +512,9 @@ class QuicConnectionCryptoIntegrationTest {
         pingFrame.flip();
 
         PoolBuffer rttPacket = QuicPacketBuilder.build1RttPacket(QuicVersion.QUIC_VERSION_1, new NonReusableBuffer(100),
-                TEST_CID, 1, 0, pingFrame, meta.clientApplicationCrypto, (byte) 0);
+                summary.scid(), 1, 0, pingFrame, meta.clientApplicationCrypto, (byte) 0);
 
-        connection.process1RttPacket(rttPacket, 0, null);
+        connection.process1RttPacket(rttPacket, 0, TEST_ADDRESS);
         List<ByteBuffer> rttResponses = getOutboundPackets(connection);
         assertFalse(rttResponses.isEmpty(), "Should generate ACK for 1-RTT PING");
     }

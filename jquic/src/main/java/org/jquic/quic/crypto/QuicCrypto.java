@@ -319,6 +319,7 @@ public class QuicCrypto {
             long initialMaxStreamsBidi = 0;
             long initialMaxStreamsUni = 0;
             long ackDelayExponent = 0;
+            long clientMaxAllowedCids = 0;
             long selectedIdentity = -1;
             ConnectionMetadata.ClientMetadataNegotiated pskMetadata = null;
             List<Short> signatures = new ArrayList<>();
@@ -430,7 +431,7 @@ public class QuicCrypto {
                             } else if (paramId == 0x0A) {
                                 ackDelayExponent = QuicVarint.read(buf);
                             } else if (paramId == 0x0E) {
-                                QuicVarint.read(buf); //active connection id limit
+                                clientMaxAllowedCids = QuicVarint.read(buf); //active connection id limit
                             } else if (paramId == 0x11) { //version_information
                                 buf.getInt(); //chosen version
                                 while (buf.position() < (int) (startPos + paramLen)) {
@@ -503,7 +504,7 @@ public class QuicCrypto {
 
             logger.debug("Selected Cypher Suite: {}", selected);
 
-            return new ConnectionMetadata.ClientMetadataNegotiated(alpn, maxIdleTimeout, supportedGroups, clientKeys, maxUdpPayloadSize, initialMaxData, initialMaxStreamDataBidiLocal, initialMaxStreamDataBidiRemote, initialMaxStreamDataUni, initialMaxStreamsBidi, initialMaxStreamsUni, signatures, ackDelayExponent, availableQuicVersions, selected, clientRandom, selectedIdentity, pskMetadata != null ? pskMetadata.psk : null);
+            return new ConnectionMetadata.ClientMetadataNegotiated(alpn, maxIdleTimeout, supportedGroups, clientKeys, maxUdpPayloadSize, initialMaxData, initialMaxStreamDataBidiLocal, initialMaxStreamDataBidiRemote, initialMaxStreamDataUni, initialMaxStreamsBidi, initialMaxStreamsUni, signatures, ackDelayExponent, availableQuicVersions, selected, clientMaxAllowedCids, clientRandom, selectedIdentity, pskMetadata != null ? pskMetadata.psk : null);
         } catch (QuicException ce) {
             throw ce;
         } catch (Exception e) {
@@ -1003,8 +1004,8 @@ public class QuicCrypto {
 
         // active_connection_id_limit
         QuicVarint.write(output, 0x0e);
-        QuicVarint.write(output, QuicVarint.sizeOf(metadata.serverInitialLimits.maxConnections));
-        QuicVarint.write(output, metadata.serverInitialLimits.maxConnections);
+        QuicVarint.write(output, QuicVarint.sizeOf(metadata.serverInitialLimits.connectionIdsPoolSize));
+        QuicVarint.write(output, metadata.serverInitialLimits.connectionIdsPoolSize);
 
         // initial_source_connection_id (param id 0x0f)
         QuicVarint.write(output, 0x0f);

@@ -21,7 +21,7 @@ else
 fi
 
 case "$TESTCASE" in
-    "handshake"|"transfer"|"multistream"|"multiple_connections"|"retry"|"chacha20"|"http3"|"multiplexing"|"ecn"|"longrtt"|"resumption"|"zerortt"|"blackhole"|"keyupdate"|"amplificationlimit"|"handshakeloss"|"transferloss"|"handshakecorruption"|"transfercorruption"|"ipv6"|"v2"|"rebind-port"|"rebind-addr")
+    "handshake"|"transfer"|"multistream"|"multiple_connections"|"retry"|"chacha20"|"http3"|"multiplexing"|"ecn"|"longrtt"|"resumption"|"zerortt"|"blackhole"|"keyupdate"|"amplificationlimit"|"handshakeloss"|"transferloss"|"handshakecorruption"|"transfercorruption"|"ipv6"|"v2"|"rebind-port"|"rebind-addr"|"connectionmigration")
         echo "Valid testcase matched: $TESTCASE. Proceeding to boot..."
         ;;
     *)

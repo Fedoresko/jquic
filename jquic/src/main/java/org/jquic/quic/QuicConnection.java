@@ -38,15 +38,13 @@ import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayDeque;
-import java.util.ArrayList;
-import java.util.Deque;
-import java.util.List;
+import java.util.*;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 import static org.jquic.quic.QuicConnection.State.*;
 import static org.jquic.quic.QuicFrameBuilder.*;
+import static org.jquic.quic.QuicTransportError.CONNECTION_ID_LIMIT_ERROR;
 import static org.jquic.quic.crypto.QuicCrypto.*;
 import static org.jquic.quic.streamapi.impl.StreamFrameWriter.*;
 
@@ -63,6 +61,9 @@ public class QuicConnection implements TimeoutHeap.Entry {
     public static final int CRYPTO_FRAME_HEADER_LEN = 9;
     public static final int MAX_CRYPTO_FRAME_LEN_WITHOUT_CERTIFICATES = 1100;
 
+    public ConnectionStreamManager getConnectionStreamManager() {
+        return connectionStreamManager;
+    }
     /**
      * QUIC connection state following the connection lifecycle.
      */
@@ -79,7 +80,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
     private static final long MAX_IDLE_TIMEOUT_MS = 600_000; // 10 minutes
 
     private final long connectionId;
-    public final byte [] connectionIdBytes;
+    public byte [] connectionIdBytes;
 
     private final AtomicReference<State> state = new AtomicReference<>(INITIAL);
     private State peerState = INITIAL;
@@ -87,6 +88,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
     public final ConnectionMetadata connectionMetadata;
     private int timeoutHeapIndex = -1;
     private ConnectionStreamManager connectionStreamManager;
+    private final PacketNumberSpace.AckCallback packetNumberSpaceAckCallback = new AckedPacketsHandler(this);
     private long currentTimestamp;
     private final byte[] statelessResetToken;
     private long connectionEstablishedAt = -1;
@@ -102,6 +104,11 @@ public class QuicConnection implements TimeoutHeap.Entry {
     private final PacketNumberSpace initialSpace;
     private final PacketNumberSpace handshakeSpace;
     private final PacketNumberSpace applicationSpace;
+
+    record RotationCid(int seqNum, byte [] cid) {}
+    private final ArrayDeque<RotationCid> clientCidPool = new ArrayDeque<>();
+    private final ArrayDeque<RotationCid> serverCidPool = new ArrayDeque<>();
+    private int lastCidSeqNum = 0;
 
     /**
      * Early 1-RTT packets that arrived before the connection reached ESTABLISHED.
@@ -632,6 +639,8 @@ public class QuicConnection implements TimeoutHeap.Entry {
                     sendNewSessionTicket();
                 }
 
+                setupCidRotationPool();
+
                 logger.info("Handshake COMPLETE for CID: {}, connection ESTABLISHED", connectionId);
             } catch (Exception e) {
                 logger.error("Failed to create Handshake response", e);
@@ -692,6 +701,15 @@ public class QuicConnection implements TimeoutHeap.Entry {
         }
 
         logger.debug("Processing 1-RTT packet: CID={}, packetNumber={}, ", header.destinationCid, header.packetNumber);
+
+        if (!Arrays.equals(header.destinationCid, connectionIdBytes)) {
+            if (clientCidPool.isEmpty()) { // ignore the rotation probe if you cannot rotate in turn (RFC 9000, 9.5)
+                packet.buf().position(packet.buf().limit());
+                return;
+            }
+            connectionIdBytes = header.destinationCid;
+            rotateConnectionId();
+        }
 
         // Rotate secrets based on the Key Phase flag.
         byte phase = (byte) (header.flags >> 2 & 0x01);
@@ -839,7 +857,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
                     connectionStreamManager.onProtocolFrame(new StreamsBlockedFrameData(streamLimit, false));
                 }
                 needsAck = true;
-            } else if (frameType == 0x06) { // CRYPTO
+            } else if (frameType == CRYPTO) { // CRYPTO
                 if (isEarlyData) {
                     sendConnectionCloseAndUpdateState(QuicTransportError.PROTOCOL_VIOLATION, "CRYPTO frame is not allowed in Eraly data");
                 }
@@ -850,13 +868,13 @@ public class QuicConnection implements TimeoutHeap.Entry {
                 logger.info("Received 1-RTT CRYPTO frame CID={} offset={} length={}",
                         connectionId, cryptoOffset, cryptoLength);
                 needsAck = true;
-            } else if (frameType == 0x07) { // NEW_TOKEN
+            } else if (frameType == NEW_TOKEN) { // NEW_TOKEN
                 long tokenLength = QuicVarint.read(plaintext.buf());
                 int tokenDataLen = (int) Math.min(tokenLength, plaintext.buf().remaining());
                 plaintext.buf().position(plaintext.buf().position() + tokenDataLen);
                 logger.info("Received NEW_TOKEN CID={} tokenLength={}", connectionId, tokenLength);
                 needsAck = true;
-            } else if (frameType == 0x10) { // MAX_DATA
+            } else if (frameType == FRAME_TYPE_MAX_DATA) { // MAX_DATA
                 // RFC 9000 Section 19.9: maximum_data(varint)
                 long maxData = QuicVarint.read(plaintext.buf());
                 logger.info("Received MAX_DATA CID={} maxData={}", connectionId, maxData);
@@ -867,23 +885,42 @@ public class QuicConnection implements TimeoutHeap.Entry {
                 long dataLimit = QuicVarint.read(plaintext.buf());
                 logger.info("Received DATA_BLOCKED CID={} dataLimit={}", connectionId, dataLimit);
                 needsAck = true;
-            } else if (frameType == 0x18) { // NEW_CONNECTION_ID
+            } else if (frameType == NEW_CONNECTION_ID) { // NEW_CONNECTION_ID
                 // RFC 9000 Section 19.15: sequence_number(varint) + retire_prior_to(varint) +
                 //   length(1) + connection_id(*) + stateless_reset_token(16)
                 long seqNum         = QuicVarint.read(plaintext.buf());
                 long retirePriorTo  = QuicVarint.read(plaintext.buf());
                 int cidLen          = plaintext.buf().get() & 0xFF;
-                plaintext.buf().position(plaintext.buf().position() + cidLen); // skip connection_id
-                plaintext.buf().position(plaintext.buf().position() + 16);     // skip stateless_reset_token
-                logger.info("Connection migration initiated but NOT SUPPORTED! CID={} seqNum={} retirePriorTo={}",
-                        connectionId, seqNum, retirePriorTo);
+                byte [] cid = new byte[cidLen];
+                plaintext.buf().get(cid); // connection_id
+                plaintext.buf().position(plaintext.buf().position() + 16);
+                logger.info("Received NEW_CONNECTION_ID CID={} seqNum={} retirePriorTo={}", connectionId, seqNum, retirePriorTo);
+
+                while (!clientCidPool.isEmpty() && clientCidPool.peek().seqNum < retirePriorTo) {
+                    RotationCid rotationCid = clientCidPool.poll();
+                    PoolBuffer frame = getBufferPool().requestWriteBuffer();
+                    QuicFrameBuilder.writeRetireConnectionIdFrame(frame.buf(), rotationCid.seqNum);
+                    send1RttPacket(frame);
+                }
+                if (clientCidPool.size() >= connectionMetadata.serverInitialLimits.connectionIdsPoolSize) {
+                    sendConnectionCloseAndUpdateState(CONNECTION_ID_LIMIT_ERROR, "Active connectin Ids limit exceeded ("+connectionMetadata.serverInitialLimits.connectionIdsPoolSize+")");
+                } else {
+                    clientCidPool.add(new RotationCid((int) seqNum, cid));
+                }
                 needsAck = true;
-            } else if (frameType == 0x19) { // RETIRE_CONNECTION_ID
+            } else if (frameType == RETIRE_CONNECTION_ID) { // RETIRE_CONNECTION_ID
                 // RFC 9000 Section 19.16: sequence_number(varint)
                 long seqNum = QuicVarint.read(plaintext.buf());
+                for (Iterator<RotationCid> iterator = serverCidPool.iterator();  iterator.hasNext(); ) {
+                    RotationCid next = iterator.next();
+                    if (next.seqNum == seqNum) {
+                        iterator.remove();
+                        selector.retractCid(ByteBuffer.wrap(next.cid).getLong());
+                    }
+                }
                 logger.info("Received RETIRE_CONNECTION_ID CID={} seqNum={}", connectionId, seqNum);
                 needsAck = true;
-            } else if (frameType == 0x1a) { // PATH_CHALLENGE
+            } else if (frameType == PATH_CHALLENGE) { // PATH_CHALLENGE
                 // RFC 9000 Section 19.17: data(8 bytes)
                 byte[] data = new byte[8];
                 plaintext.buf().get(data);
@@ -892,19 +929,19 @@ public class QuicConnection implements TimeoutHeap.Entry {
                 send1RttPacket(buffer);
 
                 needsAck = true;
-            } else if (frameType == 0x1b) { // PATH_RESPONSE
+            } else if (frameType == PATH_RESPONSE) { // PATH_RESPONSE
                 logger.info("Received PATH_RESPONSE CID={}", connectionId);
                 byte[] data = new byte[8];
                 plaintext.buf().get(data);
                 connectionPathController.onPathChallengeResponse(sender, data);
                 needsAck = true;
-            } else if (frameType == 0x1e) { // HANDSHAKE_DONE
+            } else if (frameType == HANDSHAKE_DONE) { // HANDSHAKE_DONE
                 logger.info("Received HANDSHAKE_DONE from client (unexpected)");
                 needsAck = true;
-            } else if (frameType == 0x30 || frameType == 0x31) { // DATAGRAM
+            } else if (frameType == FRAME_TYPE_DATAGRAM || frameType == FRAME_TYPE_DATAGRAM_WITH_LEN) { // DATAGRAM
                 // RFC 9221: optional length(varint) + data(*)
                 // 0x30 = no length field (consume rest of packet), 0x31 = length field present
-                if (frameType == 0x31) {
+                if (frameType == FRAME_TYPE_DATAGRAM_WITH_LEN) {
                     long datagramLength = QuicVarint.read(plaintext.buf());
                     int datagramDataLen = (int) Math.min(datagramLength, plaintext.buf().remaining());
                     PoolBuffer datagram = plaintext.borrow();
@@ -926,7 +963,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
                 while (plaintext.buf().hasRemaining() && plaintext.buf().get(plaintext.buf().position()) == 0x00) {
                     plaintext.buf().get();
                 }
-            } else if (frameType == 0x01) { // PING
+            } else if (frameType == PING) { // PING
                 logger.debug("Received PING for CID: {}", connectionId);
                 updateTimeout();
                 needsAck = true;
@@ -1453,9 +1490,19 @@ public class QuicConnection implements TimeoutHeap.Entry {
      * RFC 9000 Section 19.3: ACK Frame Format
      */
     private void processAckFrame(ByteBuffer buffer, PacketNumberSpace space, byte frameType, SocketAddress sender) {
-        long largestAcked = QuicVarint.read(buffer);
         long ackDelayExponent = space.phase == PacketPhase.INITIAL ? 3 : connectionMetadata.clientMetadata.ackDelayExponent;
-        long ackDelay = QuicVarint.read(buffer) << ackDelayExponent;
+        AckEcnFrame frame = parseAckFrame(buffer, frameType == 0x03);
+
+        boolean needRetansmit = (space.getLargestAckedPacketNumber() < frame.largestAcked());
+        int bytesAcked = space.onAckReceived(currentTimestamp, frame.largestAcked(), frame.ackRanges(), frame.ackDelay() << ackDelayExponent, packetNumberSpaceAckCallback, frame.ceCounter(), sender);
+        connectionPathController.onAckRecieved(sender, bytesAcked);
+
+        if (needRetansmit) retransmitLostPackets(space);
+    }
+
+    public static QuicConnection.AckEcnFrame parseAckFrame(ByteBuffer buffer, boolean hasEcn) {
+        long largestAcked = QuicVarint.read(buffer);
+        long ackDelay = QuicVarint.read(buffer);
         long rangeCount = QuicVarint.read(buffer);
         long firstRange = QuicVarint.read(buffer);
 
@@ -1490,18 +1537,15 @@ public class QuicConnection implements TimeoutHeap.Entry {
         }
 
         long ceCounter = 0;
-        if (frameType == 0x03) {
+        if (hasEcn) {
             QuicVarint.read(buffer); // 1. ECT(0) Packets
             QuicVarint.read(buffer); // 2. ECT(1) Packets
             ceCounter = QuicVarint.read(buffer); // 3. Congestion Experienced Packets
         }
+        return new AckEcnFrame(largestAcked, ackDelay, ackRanges, ceCounter);
+    }
 
-        boolean needRetansmit = (space.getLargestAckedPacketNumber() < largestAcked);
-
-        int bytesAcked = space.onAckReceived(currentTimestamp, largestAcked, ackRanges, ackDelay, connectionStreamManager, ceCounter, sender);
-        connectionPathController.onAckRecieved(sender, bytesAcked);
-
-        if (needRetansmit) retransmitLostPackets(space);
+    public record AckEcnFrame(long largestAcked, long ackDelay, List<PacketNumberSpace.AckRange> ackRanges, long ceCounter) {
     }
 
     public void retransmitLostPackets() {
@@ -1576,5 +1620,35 @@ public class QuicConnection implements TimeoutHeap.Entry {
             logger.error("Failed to send Stateless Reset", e);
         }
     }
+
+    private void rotateConnectionId() {
+        RotationCid rotationCid = clientCidPool.poll();
+        connectionMetadata.clientCid = rotationCid.cid();
+        int maxCidsToRotate = (int) Math.min(3, connectionMetadata.clientMetadata.clientMaxAllowedCids);
+        int nextNum = lastCidSeqNum++;
+        issueNewConnectionId(nextNum, nextNum - maxCidsToRotate);
+    }
+
+    // Create pool of CIDs to rotate and notify the client
+    private void setupCidRotationPool() {
+        int maxCidsToRotate = (int)Math.min(3, connectionMetadata.clientMetadata.clientMaxAllowedCids);
+        serverCidPool.add(new RotationCid(0, connectionIdBytes));
+        for (int i = 1; i < maxCidsToRotate; i++) {
+            int retirePriorTo = Math.min(0, i - maxCidsToRotate);
+            issueNewConnectionId(i, retirePriorTo);
+        }
+        lastCidSeqNum = maxCidsToRotate;
+    }
+
+    private void issueNewConnectionId(int seqNum, int retirePriorTo) {
+        long cid = selector.requestAdditionalCid(connectionId);
+        byte[] cidBytes = ByteBuffer.allocate(8).putLong(cid).array();
+        byte[] resetToken = generateStatelessResetToken(cidBytes);
+        serverCidPool.add(new RotationCid(seqNum, cidBytes));
+        PoolBuffer frame = getBufferPool().requestWriteBuffer();
+        QuicFrameBuilder.writeNewConnectionIdFrame(frame.buf(), seqNum, retirePriorTo, cidBytes, resetToken);
+        send1RttPacket(frame);
+    }
+
 }
 

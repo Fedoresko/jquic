@@ -98,7 +98,7 @@ public class QuicProperties {
     public static final long INITIAL_MAX_STREAM_DATA_BIDI_LOCAL = getInt("quic.initial_max_stream_data_bidi_local", 1048576);
     public static final long INITIAL_MAX_STREAM_DATA_BIDI_REMOTE = getInt("quic.initial_max_stream_data_bidi_remote", 1048576);
     public static final long INITIAL_MAX_DATA = getInt("quic.initial_max_data", 1048576);
-    public static final long INITIAL_MAX_CONNECTIONS = getLong("quic.initial_max_connections", 100);
+    public static final long CONNECTION_IDS_LIMIT = getLong("quic.connection_ids_limit", 3);
 
     // QuicServerConfig
     public static final String KEYSTORE_TYPE = getString("quic.keystore_type", "PKCS12");

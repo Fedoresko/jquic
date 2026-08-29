@@ -86,7 +86,7 @@ public class StreamBuffer {
             throw new QuicException(
                     "Received data ofder FIN on stream#%d offset %d finOffset %d"
                             .formatted(streamId, offset, finOffset),
-                    QuicTransportError.STREAM_STATE_ERROR
+                    QuicTransportError.FINAL_SIZE_ERROR
             );
         }
 

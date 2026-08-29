@@ -40,6 +40,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 // =========================================================================
 // SELECTOR THREAD LOGIC
@@ -77,6 +78,8 @@ public class SelectorThread extends Thread {
     private long receivedPackets;
     private double retransmitRateEma = 0.0;
 
+    private final AtomicLong cidGenerator;
+
     private NativeCrypto retryTokenCrypto;
     private Map<QuicVersion, NativeCrypto> retryTokenIntegrityCryptos;
 
@@ -100,10 +103,11 @@ public class SelectorThread extends Thread {
         }
     }
 
-    public SelectorThread(int threadId, DatagramChannel socket, ConcurrentHashMap<Long, Integer> cidToSelectorMap, String name) throws IOException, NoSuchFieldException, IllegalAccessException {
+    public SelectorThread(int threadId, DatagramChannel socket, ConcurrentHashMap<Long, Integer> cidToSelectorMap, String name, AtomicLong cidGenerator) throws IOException, NoSuchFieldException, IllegalAccessException {
         super(name);
         this.threadId = threadId;
         this.socket = socket;
+        this.cidGenerator = cidGenerator;
         this.forwardedPackets = new SpscLinkedQueue<>();
         this.cidToSelectorMap = cidToSelectorMap;
         this.activeConnections = new HashMap<>();
@@ -573,9 +577,7 @@ public class SelectorThread extends Thread {
      */
     private void evictConnection(long connectionId) {
         try {
-            // Remove from active connections
-            QuicConnection removed = activeConnections.remove(connectionId);
-
+            QuicConnection removed = retractCid(connectionId);
 
             if (removed != null) {
                 logger.info("Selector-{}: Evicted connection CID: {} from activeConnections",
@@ -588,23 +590,44 @@ public class SelectorThread extends Thread {
                 timeoutHeap.remove(removed);
             }
 
-            // Remove from CID-to-Selector mapping
-            cidToSelectorMap.remove(connectionId);
-
-            // Remove from eBPF map
-            try {
-                BpfRouting.evictRoute(connectionId);
-                logger.info("Selector-{}: Removed CID: {} from eBPF routing table",
-                        threadId, connectionId);
-            } catch (Exception e) {
-                logger.error("Selector-{}: Failed to remove CID: {} from eBPF map",
-                        threadId, connectionId, e);
-            }
 
         } catch (Exception e) {
             logger.error("Selector-{}: Error evicting connection CID: {}",
                     threadId, connectionId, e);
         }
+    }
+
+    public QuicConnection retractCid(long connectionId) {
+        // Remove from active connections
+        QuicConnection removed = activeConnections.remove(connectionId);
+        // Remove from CID-to-Selector mapping
+        cidToSelectorMap.remove(connectionId);
+
+        // Remove from eBPF map
+        try {
+            BpfRouting.evictRoute(connectionId);
+            logger.info("Selector-{}: Removed CID: {} from eBPF routing table",
+                    threadId, connectionId);
+        } catch (Exception e) {
+            logger.error("Selector-{}: Failed to remove CID: {} from eBPF map",
+                    threadId, connectionId, e);
+        }
+        return removed;
+    }
+
+    public long requestAdditionalCid(long connectionId) {
+        long newCid = cidGenerator.getAndIncrement();
+
+        activeConnections.put(newCid, activeConnections.get(connectionId));
+        cidToSelectorMap.put(newCid, threadId);
+
+        // Update eBPF map if available
+        try {
+            BpfRouting.updateRouting(connectionId, threadId + 1);
+        } catch (Exception e) {
+            logger.error("Failed to update eBPF map for connection {}", connectionId, e);
+        }
+        return newCid;
     }
 
     @Override

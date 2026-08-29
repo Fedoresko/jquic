@@ -373,12 +373,12 @@ class QuicConnectionTest {
             }
 
             @Override
-            public void onConnectionClose() {
+            public void onStreamAck(long streamId, long offset, long length) {
 
             }
 
             @Override
-            public void onPacketAcknowledged(long packetNumber, PacketNumberSpace.SentPacket packet) {
+            public void onConnectionClose() {
 
             }
         };
