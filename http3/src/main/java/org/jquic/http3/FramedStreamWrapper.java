@@ -19,6 +19,8 @@ import org.jquic.quic.QuicVarint;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.nio.BufferOverflowException;
+import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -30,6 +32,7 @@ public class FramedStreamWrapper implements StreamWrapper {
     private Long curType = null;
     private Long curLen = null;
     private int framesReturned = 0;
+    private int startFramePos = 0;
 
     public FramedStreamWrapper(Http3StreamContext context) {
         this.context = context;
@@ -37,21 +40,31 @@ public class FramedStreamWrapper implements StreamWrapper {
 
     private void processMoreData() throws IOException {
         int byteread;
-        while ( (byteread = context.read()) != -1) {
+        while ((byteread = context.read()) != -1) {
             currentFrame.write(byteread);
         }
 
-        ByteBuffer wrap = ByteBuffer.wrap(currentFrame.toByteArray());
+        ByteBuffer wrap = ByteBuffer.wrap(currentFrame.toByteArray()).position(startFramePos).limit(currentFrame.size());
 
-        if (wrap.remaining() > 8 && curType == null) {
-            curType = QuicVarint.read(wrap);
-            curLen = QuicVarint.read(wrap);
+        if (curType == null || curLen == null) {
+            try {
+                if (wrap.hasRemaining()) curType = QuicVarint.read(wrap);
+                if (wrap.hasRemaining()) curLen = QuicVarint.read(wrap);
+            } catch (BufferOverflowException | BufferUnderflowException e) {
+                curType = null;
+                curLen = null;
+            }
+        }
+
+        if (curType == null || curLen == null) {
+            wrap.position(startFramePos);
         }
 
         if (curType != null && curLen != null && wrap.remaining() >= curLen) {
             byte[] data = new byte[curLen.intValue()];
             wrap.get(data);
             frames.push(new Http3StreamContext.ParsedFrame(curType, data));
+            startFramePos = wrap.position();
             curLen = null;
             curType = null;
         }
@@ -61,6 +74,7 @@ public class FramedStreamWrapper implements StreamWrapper {
             while (wrap.hasRemaining()) {
                 currentFrame.write(wrap.get());
             }
+            startFramePos = 0;
         }
     }
 

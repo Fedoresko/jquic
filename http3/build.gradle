@@ -63,6 +63,7 @@ dependencies {
     // Latest Mockito core with full Java 25 byte-code compatibility
     testImplementation 'org.mockito:mockito-core:5.23.0'
     testImplementation 'org.mockito:mockito-junit-jupiter:5.23.0'
+    testImplementation 'ch.qos.logback:logback-classic:1.4.11'
 
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'

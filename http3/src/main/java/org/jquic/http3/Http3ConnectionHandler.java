@@ -82,6 +82,12 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
     private long peerMaxFieldSectionSize = 0; // Default until SETTINGS received
 
     private QuicConnectionControl connectionControl;
+    private ConnectionState connectionState = ConnectionState.OPEN;
+
+    enum ConnectionState {
+        OPEN,
+        CLOSING
+    }
 
     public Http3ConnectionHandler(long connectionId, Http3RequestHandler requestHandler) {
         this.connectionId = connectionId;
@@ -220,7 +226,16 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
     }
 
     @Override
-    public void onNewClientStreamAllocated(long streamId, @NonNull QuicConnectionControl control, DataOutputStream outputStream, QuicConnectionControl.StreamType streamType, boolean isEarlyData) {
+    public void onNewClientStreamAllocated(long streamId, @NonNull QuicConnectionControl control, @Nullable DataOutputStream outputStream, QuicConnectionControl.StreamType streamType, boolean isEarlyData) {
+        if (connectionState == ConnectionState.CLOSING && streamType == QuicConnectionControl.StreamType.Bidirectional) {
+            logger.info("Connection is closing, rejecting new request stream {}", streamId);
+            try {
+                control.closeStream(streamId, Http3Server.H3_REQUEST_REJECTED);
+            } catch (Exception e) {
+                logger.error("Failed to reject new stream during closing state", e);
+            }
+            return;
+        }
         boolean isUnidirectional = (streamId & 0x02) != 0;
         boolean isServerInitiated = (streamId & 0x01) != 0;
 
@@ -275,7 +290,7 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
         // Unidirectional stream type identification (RFC 9114 §6.2)
         Http3ClientStreamRole role = context.getRole();
         if (role != null && validateClientStreamRole(streamId, response, role)) {
-           switch (role) {
+            switch (role) {
                 case Http3ClientStreamRole.REQUEST -> handleRequestStream(streamId, response, isLastData, context, isEarlyData);
                 case Http3ClientStreamRole.CONTROL ->
                         handleControlStream(streamId, response, data, isLastData, context);
@@ -425,8 +440,8 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
         try {
             Http3StreamContext.ParsedFrame frame;
             FramedStreamWrapper streamWrapper = (FramedStreamWrapper) context.getStreamWrapper();
-            boolean firstFrames = (streamWrapper.framesReturned() == 0);
             while ((frame = streamWrapper.getNextFrame()) != null) {
+                boolean firstFrames = (streamWrapper.framesReturned() == 1);
                 if (firstFrames) {
                     if (frame.type() != 0x04 /* SETTINGS */) {
                         logger.warn("First frame on control stream {} is not SETTINGS (type 0x{}) - H3_MISSING_SETTINGS",
@@ -436,7 +451,6 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
                     }
                     Map<Long, Long> settings = parseSettingsPayload(frame.payload());
                     handleSettings(settings);
-                    firstFrames = false;
                 } else {
                     if (frame.type() == 0x04 /* SETTINGS */) {
                         // RFC 9114 §7.2.4: Only one SETTINGS frame is allowed.
@@ -453,7 +467,18 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
                     response.closeConnection(Http3Server.H3_FRAME_UNEXPECTED, "DATA/HEADERS on control stream");
                     return;
                 }
-                // Handle other frames like GOAWAY if implemented
+                
+                if (frame.type() == 0x07 /* GOAWAY */) {
+                    try {
+                        long maxStreamId = QuicVarint.read(frame.payloadAsBuffer());
+                        logger.info("Received GOAWAY frame on connection {}, max stream ID: {}", connectionId, maxStreamId);
+                        connectionState = ConnectionState.CLOSING;
+                    } catch (Exception e) {
+                        logger.warn("Malformed GOAWAY frame on control stream {} - H3_FRAME_ERROR", streamId);
+                        response.closeConnection(Http3Server.H3_FRAME_ERROR, "Malformed GOAWAY frame");
+                        return;
+                    }
+                }
             }
         } catch (Exception e) {
             logger.error("Failed to process control stream frames on stream " + streamId, e);
@@ -685,6 +710,27 @@ class Http3ConnectionHandler implements QuicApplicationProtocolConnectionHandler
     @Override
     public void onConnectionClose() {
         futures.clear();
+    }
+
+    /**
+     * Opens a new server-initiated stream.
+     * @param streamType type of the stream to open
+     * @return stream ID of the new stream
+     * @throws IllegalStateException if the connection is in CLOSING state
+     * @throws IOException if stream opening fails
+     */
+    public long openServerStream(QuicConnectionControl.StreamType streamType) throws IOException {
+        if (connectionState == ConnectionState.CLOSING) {
+            throw new IllegalStateException("Cannot initiate new stream: connection is in CLOSING state");
+        }
+        if (connectionControl == null) {
+            throw new IOException("Connection not established");
+        }
+        try {
+            return connectionControl.openStream(streamType);
+        } catch (Exception e) {
+            throw new IOException("Failed to open server stream", e);
+        }
     }
 
     /**
