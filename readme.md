@@ -6,7 +6,7 @@
 
 ### Compliance Status
 
-*   **QUIC**: Almost fully compliant with the [QUIC standard](https://datatracker.ietf.org/doc/html/rfc9000) (RFC 9000), except for connection migration.
+*   **QUIC**: Fully compliant with the [QUIC standard](https://datatracker.ietf.org/doc/html/rfc9000) (RFC 9000).
 *   **HTTP/3**: Core functionality implementation including [QPACK](https://datatracker.ietf.org/doc/html/rfc9204) (RFC 9204).
 
 ### Key Features
