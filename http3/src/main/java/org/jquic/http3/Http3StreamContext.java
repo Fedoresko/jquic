@@ -36,7 +36,7 @@ public class Http3StreamContext extends InputStream {
         FINISHED,
     }
 
-    record ParsedFrame(long type, byte[] payload) {
+    public record ParsedFrame(long type, byte[] payload) {
         ByteBuffer payloadAsBuffer() {
             return ByteBuffer.wrap(payload);
         }
