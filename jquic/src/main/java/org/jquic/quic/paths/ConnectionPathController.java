@@ -205,11 +205,14 @@ public class ConnectionPathController implements TimeoutHeap.Entry {
             ConnectionPath path = pathMap.get(frame.dest());
             if (path != null) {
                 DatagramToSend datagram = switch (frame.phase()) {
-                    case INITIAL -> initDatagramBuilder.makeDatagram(currentTimeMs, path.address, frame.data(), frame.ackEliciting());
-                    case HANDSHAKE -> handshakeDatagramBuilder.makeDatagram(currentTimeMs, path.address, frame.data(), frame.ackEliciting());
-                    case APPLICATION -> applicationDatagramBuilder.makeDatagram(currentTimeMs, path.address, frame.data(), frame.ackEliciting());
+                    case INITIAL -> (connection.connectionMetadata.serverInitialCrypto != null) ?
+                            initDatagramBuilder.makeDatagram(currentTimeMs, path.address, frame.data(), frame.ackEliciting()) : null;
+                    case HANDSHAKE -> (connection.connectionMetadata.serverHandshakeCrypto != null) ?
+                            handshakeDatagramBuilder.makeDatagram(currentTimeMs, path.address, frame.data(), frame.ackEliciting()) : null;
+                    case APPLICATION -> (connection.connectionMetadata.serverApplicationCrypto != null) ?
+                            applicationDatagramBuilder.makeDatagram(currentTimeMs, path.address, frame.data(), frame.ackEliciting()): null;
                 };
-                if (datagram.data() == null) {
+                if (datagram == null || datagram.data() == null) {
                     logger.error("Could not make datagram for frame phase {} in pahse {} to {}", frame.phase(), curPhase(), path);
                     return null;
                 } else{
@@ -283,13 +286,16 @@ public class ConnectionPathController implements TimeoutHeap.Entry {
     private void schedNextDatagram(ConnectionPath path, long currentTimeMs, long currentTimeNs) {
         QuicConnection.State peerState = connection.getPeerState();
         QuicConnection.State state = connection.getState();
-        if ( path.nextDatagram == null && peerState == QuicConnection.State.INITIAL ) path.nextDatagram = initDatagramBuilder.getPacket(currentTimeMs, path.address, true, getMaxPacketSize(path), initQueue);
+        if ( path.nextDatagram == null && peerState == QuicConnection.State.INITIAL
+             &&  connection.connectionMetadata.serverInitialCrypto != null) path.nextDatagram = initDatagramBuilder.getPacket(currentTimeMs, path.address, true, getMaxPacketSize(path), initQueue);
         if ( path.nextDatagram == null &&
                 ( (peerState == QuicConnection.State.INITIAL && state == QuicConnection.State.HANDSHAKE)
-                || peerState == QuicConnection.State.HANDSHAKE) ) path.nextDatagram = handshakeDatagramBuilder.getPacket(currentTimeMs, path.address, true, getMaxPacketSize(path), handshakeQueue);
+                || peerState == QuicConnection.State.HANDSHAKE)
+             && connection.connectionMetadata.serverHandshakeCrypto != null ) path.nextDatagram = handshakeDatagramBuilder.getPacket(currentTimeMs, path.address, true, getMaxPacketSize(path), handshakeQueue);
         if ( path.nextDatagram == null &&
                 ( (peerState == QuicConnection.State.HANDSHAKE && state == QuicConnection.State.ESTABLISHED)
-                || peerState == QuicConnection.State.ESTABLISHED)) path.nextDatagram = applicationDatagramBuilder.getPacket(currentTimeMs, path.address, true, getMaxPacketSize(path), applicationQueue);
+                || peerState == QuicConnection.State.ESTABLISHED)
+             &&  connection.connectionMetadata.serverApplicationCrypto != null) path.nextDatagram = applicationDatagramBuilder.getPacket(currentTimeMs, path.address, true, getMaxPacketSize(path), applicationQueue);
 
         if (path.nextDatagram == null) {
             return;

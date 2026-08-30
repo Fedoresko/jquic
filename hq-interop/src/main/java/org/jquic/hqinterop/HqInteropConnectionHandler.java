@@ -62,8 +62,9 @@ public class HqInteropConnectionHandler implements QuicApplicationProtocolConnec
         if (buffer != null) {
             try {
                 buffer.write(data);
-                if (isLastData) {
-                    processRequest(streamId, buffer.toByteArray());
+                byte[] byteArray = buffer.toByteArray();
+                if (isLastData || (byteArray.length > 2 && byteArray[byteArray.length-1] == '\n' && byteArray[byteArray.length-2] == '\r')) {
+                    processRequest(streamId, byteArray);
                     requestBuffers.remove(streamId);
                 }
             } catch (IOException e) {

@@ -16,6 +16,8 @@
 plugins {
     id 'java-library'
     id 'maven-publish'
+    id 'signing'
+    id 'com.gradleup.nmcp' version '1.0.2'
 }
 
 def getVersionFromGit() {
@@ -50,7 +52,7 @@ dependencies {
 
     // Slf4j API and Logback implementation
     implementation 'org.slf4j:slf4j-api:2.0.9'
-    api project(':jquic')
+    implementation("org.jquic:jquic:$version")
 
     // Testing dependencies
     // JUnit 6 BOM handles all version management for JUnit libraries automatically
@@ -68,11 +70,54 @@ dependencies {
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
+
 publishing {
     publications {
         mavenJava(MavenPublication) {
-            from components.java // Publishes the main jar and its dependencies
+            from components.java
+            pom {
+                name = 'jquic'
+                description = 'HTTP/3 protocol over JQuic'
+                url = 'https://github.com/jquic/http3'
+                licenses {
+                    license {
+                        name = 'The Apache License, Version 2.0'
+                        url = 'http://www.apache.org/licenses/LICENSE-2.0.txt'
+                    }
+                }
+                developers {
+                    developer {
+                        id = 'Fedoresko'
+                        name = 'Fedor Malyshev'
+                        email = 'fmmalyshev@gmail.com'
+                    }
+                }
+                scm {
+                    connection = 'scm:git:git://github.com/jquic/jquic.git'
+                    developerConnection = 'scm:git:ssh://github.com/jquic/jquic.git'
+                    url = 'https://github.com/jquic/http3'
+                }
+            }
         }
+    }
+}
+
+nmcp {
+    publishAllPublicationsToCentralPortal {
+        username = providers.environmentVariable("OSSRH_USERNAME").getOrNull()
+        password = providers.environmentVariable("OSSRH_PASSWORD").getOrNull()
+        publishingType = "AUTOMATIC"
+    }
+}
+
+signing {
+    def signingKey = System.getenv("GPG_PRIVATE_KEY")
+    def signingPassword = System.getenv("GPG_PASSPHRASE")
+    if (signingKey && signingPassword) {
+        useInMemoryPgpKeys(signingKey, signingPassword)
+        sign publishing.publications.mavenJava
+    } else {
+        tasks.withType(Sign).configureEach { enabled = false }
     }
 }
 

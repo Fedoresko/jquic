@@ -506,7 +506,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
         logger.debug("Processing Handshake packet for CID: {} in state: {}", connectionId, state);
 
         // RFC 9000: Handshake packets are only valid in HANDSHAKE state
-        if (peerState == ESTABLISHED || getState() == INITIAL) {
+        if (getState() == INITIAL) {
             logger.warn("Received Handshake packet for CID: {} in invalid state: {}, discarding",
                     connectionId, state);
             SelectorThread.skipPacket(packet.buf());
@@ -659,9 +659,12 @@ public class QuicConnection implements TimeoutHeap.Entry {
         logger.debug("Processing 1-RTT packet for CID: {} in state: {}, len: {}", connectionId, state, packet.buf().remaining());
 
         if (peerState != ESTABLISHED) {
+            peerState = ESTABLISHED;
+        }
+
+        if (getState() == State.ESTABLISHED) {
             handshakeSpace.discardSentPackets();
             connectionMetadata.dropHandshakeSecrets();
-            peerState = ESTABLISHED;
         }
 
         // If in CLOSING or INITIAL state do nothing
@@ -1634,8 +1637,7 @@ public class QuicConnection implements TimeoutHeap.Entry {
         int maxCidsToRotate = (int)Math.min(3, connectionMetadata.clientMetadata.clientMaxAllowedCids);
         serverCidPool.add(new RotationCid(0, connectionIdBytes));
         for (int i = 1; i < maxCidsToRotate; i++) {
-            int retirePriorTo = Math.min(0, i - maxCidsToRotate);
-            issueNewConnectionId(i, retirePriorTo);
+            issueNewConnectionId(i, 0);
         }
         lastCidSeqNum = maxCidsToRotate;
     }
