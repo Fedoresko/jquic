@@ -1,4 +1,4 @@
-name: Publish JQuic to Maven Central
+name: Publish HTTP/3 to Maven Central
 
 on:
   workflow_dispatch:
@@ -27,8 +27,8 @@ jobs:
     - name: Setup Gradle
       uses: gradle/actions/setup-gradle@v4
 
-    - name: Publish JQuic to Maven Central
-      run: gradle :jquic:nmcpPublishAllPublicationsToCentralPortal --info
+    - name: Publish HTTP/3 to Maven Central
+      run: gradle :http3:nmcpPublishAllPublicationsToCentralPortal --info
       env:
         OSSRH_USERNAME: ${{ secrets.OSSRH_USERNAME }}
         OSSRH_PASSWORD: ${{ secrets.OSSRH_PASSWORD }}

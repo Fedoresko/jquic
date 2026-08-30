@@ -1,0 +1,7 @@
+allprojects {
+    tasks.withType(Javadoc).configureEach {
+        if (options instanceof StandardJavadocDocletOptions) {
+            options.addStringOption('Xdoclint:none', '-quiet')
+        }
+    }
+}
